@@ -108,8 +108,25 @@ const LeanMap = {
     this.pickRow = UI.row(UI.button('Make this the hunting spot', () => this.setCentre()), UI.button('Clear mark', () => { this.picked = null; this.dirty = true; this.render(); }));
     box.append(stage, this.info, this.pickRow);
     const H = () => Settings.profile.hunt;
+    const saved = H().center && this.space(H().center) ? displayCoords(H().center) : null;
+    this.spotX = el('input'); this.spotY = el('input');
+    for (const [input, key] of [[this.spotX, 'x'], [this.spotY, 'y']]) {
+      input.type = 'number'; input.step = '1'; input.value = saved ? saved[key] : '';
+    }
+    this.coordinateText = el('input'); this.coordinateText.type = 'text'; this.coordinateText.readOnly = true;
+    this.coordinateText.placeholder = 'Get position';
+    const spotHeader = el('div', null, 'map-spot-header');
+    spotHeader.append(UI.button('Set actual position', () => {
+      if (World.inWorld() && Hunt.setCenter()) { UI.toast('Hunting spot saved.'); this.dirty = true; }
+    }));
+    const spotFields = el('div', null, 'map-spot-fields');
+    spotFields.append(UI.field('X', this.spotX), UI.field('Y', this.spotY), UI.button('Set spot', () => this.setCoordinates()));
+    const current = el('div', null, 'map-current-position');
+    current.append(UI.field('Current', this.coordinateText), UI.button('Get position', () => this.getCoordinates()), UI.button('Copy', () => { void this.copyCoordinates(); }));
+    const coordinates = el('div', null, 'map-position');
+    coordinates.append(spotHeader, spotFields, el('p', 'Outdoor X / Y coordinates in metres.', 'muted'), current);
     const area = UI.group('Hunting area',
-      UI.button('Set hunting spot here', () => { if (World.inWorld() && Hunt.setCenter()) { UI.toast('Hunting spot saved.'); this.dirty = true; } }),
+      coordinates,
       UI.number('Hunt radius (m)', () => H().radius / 10, v => { H().radius = v * 10; this.dirty = true; }, 5, 200),
       UI.number('Chase distance (m)', () => H().chase / 10, v => { H().chase = v * 10; this.dirty = true; }, 10, 300));
     const legend = UI.group('Legend');
@@ -158,6 +175,37 @@ const LeanMap = {
     return { X: this.view.X + (e.clientX - r.left - r.width / 2) * this.upp, Z: this.view.Z - (e.clientY - r.top - r.height / 2) * this.upp };
   },
   zoom(f) { this.upp = clamp(this.upp * f, 1.5, 30); this.dirty = true; },
+  getCoordinates() {
+    const pose = World.inWorld() ? World.pose() : null;
+    if (!this.space(pose)) { UI.toast('Current outdoor coordinates unavailable.', 'warn'); return null; }
+    const coords = displayCoords(pose);
+    this.spotX.value = coords.x; this.spotY.value = coords.y;
+    const text = `X ${coords.x}, Y ${coords.y}`;
+    this.coordinateText.value = text;
+    return text;
+  },
+  async copyCoordinates() {
+    const text = this.getCoordinates();
+    if (!text) return;
+    const input = this.coordinateText;
+    try {
+      await W.navigator.clipboard.writeText(text);
+      UI.toast('Current coordinates copied.');
+    } catch (_) {
+      input.focus(); input.select();
+      UI.toast('Clipboard unavailable. Copy the selected coordinates.', 'warn');
+    }
+  },
+  setCoordinates() {
+    const x = this.spotX.value.trim(), y = this.spotY.value.trim();
+    const X = Number(x), Y = Number(y);
+    const point = x && y && Number.isInteger(X) && Number.isInteger(Y) && this.local((X + 135 * 192) * 10, (Y + 92 * 192) * 10);
+    if (!point) { UI.toast('Enter valid outdoor X / Y coordinates (whole metres).', 'warn'); return false; }
+    if (!World.inWorld() || !this.space(World.pose())) { UI.toast('Enter the outdoor world to set a hunting spot.', 'warn'); return false; }
+    this.picked = point;
+    this.setCentre();
+    return true;
+  },
   setCentre() {
     const pt = this.picked, pose = World.pose();
     if (!pt || !World.inWorld()) return;

@@ -3,13 +3,13 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(__dirname + '/bot.lean.user.js', 'utf8');
 const isolated = source.slice(0, source.lastIndexOf('installWorkerHook();')) +
-  'globalThis.bot = {Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Hook, Cmd, Hunt, Loot, Restock, WalkBack, Navigation, Route, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, stopAll, toggleBot, boot, Ticker, Sound};\n})();';
-function fixture() {
+  'globalThis.bot = {Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Hook, Cmd, Hunt, Loot, Restock, WalkBack, Navigation, Route, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, stopAll, toggleBot, boot, Ticker, Sound, LeanMap};\n})();';
+function fixture(document) {
   let time = 100000;
   const storage = new Map(), commands = [], notices = [], intervals = [], timers = [];
   const win = { addEventListener() {}, localStorage: { getItem: k => storage.get(k) ?? null, setItem: (k, v) => storage.set(k, v) } };
-  const context = { window: win, performance: { now: () => time }, console,
-    setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimeout() {}, setInterval(fn, ms) { intervals.push({ fn, ms }); }, AbortController, Blob, FormData, URL, Map, Set, Date, ArrayBuffer, DataView, atob };
+  const context = { window: win, document, performance: { now: () => time }, console,
+    setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimeout() {}, clearInterval() {}, setInterval(fn, ms) { intervals.push({ fn, ms }); }, AbortController, Blob, FormData, URL, Map, Set, Date, ArrayBuffer, DataView, atob };
   vm.createContext(context); vm.runInContext(isolated, context);
   const b = context.bot;
   b.UI.toast = message => notices.push(message);
@@ -287,6 +287,113 @@ function test(name, fn) {
   if (result && typeof result.then === 'function') { asyncTests.push(result.then(() => { passed++; console.log('PASS ' + name); }, error => { console.error('FAIL ' + name); throw error; })); return; }
   passed++; console.log('PASS ' + name);
 }
+function mapFixture() {
+  const f = fixture(), map = f.LeanMap;
+  const input = () => ({ _value: '', get value() { return this._value; }, set value(v) { this._value = String(v); },
+    focus() { this.focused = true; }, select() { this.selected = true; } });
+  map.spotX = input(); map.spotY = input(); map.coordinateText = input();
+  f.World.gp.pose = { regionId: (92 << 8) | 135, x: 125, y: 37, z: 459 };
+  return f;
+}
+test('Map groups coordinate fields and actions in compact rows', () => {
+  const nodes = [];
+  const document = { createElement(tag) {
+    const events = {}, node = { tag, children: [], className: '', value: '', dataset: {},
+      classList: { add() {} }, setAttribute() {}, append(...children) { this.children.push(...children); },
+      addEventListener(name, fn) { events[name] = fn; }, click() { events.click?.(); }, querySelectorAll() { return []; } };
+    nodes.push(node); return node;
+  } };
+  const f = fixture(document), map = f.LeanMap;
+  map.bind = () => {}; map.render = () => {};
+  const parent = document.createElement('div');
+  map.draw(parent);
+  const find = name => nodes.find(n => n.className === name);
+  assert.equal(find('map-spot-header').children[0].textContent, 'Set actual position');
+  assert.equal(find('map-spot-fields').children.length, 3);
+  assert.equal(find('map-spot-fields').children[0].children[1], map.spotX);
+  assert.equal(find('map-spot-fields').children[1].children[1], map.spotY);
+  assert.equal(find('map-spot-fields').children[2].textContent, 'Set spot');
+  assert.deepEqual(find('map-current-position').children.slice(1).map(n => n.textContent), ['Get position', 'Copy']);
+  assert.equal(map.coordinateText.readOnly, true);
+  map.spotX.value = '0'; map.spotY.value = '0';
+  find('map-spot-fields').children[2].click();
+  assert.equal(f.Settings.profile.hunt.center.regionId, (92 << 8) | 135);
+  let reads = 0, copies = 0;
+  map.getCoordinates = () => { reads++; }; map.copyCoordinates = () => { copies++; };
+  find('map-current-position').children[1].click(); find('map-current-position').children[2].click();
+  assert.equal(reads, 1); assert.equal(copies, 1);
+});
+test('map coordinates save the displayed X/Y in the correct region and character profile', () => {
+  const f = mapFixture(), map = f.LeanMap; let centers = 0;
+  f.Settings.useCharacter('MapTester'); f.bus.on('center', () => centers++);
+  map.spotX.value = '-193'; map.spotY.value = '192';
+  assert.equal(map.setCoordinates(), true);
+  assert.deepEqual(JSON.parse(JSON.stringify(f.Settings.profile.hunt.center)), { regionId: (93 << 8) | 133, x: 1910, y: 37, z: 0 });
+  assert.equal(centers, 1); assert.equal(map.picked, null); assert.equal(map.dirty, true);
+  f.timers.filter(t => t.ms === 250).forEach(t => t.fn());
+  const saved = JSON.parse(f.storage.get('sroBotLean:v1:profile:MapTester'));
+  assert.equal(saved.hunt.center.x, 1910); assert.equal(saved.hunt.center.regionId, (93 << 8) | 133);
+  assert.equal(f.commands.length, 0, 'saving a spot sends no movement or combat command');
+});
+test('map coordinates reject empty, fractional, non-finite and out-of-world input without changing a mark or spot', () => {
+  const f = mapFixture(), map = f.LeanMap, center = f.Settings.profile.hunt.center;
+  const mark = map.picked = { regionId: 1, x: 20, z: 30 };
+  let saves = 0; f.Settings.saveProfile = () => saves++;
+  for (const [x, y] of [['', '1'], ['1', '  '], ['abc', '2'], ['Infinity', '0'], ['1.5', '0'], ['0', 'NaN'],
+    ['-25921', '0'], ['23232', '0'], ['0', '-17665'], ['0', '6912']]) {
+    map.spotX.value = x; map.spotY.value = y;
+    assert.equal(map.setCoordinates(), false, `${x}, ${y}`);
+    assert.equal(f.Settings.profile.hunt.center, center); assert.equal(map.picked, mark);
+  }
+  assert.equal(saves, 0); assert.equal(f.commands.length, 0);
+});
+test('map coordinates accept zero and outdoor bounds across sector boundaries', () => {
+  for (const [x, y, regionId, localX, localZ] of [[0, 0, (92 << 8) | 135, 0, 0],
+    [-25920, -17664, 0, 0, 0], [23231, 6911, (127 << 8) | 255, 1910, 1910]]) {
+    const f = mapFixture(), map = f.LeanMap;
+    map.spotX.value = x; map.spotY.value = y;
+    assert.equal(map.setCoordinates(), true);
+    assert.deepEqual(JSON.parse(JSON.stringify(f.Settings.profile.hunt.center)), { regionId, x: localX, y: 37, z: localZ });
+    f.World.gp.pose = f.Settings.profile.hunt.center;
+    assert.equal(map.getCoordinates(), `X ${x}, Y ${y}`);
+  }
+});
+test('current map coordinates fill the fields without changing the hunting spot', async () => {
+  const f = mapFixture(), map = f.LeanMap, center = f.Settings.profile.hunt.center;
+  let copied = '';
+  f.win.navigator = { clipboard: { writeText: async text => { copied = text; } } };
+  assert.equal(map.getCoordinates(), 'X 12, Y 45');
+  assert.equal(map.spotX.value, '12'); assert.equal(map.spotY.value, '45'); assert.equal(copied, '');
+  f.World.gp.pose.x = 200;
+  await map.copyCoordinates();
+  assert.equal(copied, 'X 20, Y 45', 'copy fetches a fresh position');
+  assert.equal(map.coordinateText.value, copied); assert.match(f.notices.at(-1), /copied/);
+  assert.equal(f.Settings.profile.hunt.center, center); assert.equal(f.commands.length, 0);
+});
+test('map copy offers selected coordinates when the clipboard API is missing or refused', async () => {
+  for (const navigator of [undefined, { clipboard: { writeText: async () => { throw Error('denied'); } } }]) {
+    const f = mapFixture(); f.win.navigator = navigator;
+    await f.LeanMap.copyCoordinates();
+    assert.equal(f.LeanMap.coordinateText.value, 'X 12, Y 45');
+    assert.equal(f.LeanMap.coordinateText.focused, true); assert.equal(f.LeanMap.coordinateText.selected, true);
+    assert.match(f.notices.at(-1), /Clipboard unavailable/);
+  }
+});
+test('map coordinate actions refuse disconnected, missing, partial and dungeon positions', async () => {
+  for (const state of ['disconnected', 'missing', 'partial', 'dungeon']) {
+    const f = mapFixture(), map = f.LeanMap, center = f.Settings.profile.hunt.center;
+    map.spotX.value = '1'; map.spotY.value = '2';
+    if (state === 'disconnected') f.World.phase = 'disconnected';
+    if (state === 'missing') f.World.gp = null;
+    if (state === 'partial') delete f.World.gp.pose.z;
+    if (state === 'dungeon') f.World.gp.pose.regionId = 0x8001;
+    let copies = 0; f.win.navigator = { clipboard: { writeText: async () => { copies++; } } };
+    assert.equal(map.getCoordinates(), null); await map.copyCoordinates();
+    assert.equal(map.setCoordinates(), false);
+    assert.equal(copies, 0); assert.equal(f.Settings.profile.hunt.center, center);
+    assert.equal(map.spotX.value, '1'); assert.equal(map.spotY.value, '2'); assert.equal(f.commands.length, 0);
+  }
+});
 test('filters foreign ownership and permits own/party claims', () => {
   const f = fixture(), d = f.drop(); d.groundItem.ownerJid = 2;
   assert.equal(f.Loot.choose(), null);

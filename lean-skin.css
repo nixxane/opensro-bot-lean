@@ -127,6 +127,16 @@ header button.layout{display:inline-flex;height:22px;min-width:0;margin-left:8px
 .map-tools{position:absolute;right:5px;top:5px;display:flex;gap:2px}.map-tools button{min-width:24px;height:22px;padding:0 6px;font-size:12px}
 .map-coords{position:absolute;left:5px;bottom:4px;padding:1px 6px;background:#000a;font-size:11px;pointer-events:none}.map-coords:empty{display:none}
 .map-legend{display:flex;align-items:center;gap:8px;margin:4px 0;font-size:11px}.map-legend i{display:inline-block;width:12px;height:12px;background:center/contain no-repeat}
+.map-position{margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid #655635}
+.map-spot-header{display:flex;align-items:center;justify-content:flex-start;gap:8px;margin-bottom:8px}
+.map-spot-fields{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;align-items:center;gap:8px}
+.map-position .field{margin:0;min-width:0;gap:6px}.map-position .field>span{flex:0 0 auto}
+.map-position .field input{box-sizing:border-box;width:100%;min-width:0;flex:1}
+.map-position>p.muted{margin:5px 0 10px;font-size:11px}
+.map-current-position{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:5px}
+.map-current-position input{font-variant-numeric:tabular-nums}
+:host(.classic) .map-position .field{margin:0}
+@media(max-width:380px){.map-current-position{grid-template-columns:minmax(0,1fr) auto}.map-current-position>.field{grid-column:1/-1}.map-spot-header{flex-wrap:wrap}}
 @media(min-width:900px){:host(.wide) .pane>.map-box{grid-column:1/-1}:host(.wide) .map-stage canvas{height:340px}}
 /* Town page: the trip as a row of item pictures */
 .trip-flow{list-style:none;display:flex;margin:4px 0 0;padding:0}.trip-flow li{flex:1;display:grid;justify-items:center;gap:2px;position:relative;text-align:center;min-width:0}
