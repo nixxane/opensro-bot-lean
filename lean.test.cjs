@@ -3,7 +3,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(__dirname + '/bot.lean.user.js', 'utf8');
 const isolated = source.slice(0, source.lastIndexOf('installWorkerHook();')) +
-  'globalThis.bot = {Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Hook, Cmd, Hunt, Loot, Restock, WalkBack, Navigation, Route, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, stopAll, toggleBot, boot, Ticker, Sound};\n})();';
+  'globalThis.bot = {Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Hook, Cmd, Hunt, Loot, Restock, WalkBack, Navigation, Route, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, Team, TeamIntel, TeamKnowledge, TeamArbiter, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, stopAll, toggleBot, boot, Ticker, Sound, Stall};\n})();';
 function fixture() {
   let time = 100000;
   const storage = new Map(), commands = [], notices = [], intervals = [], timers = [];
@@ -4246,7 +4246,7 @@ test('session XP keeps unresolved level transitions bounded and marked partial',
 
 async function updateTests() {
   async function check(name, fn) { await fn(); passed++; console.log('PASS ' + name); }
-  const sha = 'a'.repeat(40), base = 'https://raw.githubusercontent.com/nixxane/opensro-bot-lean/' + sha + '/bot.lean.';
+  const sha = 'a'.repeat(40), base = 'https://raw.githubusercontent.com/duan78/opensro-bot-lean/' + sha + '/bot.lean.';
   function updater(f, version = '9.9.9') {
     const calls = [];
     f.win.fetch = async (url, options) => {
@@ -4258,14 +4258,14 @@ async function updateTests() {
   }
   await check('updates compare numeric version components and ignore malformed versions', async () => {
     const f = fixture();
-    for (const v of ['9.9.9', '1.3.0', '2.0.0']) assert.equal(f.Updates.newer(v), true);
-    for (const v of ['1.2.9', '1.2.36', '1.1.999', 'bad', '1.2.35-beta', '1.2.999999999999999999999']) assert.equal(f.Updates.newer(v), false);
+    for (const v of ['9.9.9', '1.4.4', '2.0.0']) assert.equal(f.Updates.newer(v), true);
+    for (const v of ['1.2.9', '1.2.36', '1.3.0', '1.4.0', '1.4.1', '1.4.2', '1.4.3', '1.1.999', 'bad', '1.2.35-beta', '1.2.999999999999999999999']) assert.equal(f.Updates.newer(v), false);
   });
   await check('updates pin metadata and user-initiated installer to the same trusted commit', async () => {
     const f = fixture(), calls = updater(f); f.UI.updateButton = {};
     await f.Updates.check();
     assert.equal(calls.length, 3); assert.equal(calls[1].url, base + 'meta.js');
-    assert.equal(calls[2].url, 'https://raw.githubusercontent.com/nixxane/opensro-bot-lean/' + sha + '/notes/9.9.9.md', 'the headline comes from the same commit');
+    assert.equal(calls[2].url, 'https://raw.githubusercontent.com/duan78/opensro-bot-lean/' + sha + '/notes/9.9.9.md', 'the headline comes from the same commit');
     assert.equal(calls[0].options.credentials, 'omit'); assert.equal(calls[0].options.cache, 'no-store');
     assert.equal(f.UI.updateButton.hidden, false); assert.equal(f.UI.updateButton.textContent, 'Update 9.9.9');
     let opened; f.win.open = (...args) => { opened = args; };
@@ -4501,4 +4501,394 @@ test('a plain "Disconnected from the server." that nothing recovers ends in a pa
   assert.ok(g.f.Reconnect.retryAt > Date.now() + 25 * 60000, 'paused until the oldest reload is 30 minutes old'); g.f.Reconnect.retryAt = Date.now() - 1; g.f.storage.set('sro-lean-reload', JSON.stringify({ times: [Date.now() - 31 * 60000, Date.now() - 32 * 60000, Date.now() - 33 * 60000] }));
   for (let i = 0; i < 200 && g.reloads() === 0; i++) { g.f.advance(10000); g.f.Controller.tick(); }
   assert.equal(g.reloads(), 1, 'once the limit window has passed the bot tries again');
+});
+
+// ---- Team relay (phase 1: presence) ----
+function teamFixture(url = 'wss://relay.example', token = 'room-key') {
+  const f = fixture(), sockets = [];
+  class FakeSocket {
+    constructor(address) { this.url = address; this.readyState = 0; this.sent = []; sockets.push(this); }
+    send(text) { this.sent.push(JSON.parse(text)); }
+    close() { if (this.readyState < 2) { this.readyState = 3; this.onclose && this.onclose({ code: 1000 }); } }
+    open() { this.readyState = 1; this.onopen && this.onopen(); }
+    receive(msg) { this.onmessage && this.onmessage({ data: JSON.stringify(msg) }); }
+    drop() { if (this.readyState < 2) { this.readyState = 3; this.onclose && this.onclose({}); } }
+  }
+  f.win.WebSocket = FakeSocket;
+  f.World.charName = 'RelayOne';
+  Object.assign(f.Settings.profile.team, { enabled: true, url, token });
+  return Object.assign(f, { teamSockets: sockets });
+}
+
+test('the team relay connects, announces itself and tracks the peers the relay reports', () => {
+  const f = teamFixture();
+  f.Team.tick();
+  assert.equal(f.teamSockets.length, 1);
+  const s = f.teamSockets[0];
+  s.open();
+  assert.equal(s.url, 'wss://relay.example?key=room-key', 'the room key rides in the URL for hosts that route by it');
+  assert.equal(s.sent[0].type, 'hello'); assert.equal(s.sent[0].token, 'room-key'); assert.equal(s.sent[0].name, 'RelayOne');
+  assert.ok(f.Team.status().includes('Connected as RelayOne'));
+  s.receive({ type: 'welcome', you: 'RelayOne', peers: [{ name: 'AltTwo', state: { hunting: true, level: 42 } }] });
+  assert.ok(f.Team.peerRows().some(r => r.includes('AltTwo') && r.includes('hunting')));
+  s.receive({ type: 'peer', name: 'AltTwo', state: { hunting: false, level: 42 } });
+  assert.ok(f.Team.peerRows().every(r => !r.includes('hunting')), 'the fresher beat wins');
+  s.receive({ type: 'peer', name: 'RelayOne', state: { hunting: true } });
+  assert.ok(f.Team.peerRows().every(r => !r.includes('RelayOne')), 'echoes of own name are ignored');
+});
+
+test('the team relay beats every five seconds and forgets a silent peer after fifteen', () => {
+  const f = teamFixture();
+  f.Team.tick(); const s = f.teamSockets[0]; s.open();
+  s.sent.length = 0;
+  f.Team.tick(); assert.equal(s.sent.length, 0, 'no beat before five seconds');
+  f.advance(5000); f.Team.tick();
+  assert.equal(s.sent.at(-1).type, 'beat'); assert.equal(s.sent.at(-1).name, 'RelayOne'); assert.equal(s.sent.at(-1).state.hunting, false);
+  s.receive({ type: 'peer', name: 'AltTwo', state: {} });
+  f.advance(15001); f.Team.tick();
+  assert.ok(f.Team.peerRows().every(r => !r.includes('AltTwo')), 'a silent peer expires');
+});
+
+test('a remote relay address must use wss, and the bus retries with growing backoff after drops', () => {
+  const f = teamFixture('ws://relay.example');
+  f.Team.tick(); assert.equal(f.teamSockets.length, 0); assert.ok(f.Team.status().includes('wss://'));
+  f.Settings.profile.team.url = 'wss://relay.example';
+  f.Team.tick(); f.teamSockets[0].open(); f.teamSockets[0].drop();
+  assert.equal(f.Team.state, 'retrying');
+  f.advance(5000); f.Team.tick(); assert.equal(f.teamSockets.length, 2, 'first retry after five seconds');
+  f.teamSockets[1].drop();
+  f.advance(5000); f.Team.tick(); assert.equal(f.teamSockets.length, 2, 'the second consecutive failure waits ten seconds');
+  f.advance(5000); f.Team.tick(); assert.equal(f.teamSockets.length, 3);
+  f.teamSockets[2].open();
+  assert.equal(f.Team.attempts, 0, 'a successful connection resets the backoff');
+});
+
+test('a relay error is reported without touching the bot, and the switch closes every socket', () => {
+  const f = teamFixture();
+  f.Team.tick(); const s = f.teamSockets[0]; s.open();
+  s.receive({ type: 'error', message: 'first message must be a v1 hello' });
+  assert.ok(f.Team.status().includes('hello'));
+  assert.equal(s.readyState, 3, 'the socket is closed after a relay error');
+  f.Hunt.start(); assert.equal(f.Hunt.running, true, 'hunting starts with the relay down');
+  f.Settings.profile.team.enabled = false; f.Team.tick();
+  assert.ok(f.teamSockets.every(x => x.readyState === 3), 'everything is closed once switched off');
+  assert.equal(f.Team.status(), 'Team relay off.');
+});
+
+test('a changed room key reconnects into the new room, and the bus waits for the character name', () => {
+  const f = teamFixture();
+  f.Team.tick(); const s = f.teamSockets[0]; s.open();
+  f.Settings.profile.team.token = 'second-key';
+  f.Team.tick();
+  assert.equal(s.readyState, 3, 'the old connection is closed');
+  const next = f.teamSockets.at(-1); next.open();
+  assert.equal(next.sent[0].token, 'second-key');
+  const g = teamFixture(); g.World.charName = '';
+  g.Team.tick(); assert.equal(g.teamSockets.length, 0); assert.ok(g.Team.status().includes('character name'));
+});
+
+// ---- Team edition phases 2-6 ----
+function connectedTeam() {
+  const f = teamFixture();
+  f.Team.tick(); const s = f.teamSockets[0]; s.open();
+  f.World.gp.progression.level = 40;
+  return Object.assign(f, { socket: s });
+}
+
+test('the live digest publishes interesting monsters and players, and merges the room\'s digests by gid', () => {
+  const f = connectedTeam();
+  f.World.ents.set(700, { gid: 700, kind: 'monster', rarity: 4, name: 'Giant rat', level: 38, regionId: 1, x: 150, y: 0, z: 150, appearanceState: [1, 0, 0] });
+  f.World.ents.set(701, { gid: 701, kind: 'monster', rarity: 0, name: 'Rat', level: 30, regionId: 1, x: 150, y: 0, z: 150, appearanceState: [1, 0, 0] });
+  f.World.ents.set(702, { gid: 702, kind: 'player', name: 'Stranger', level: 55, regionId: 1, x: 120, y: 0, z: 130, appearanceState: [1, 0, 0] });
+  f.TeamIntel.sentAt = -Infinity;
+  f.TeamIntel.tick();
+  const published = f.socket.sent.filter(m => m.type === 'msg' && m.payload.kind === 'intel').at(-1);
+  const gids = published.payload.payload.monsters.map(r => r.gid);
+  assert.deepEqual(gids, [700], 'only the giant is interesting; the normal rat is not');
+  assert.ok(published.payload.payload.players.some(r => r.gid === 702 && r.name === 'Stranger'));
+  f.socket.receive({ type: 'msg', from: 'AltTwo', payload: { kind: 'intel', payload: {
+    monsters: [
+      { gid: 800, name: 'Party mob', cls: 'party', unique: false, regionId: 1, x: 10, z: 10, level: 41, hpPct: 40 },
+      { gid: 801, name: 'Far away', cls: 'giant', unique: false, regionId: 9000, x: 10, z: 10 }],
+    players: [{ gid: 802, name: 'RemotePlayer', regionId: 1, x: 5, z: 5 }],
+    edges: [{ c: 802, cn: 'RemotePlayer', t: 800, d: 900, age: 100 }] } } });
+  assert.ok(f.TeamIntel.world.get(800)?.src === 'AltTwo', 'the shared party mob lands in the world');
+  assert.ok(!f.TeamIntel.world.has(801), 'a monster from an implausible region is not merged');
+  assert.ok(f.TeamIntel.edges.get(800)?.casterName === 'RemotePlayer', 'the shared combat edge lands');
+  assert.ok(f.TeamKnowledge.players.get('RemotePlayer')?.gid === 802, 'the player sighting feeds the knowledge base');
+  f.advance(20001); f.TeamIntel.tick();
+  assert.ok(!f.TeamIntel.world.has(800), 'shared monsters expire');
+});
+
+test('casts build combat edges, a hostile cast is recorded, and a unique kill closes the window', () => {
+  const f = connectedTeam();
+  f.socket.receive({ type: 'peer', name: 'AltTwo', state: { hunting: true, pos: { regionId: 1, x: 100, z: 100 } } });
+  f.World.ents.set(710, { gid: 710, kind: 'monster', rarity: 4, name: 'Giant', level: 40, regionId: 1, x: 150, y: 0, z: 150, appearanceState: [1, 0, 0] });
+  f.World.ents.set(711, { gid: 711, kind: 'monster', rarity: 3, name: 'Tiger Girl', level: 20, regionId: 1, x: 150, y: 0, z: 150, appearanceState: [1, 0, 0] });
+  f.World.ents.set(720, { gid: 720, kind: 'player', name: 'AltTwo', level: 40, regionId: 1, x: 100, y: 0, z: 100, appearanceState: [1, 0, 0] });
+  f.World.ents.set(721, { gid: 721, kind: 'player', name: 'Enemy', level: 60, regionId: 1, x: 100, y: 0, z: 100, appearanceState: [1, 0, 0] });
+  f.bus.emit('cast', { caster: 720, target: 710, results: [{ target: 710, impacts: [{ damage: 500 }] }] });
+  f.bus.emit('cast', { caster: 721, target: 1, results: [{ target: 1, impacts: [{ damage: 300 }] }] });
+  f.bus.emit('cast', { caster: 720, target: 711, results: [{ target: 711, impacts: [{ damage: 9000, fatal: true }] }] });
+  assert.equal(f.TeamIntel.edges.get(710).casterName, 'AltTwo');
+  assert.ok(f.TeamKnowledge.players.get('Enemy')?.hostile >= 1, 'a player casting at us outside a party is hostile');
+  const tiger = f.TeamKnowledge.uniques.get('Tiger Girl');
+  assert.ok(tiger?.deadAt > 0, 'the fatal cast on the unique records its death');
+  assert.ok(f.TeamKnowledge.uniqueRows()[0].includes('window'), 'the tracker shows a respawn window');
+});
+
+test('unique announcements from the game become tracked events, shared per the checkboxes', () => {
+  const f = connectedTeam();
+  f.bus.emit('notice', { key: 'UIIT_MSG_APPEAR_TIGER_GIRL', args: [] });
+  assert.ok(f.TeamKnowledge.uniques.get('Tiger Girl')?.appearAt > 0);
+  const events = f.socket.sent.filter(m => m.type === 'msg' && m.payload.kind === 'event');
+  assert.equal(events.length, 1, 'the appearance is announced to the room');
+  assert.equal(events[0].scope, 'room');
+  f.Settings.profile.team.share.public = true;
+  f.bus.emit('notice', { key: 'UIIT_MSG_DEAD_TIGER_GIRL', args: ['Killer'] });
+  const scoped = f.socket.sent.filter(m => m.type === 'msg' && m.payload.kind === 'event');
+  assert.equal(scoped.length, 3, 'with the public lane on, the death goes to the room and to everyone');
+  assert.ok(scoped.some(m => m.scope === 'public'));
+  f.socket.receive({ type: 'msg', from: 'AltTwo', payload: { kind: 'event', event: { kind: 'unique', name: 'Isyutaru', state: 'appear', pos: { regionId: 1, x: 10, z: 10 } } } });
+  assert.ok(f.TeamKnowledge.uniques.get('Isyutaru')?.pos, 'a peer sighting carries its position');
+  f.socket.receive({ type: 'kv-value', key: 'knowledge', value: { uniques: { Medusa: { name: 'Medusa', at: Date.now() - 1000, deadAt: Date.now() - 1000 } }, drops: { 'Sox blade': 1 } } });
+  assert.ok(f.TeamKnowledge.uniques.get('Medusa')?.deadAt, 'hydration from the room store keeps the record');
+  assert.equal(f.TeamKnowledge.drops.get('Sox blade'), 1);
+});
+
+test('assist targets a teammate\'s monster, and never steals an engaged target', () => {
+  const f = connectedTeam();
+  f.Settings.profile.team.assist = true;
+  f.socket.receive({ type: 'peer', name: 'AltTwo', state: { hunting: true } });
+  f.World.ents.set(710, { gid: 710, kind: 'monster', rarity: 4, name: 'Giant', level: 40, regionId: 1, x: 150, y: 0, z: 150, appearanceState: [1, 0, 0] });
+  f.World.ents.set(720, { gid: 720, kind: 'player', name: 'AltTwo', level: 40, regionId: 1, x: 100, y: 0, z: 100, appearanceState: [1, 0, 0] });
+  f.bus.emit('cast', { caster: 720, target: 710, results: [{ target: 710, impacts: [{ damage: 100 }] }] });
+  assert.equal(f.Hunt.teamTarget(null)?.gid, 710, 'with no target of our own, the teammate\'s monster is chosen');
+  assert.equal(f.Hunt.teamTarget({ gid: 999 }), null, 'an engaged target is never replaced');
+  f.Settings.profile.team.assist = false;
+  assert.equal(f.Hunt.teamTarget(null), null);
+});
+
+test('a resurrection claim makes the dead member wait, and the note says who is coming', () => {
+  const f = connectedTeam();
+  f.Settings.profile.party.acceptRes = true;
+  assert.equal(f.Party.reviveDelay(), 5000, 'without a claim the default short wait applies');
+  f.socket.receive({ type: 'msg', from: 'AltTwo', payload: { kind: 'event', event: { kind: 'res-claim', target: 'RelayOne' } } });
+  assert.equal(f.Party.reviveDelay(), 60000);
+  assert.ok(f.Party.waitNote().includes('AltTwo'));
+});
+
+test('town sync follows a teammate\'s town trip once per minute, and console commands reach the room', () => {
+  const f = connectedTeam();
+  f.Settings.profile.team.townSync = true;
+  let townBegins = 0;
+  const realBegin = f.Town.begin;
+  f.Town.begin = () => { townBegins++; };
+  f.Hunt.start();
+  f.socket.receive({ type: 'msg', from: 'AltTwo', payload: { kind: 'event', event: { kind: 'town', who: 'AltTwo' } } });
+  f.socket.receive({ type: 'msg', from: 'AltTwo', payload: { kind: 'event', event: { kind: 'town', who: 'AltTwo' } } });
+  assert.equal(townBegins, 1, 'the second call inside a minute is ignored');
+  assert.ok(f.Hunt.running);
+  f.socket.receive({ type: 'msg', from: 'console', payload: { kind: 'event', event: { kind: 'cmd', action: 'stop' } } });
+  assert.equal(f.Hunt.running, false, 'the console stop reaches the bot');
+  f.Town.begin = realBegin;
+});
+
+test('loot feeds the shared drop log', () => {
+  const f = connectedTeam();
+  f.bus.emit('loot', { kind: 'item', name: 'Sox blade', count: 1 });
+  f.bus.emit('loot', { kind: 'item', name: 'Sox blade', count: 1 });
+  f.bus.emit('loot', { kind: 'gold', gold: 500 });
+  assert.equal(f.TeamKnowledge.dropRows().join('|'), 'Sox blade ×2|Gold 500');
+});
+
+test('huntAtUnique moves the saved spot only when a position is known', () => {
+  const f = connectedTeam();
+  assert.equal(f.TeamArbiter.huntAtUnique('Tiger Girl'), false, 'no record yet: refused');
+  f.TeamKnowledge.uniques.set('Tiger Girl', { name: 'Tiger Girl', at: Date.now(), pos: { regionId: 1, x: 400, z: 500 } });
+  assert.equal(f.TeamArbiter.huntAtUnique('Tiger Girl'), true);
+  const center = f.Settings.profile.hunt.center;
+  assert.equal(JSON.stringify(center), JSON.stringify({ regionId: 1, x: 400, y: 0, z: 500 }));
+});
+
+test('optional converge moves the hunting spot to a known unique and restores it on death or timeout', () => {
+  const f = connectedTeam();
+  f.Settings.profile.team.converge = true;
+  f.Hunt.start();
+  const saved = { ...f.Settings.profile.hunt.center };
+  f.bus.emit('notice', { key: 'UIIT_MSG_APPEAR_TIGER_GIRL', args: [] });
+  assert.equal(JSON.stringify(f.Settings.profile.hunt.center), JSON.stringify(saved), 'an announcement without a position does not move the spot');
+  f.socket.receive({ type: 'msg', from: 'AltTwo', payload: { kind: 'event', event: { kind: 'unique', name: 'Tiger Girl', state: 'appear', pos: { regionId: 1, x: 700, z: 800 } } } });
+  assert.equal(f.Settings.profile.hunt.center.x, 700, 'a sighting with a position moves the spot');
+  assert.ok(f.TeamArbiter.converge, 'the previous spot is remembered');
+  f.socket.receive({ type: 'msg', from: 'AltTwo', payload: { kind: 'event', event: { kind: 'unique', name: 'Isyutaru', state: 'appear', pos: { regionId: 1, x: 10, z: 10 } } } });
+  assert.equal(f.Settings.profile.hunt.center.x, 700, 'a second unique while converging is ignored');
+  f.bus.emit('notice', { key: 'UIIT_MSG_DEAD_TIGER_GIRL', args: ['Killer'] });
+  assert.equal(JSON.stringify(f.Settings.profile.hunt.center), JSON.stringify(saved), 'the death restores the saved spot');
+  assert.equal(f.TeamArbiter.converge, null);
+  f.socket.receive({ type: 'msg', from: 'AltTwo', payload: { kind: 'event', event: { kind: 'unique', name: 'Isyutaru', state: 'appear', pos: { regionId: 1, x: 30, z: 30 } } } });
+  f.advance(21 * 60000); f.TeamArbiter.tick();
+  assert.equal(JSON.stringify(f.Settings.profile.hunt.center), JSON.stringify(saved), 'a converge that finds nothing times out');
+});
+
+test('public knowledge is stored to and hydrated from the relay public pool', () => {
+  const f = connectedTeam();
+  f.Settings.profile.team.share.public = true;
+  f.socket.receive({ type: 'msg', from: 'AltTwo', payload: { kind: 'event', event: { kind: 'unique', name: 'Medusa', state: 'appear', pos: { regionId: 1, x: 5, z: 5 } } } });
+  f.TeamKnowledge.syncedAt = -Infinity;
+  f.advance(31000); f.TeamKnowledge.tick();
+  const puts = f.socket.sent.filter(m => m.type === 'kv-put' && m.key === 'knowledge');
+  assert.ok(puts.some(m => m.scope === 'room'), 'the room store is written');
+  assert.ok(puts.some(m => m.scope === 'public'), 'with the public lane on, the public store is written too');
+  f.socket.receive({ type: 'kv-value', key: 'knowledge', value: { uniques: { Nebs: { name: 'Nebs', at: Date.now(), deadAt: Date.now() } } } });
+  assert.ok(f.TeamKnowledge.uniques.get('Nebs')?.deadAt, 'a public store read hydrates the tracker');
+});
+
+test('a remote unique death is recorded but never re-announced, so no echo loops between clients', () => {
+  const f = connectedTeam();
+  f.TeamKnowledge.uniques.set('Tiger Girl', { name: 'Tiger Girl', at: Date.now() - 60000, appearAt: Date.now() - 60000 });
+  const before = f.socket.sent.filter(m => m.type === 'msg' && m.payload.kind === 'event').length;
+  f.socket.receive({ type: 'msg', from: 'AltTwo', payload: { kind: 'event', event: { kind: 'unique', name: 'Tiger Girl', state: 'dead', pos: { regionId: 1, x: 2, z: 2 } } } });
+  assert.ok(f.TeamKnowledge.uniques.get('Tiger Girl')?.deadAt > 0, 'the death is recorded');
+  const after = f.socket.sent.filter(m => m.type === 'msg' && m.payload.kind === 'event').length;
+  assert.equal(after, before, 'recording a remote death must not announce anything back');
+});
+
+test('a peer\'s store write does not cancel the sync this client still owes the room', () => {
+  const f = connectedTeam();
+  f.TeamKnowledge.saw({ name: 'Latecomer', gid: 900, regionId: 1, x: 3, z: 3, level: 30 }, 'me');
+  assert.ok(f.TeamKnowledge.dirty, 'a local sighting is pending');
+  f.socket.receive({ type: 'kv-value', key: 'knowledge', value: { players: { Earlier: { name: 'Earlier', at: Date.now() } } } });
+  assert.ok(f.TeamKnowledge.dirty, 'hydration keeps the pending local change');
+  f.TeamKnowledge.syncedAt = -Infinity; f.advance(31000); f.TeamKnowledge.tick();
+  const put = f.socket.sent.filter(m => m.type === 'kv-put' && m.scope === 'room').at(-1);
+  assert.ok(put.value.players.Latecomer, 'the pending sighting is in the put');
+  assert.ok(put.value.players.Earlier, 'the hydrated record is in the put too');
+});
+
+// ---- Auto stall ----
+// Drives the stall session the way the game would: each command the bot sends changes World.gp.stall
+// like the worker's own reducer does (stall-name → naming, stall-create → owner, stall-add → an offer,
+// stall-open → open, stall-close → the state disappears again).
+function stallFixture() {
+  const f = fixture();
+  const town = f.Town.towns[0], spot = town.services.storage;
+  f.World.gp.pose = { regionId: spot.regionId, x: spot.x, y: 0, z: spot.z };
+  f.Items.data.set(62, { name: 'Lucky Powder', code: 'ITEM_ETC_ARCHEMY_LUCKY_POWDER_08' });
+  f.Items.data.set(63, { name: 'Element', code: 'ITEM_ETC_ARCHEMY_ELEMENT_08' });
+  f.Stall.init();
+  return f;
+}
+function stallBag(f) {
+  f.World.gp.inventory.push({ slot: 13, refObjId: 62, quantity: 20, typeFlags: 0x156c, name: 'Lucky Powder', tooltip: { fields: { canSell: 1 } } });
+  f.World.gp.inventory.push({ slot: 14, refObjId: 63, quantity: 4, typeFlags: 0x56c, name: 'Element', tooltip: { fields: { canSell: 1 } } });
+}
+// Applies the game's answer to the last command; refuse one add bagSlot by simply not answering it.
+function stallRespond(f, { ignoreAdd = -1 } = {}) {
+  const c = f.commands.at(-1), stall = f.World.gp.stall;
+  if (!c || c.__done) return;
+  c.__done = true;
+  if (c.kind === 'stall-name') f.World.gp.stall = { phase: 'naming', namingSequence: 1, owner: 0, title: '', greeting: '', savedGreeting: '', open: false, mode: 0, networkRegistered: false, offers: [], visitors: [], network: { open: false, rows: [], pages: 0, page: 0, category: 0, buying: null } };
+  else if (c.kind === 'stall-create') { stall.phase = 'owner'; stall.owner = f.World.gp.localGid; stall.title = c.title; }
+  else if (c.kind === 'stall-add') { if (c.bagSlot !== ignoreAdd) stall.offers.push({ slot: c.slot, bagSlot: c.bagSlot, quantity: c.quantity, price: c.price, item: { refObjId: c.bagSlot === 13 ? 62 : 63, name: c.bagSlot === 13 ? 'Lucky Powder' : 'Element', quantity: c.quantity } }); }
+  else if (c.kind === 'stall-open') stall.open = true;
+  else if (c.kind === 'stall-close') f.World.gp.stall = undefined;
+}
+function stallDrive(f, ticks, options) {
+  for (let i = 0; i < ticks && f.Stall.run; i++) { f.advance(400); f.Controller.tick(); stallRespond(f, options); }
+}
+test('the stall refuses to start outside town, while hunting, with nothing priced or with a stall already open', () => {
+  const f = stallFixture(); stallBag(f);
+  f.World.gp.pose = { regionId: 1, x: 100, y: 0, z: 100 };
+  f.Stall.start(); assert.equal(f.Stall.run, null); assert.ok(f.notices.at(-1).includes('town'));
+  const spot = f.Town.towns[0].services.storage;
+  f.World.gp.pose = { regionId: spot.regionId, x: spot.x, y: 0, z: spot.z };
+  f.Stall.start(); assert.equal(f.Stall.run, null); assert.ok(f.notices.at(-1).includes('priced'));
+  f.Settings.profile.stall.prices = { 62: 150 };
+  f.Hunt.running = true; f.Stall.start(); assert.equal(f.Stall.run, null); assert.ok(f.notices.at(-1).includes('hunting'));
+  f.Hunt.running = false;
+  f.World.gp.stall = { phase: 'owner', owner: 99, offers: [], visitors: [] };
+  f.Stall.start(); assert.equal(f.Stall.run, null); assert.ok(f.notices.at(-1).includes('stall'));
+  f.World.gp.stall = undefined;
+  f.Stall.start(); assert.ok(f.Stall.run, 'clean state starts the session');
+});
+test('the stall names, creates, registers each priced stack at its price and opens for business', () => {
+  const f = stallFixture(); stallBag(f);
+  f.Settings.profile.stall.title = 'Powders';
+  f.Settings.profile.stall.prices = { 62: 150, 63: 4000 };
+  f.Stall.start();
+  stallDrive(f, 40);
+  assert.equal(f.Stall.run?.phase, 'selling', 'the session is selling; status: ' + f.Stall.message);
+  assert.equal(f.World.gp.stall.open, true);
+  assert.deepEqual(f.World.gp.stall.offers.map(o => [o.slot, o.bagSlot, o.quantity, o.price]), [[1, 13, 20, 150], [2, 14, 4, 4000]]);
+  assert.deepEqual(f.commands.map(c => c.kind), ['stall-name', 'stall-create', 'stall-add', 'stall-add', 'stall-open']);
+  assert.equal(f.Stall.message.includes('2 offers'), true, f.Stall.message);
+});
+test('a sale counts only when the offer disappears and gold rises; the stall then closes when empty', () => {
+  const f = stallFixture(); stallBag(f);
+  f.Settings.profile.stall.prices = { 62: 150 };
+  f.World.gp.progression.gold = '100000';
+  f.Stall.start(); stallDrive(f, 30);
+  assert.equal(f.Stall.run.phase, 'selling');
+  // The offer vanishes but no gold arrives: not a confirmed sale.
+  f.World.gp.stall.offers = [];
+  f.advance(400); f.Controller.tick();
+  assert.equal(f.Stall.run.sold, 0, 'no gold gain, no sale claim');
+  assert.equal(f.Stall.run.phase, 'close', 'everything gone closes the stall');
+  stallDrive(f, 10);
+  assert.equal(f.World.gp.stall, undefined);
+  assert.equal(f.Stall.run, null);
+  assert.ok(f.Stall.message.includes('Sold 0'), f.Stall.message);
+});
+test('a confirmed sale is reported with its gold value', () => {
+  const f = stallFixture(); stallBag(f);
+  f.Settings.profile.stall.prices = { 62: 150 };
+  f.World.gp.progression.gold = '100000';
+  f.Stall.start(); stallDrive(f, 30);
+  f.World.gp.stall.offers = [];
+  f.World.gp.progression.gold = '103000'; // 20 × 150
+  f.advance(400); f.Controller.tick(); stallRespond(f);
+  assert.equal(f.Stall.run.sold, 20);
+  assert.equal(f.Stall.run.earned, 3000n);
+  assert.ok(f.Stall.message.includes('Sold 20 × Lucky Powder'), f.Stall.message);
+  stallDrive(f, 20);
+  assert.equal(f.Stall.run, null);
+  assert.ok(f.Stall.message.includes('Sold 20 items for 3,000 gold.'), f.Stall.message);
+});
+test('an unconfirmed stall-add is skipped and never resent; the rest of the stall still opens', () => {
+  const f = stallFixture(); stallBag(f);
+  f.Settings.profile.stall.prices = { 62: 150, 63: 4000 };
+  f.Stall.start();
+  stallDrive(f, 100, { ignoreAdd: 13 });
+  assert.equal(f.Stall.run?.phase, 'selling', 'status: ' + f.Stall.message);
+  assert.equal(f.commands.filter(c => c.kind === 'stall-add' && c.bagSlot === 13).length, 1, 'the unanswered add is never resent');
+  assert.deepEqual(f.World.gp.stall.offers.map(o => o.bagSlot), [14], 'only the answered item is offered');
+});
+test('stop all closes a stall this page opened', () => {
+  const f = stallFixture(); stallBag(f);
+  f.Settings.profile.stall.prices = { 62: 150 };
+  f.Stall.start(); stallDrive(f, 30);
+  assert.equal(f.Stall.run.phase, 'selling');
+  f.stopAll();
+  assert.equal(f.Stall.run, null);
+  assert.equal(f.commands.at(-1).kind, 'stall-close');
+});
+test('a world reset drops the stall session without sending anything', () => {
+  const f = stallFixture(); stallBag(f);
+  f.Settings.profile.stall.prices = { 62: 150 };
+  f.Stall.start(); stallDrive(f, 30);
+  const sent = f.commands.length;
+  f.bus.emit('reset');
+  assert.equal(f.Stall.run, null);
+  assert.equal(f.commands.length, sent, 'no close command after the world is gone');
+});
+test('a price change mid-session stops the stall instead of mixing old offers', () => {
+  const f = stallFixture(); stallBag(f);
+  f.Settings.profile.stall.prices = { 62: 150 };
+  f.Stall.start(); stallDrive(f, 30);
+  assert.equal(f.Stall.run.phase, 'selling');
+  f.Settings.profile.stall.prices = { 62: 200 };
+  f.advance(400); f.Controller.tick(); stallRespond(f);
+  assert.equal(f.Stall.run, null);
+  assert.equal(f.commands.at(-1).kind, 'stall-close');
 });

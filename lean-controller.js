@@ -3,6 +3,8 @@ const startHunting = Hunt.start;
 Hunt.start = function (...args) {
   if (BuffGear.run || BuffGear.recovery) return UI.toast('Restore or review combat gear before hunting.', 'warn');
   if (Alchemy.run || Alchemy.pending) return UI.toast('Stop alchemy and wait for its result before hunting.', 'warn');
+  if (Stall.run) return UI.toast('Stop the stall session before hunting.', 'warn');
+  if (World.gp?.stall?.phase && World.gp.stall.phase !== 'none') return UI.toast('Close the stall before hunting.', 'warn');
   return startHunting.apply(this, args);
 };
 Hunt.lootAllowed = e => Loot.allowed(e);
@@ -84,7 +86,7 @@ Hunt.tick = function () {
     this.state = 'resting'; return;
   }
   if (Combat.buffs(true)) { this.state = 'buff'; return; }
-  const target = this.threat(current) || current || this.chooseTarget();
+  const target = this.threat(current) || current || this.teamTarget(current) || this.chooseTarget();
   if (target) { this.engage(target); return; }
   this.targetGid = 0; this.state = Loot.active?.petGid ? 'loot' : 'search';
   if (H.returnToCenter && H.center && dist2D(World.pose(), H.center) > Math.max(40, H.radius * 0.5) && now() - this.lastMoveAt > 2500) {
@@ -97,6 +99,7 @@ Hunt.tick = function () {
 function stopAll() {
   Town.record('stop');
   Alchemy.stop();
+  Stall.stop();
   BuffGear.cancel();
   const townActive = !!Town.trip;
   Town.cancel();
@@ -173,6 +176,7 @@ const Controller = {
   tick() {
     try {
       this.guard('Reconnect', () => Reconnect.tick());
+      this.guard('Team', () => { Team.tick(); TeamIntel.tick(); TeamKnowledge.tick(); TeamArbiter.tick(); });
       Restock.sample();
       Alchemy.tick();
       if (BuffGear.run) {
@@ -180,6 +184,7 @@ const Controller = {
         if (BuffGear.tick()) { this.mode = 'buff gear'; return; }
       }
       if (Alchemy.run || Alchemy.pending) { if (World.inWorld()) Party.tick(); this.mode = 'alchemy'; return; }
+      if (Stall.run) { if (World.inWorld()) { Party.tick(); Potion.tick(); } Stall.tick(); this.mode = 'stall'; return; }
       if (World.inWorld() && World.isDead() && Hunt.running) {
         Town.cancel(); Resurrect.cancelTrip(); Resurrect.holdUntil = 0;
         Party.acceptResurrection();

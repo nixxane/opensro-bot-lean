@@ -165,7 +165,8 @@ const Diagnostics = {
   snapshot() {
     const gp = World.gp, c = Settings.profile, pet = Loot.pet(), social = gp?.social, matching = gp?.partyMatching;
     return {
-      action: this.main(), partyStatus: this.party(), petStatus: this.pet(), townStatus: this.town(), townDetail: this.townDetail(), townReason: this.townReason(),
+      action: this.main(), partyStatus: this.party(), teamStatus: Settings.profile.team?.enabled ? Team.status() : '',
+      teamDetail: Settings.profile.team?.enabled ? TeamIntel.rows().length + ' shared entities, ' + TeamIntel.edges.size + ' combat edges, ' + TeamKnowledge.uniques.size + ' tracked uniques, ' + TeamKnowledge.players.size + ' known players' : '', petStatus: this.pet(), townStatus: this.town(), townDetail: this.townDetail(), townReason: this.townReason(),
       navigationReady: !!Navigation.scene, navigationError: String(Navigation.error || '').slice(0, 80),
       buffGearStatus: BuffGear.cfg().buffSwap ? String(BuffGear.status()).slice(0, 600) : '', buffGearActive: !!BuffGear.run, buffGearRestoring: !!BuffGear.run?.restoring, buffGearMovePending: !!BuffGear.run?.pending, buffGearRecovery: !!BuffGear.recovery,
       alchemyActive: !!Alchemy.run, alchemyPending: !!Alchemy.pending, alchemyAttempts: this.number(Alchemy.result?.attempts),

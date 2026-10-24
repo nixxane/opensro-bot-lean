@@ -17,11 +17,11 @@ const Updates = {
     const abort = new AbortController(), timer = setTimeout(() => abort.abort(), 15000);
     try {
       const options = { signal: abort.signal, cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer' };
-      const response = await W.fetch('https://api.github.com/repos/nixxane/opensro-bot-lean/commits/main', options);
+      const response = await W.fetch('https://api.github.com/repos/duan78/opensro-bot-lean/commits/main', options);
       if (!response.ok) return;
       const { sha } = await response.json();
       if (typeof sha !== 'string' || !/^[a-f0-9]{40}$/.test(sha)) return;
-      const base = 'https://raw.githubusercontent.com/nixxane/opensro-bot-lean/' + sha + '/bot.lean.';
+      const base = 'https://raw.githubusercontent.com/duan78/opensro-bot-lean/' + sha + '/bot.lean.';
       const metadata = await W.fetch(base + 'meta.js', options);
       if (!metadata.ok) return;
       const match = (await metadata.text()).match(/^\/\/ @version\s+(\d+\.\d+\.\d+)\s*$/m);
@@ -39,7 +39,7 @@ const Updates = {
   // to update. Shown as plain text only; a missing or odd file just leaves the plain Update button.
   async headline(sha, version, options) {
     try {
-      const response = await W.fetch('https://raw.githubusercontent.com/nixxane/opensro-bot-lean/' + sha + '/notes/' + version + '.md', options);
+      const response = await W.fetch('https://raw.githubusercontent.com/duan78/opensro-bot-lean/' + sha + '/notes/' + version + '.md', options);
       if (!response.ok) return '';
       const title = String(await response.text()).slice(0, 8192).match(/^# (.+)$/m)?.[1] || '';
       // Control and line-separator characters are dropped: the headline is one line of plain text.

@@ -1,0 +1,23 @@
+# systemd unit for the Node team relay on a VPS.
+#   sudo cp opensro-team-relay.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now opensro-team-relay
+# Put the relay in /opt/opensro-team-relay (or edit WorkingDirectory) after `npm install --omit=dev`.
+[Unit]
+Description=OpenSRO bot team relay
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/opensro-team-relay
+ExecStart=/usr/bin/node server.js
+Environment=PORT=4701
+Restart=always
+RestartSec=5
+User=relay
+# Hardening: the relay needs no filesystem writes beyond its data file.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/opensro-team-relay
+
+[Install]
+WantedBy=multi-user.target

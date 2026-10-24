@@ -7,7 +7,7 @@ observed evidence; an operation ID never implies a server transaction ID.
 ===========================================================================
 */
 const ACTIVITY_LIMIT = { normal: 400, commands: 1000, text: 1000, repeatMs: 1000, captureMs: 600000 };
-const ACTIVITY_CATEGORIES = [ "session", "combat", "movement", "town", "potion", "loot", "party", "buff", "alchemy", "reconnect", "settings", "engine", "assets" ];
+const ACTIVITY_CATEGORIES = [ "session", "combat", "movement", "town", "stall", "potion", "loot", "party", "buff", "alchemy", "reconnect", "settings", "engine", "assets" ];
 const ACTIVITY_DETAIL_KEYS = [ "durationMs", "distance", "attempt", "quantity", "hpPct", "mpPct", "delayMs", "choice", "errorCode", "goldChange", "kills", "deaths", "potions", "items", "revision", "visited", "progressAgeMs", "monsterId", "skillId", "attackingPlayer", "leg", "legs" ];
 const Activity = {
 	commands: [], revision: 0, sequence: 0, session: 0, operation: 0, captureUntil: 0,

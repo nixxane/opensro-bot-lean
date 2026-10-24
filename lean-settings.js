@@ -3,6 +3,7 @@ const NOTES_URL = 'https://nixxane.github.io/opensro-bot-lean-site/#patch-notes'
 const CLASS_KEYS = ['normal', 'champion', 'giant', 'party', 'elite', 'unique'];
 const DEFAULT_PROFILE = {
   items: { rules: {} },
+  stall: { title: '', greeting: '', network: true, closeWhenEmpty: true, prices: {} },
   alchemy: { target: 3, limit: 20, elixir: 0, powder: false, use: { luck: false, steady: false, immortal: false, astral: false }, stones: { luck: 1, steady: 1, immortal: 1, astral: 1 }, stoneLimit: 0,
     // The plus from which each helper is used: a failure from +5 up can destroy the item (Steady and Immortal matter from there),
     // Luck and lucky powder help at every plus, and Astral keeps +4 on a failure.
@@ -14,6 +15,7 @@ const DEFAULT_PROFILE = {
   mastery: { enabled: false, ids: [], gap: 0, skills: false, scope: 'rotation', reserve: 0, order: 'masteries' },
   party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', autoRes: false, acceptRes: false, resRadius: 300, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
     support: { enabled: false, whileStopped: false, range: 30, heal: { id: 0, group: 0, pct: 60, self: false }, group: { id: 0, group: 0, pct: 60, count: 2 }, buffs: [] } },
+  team: { enabled: false, url: '', token: '', role: 'none', assist: false, townSync: false, converge: false, share: { public: false, monsters: true, players: true, uniques: true } },
   wardrobe: { on: true, phantom: true, realAnim: true, hideAvatars: false,
     eq: {}, av: {}, pet: { atk: 0, pick: 0, mount: 0 }, presets: {}, undo: null },
   macro: {
@@ -57,7 +59,7 @@ const DEFAULT_PROFILE = {
 function botProfile(input) {
   const result = deepMerge(DEFAULT_PROFILE, {});
   if (!input || typeof input !== 'object') return result;
-  for (const key of ['macro', 'potion', 'hunt', 'wardrobe', 'party', 'alchemy', 'mastery', 'statPoints', 'trace', 'items']) {
+  for (const key of ['macro', 'potion', 'hunt', 'wardrobe', 'party', 'team', 'alchemy', 'mastery', 'statPoints', 'trace', 'items', 'stall']) {
     if (!input[key] || typeof input[key] !== 'object') continue;
     for (const field of Object.keys(DEFAULT_PROFILE[key])) {
       if (field in input[key]) result[key][field] = deepMerge(DEFAULT_PROFILE[key][field], input[key][field]);
@@ -132,7 +134,7 @@ const Sound = {
     } catch {}
   },
   // Only these alerts are audible; existing combat/UI calls stay silent.
-  tones: { 'pet-full': { notes: [659.25, 830.61, 987.77], gap: 0.18 }, sox: { notes: [783.99, 987.77, 1174.66, 1567.98], gap: 0.11 } },
+  tones: { 'pet-full': { notes: [659.25, 830.61, 987.77], gap: 0.18 }, sox: { notes: [783.99, 987.77, 1174.66, 1567.98], gap: 0.11 }, unique: { notes: [523.25, 659.25, 783.99, 1046.5], gap: 0.12 } },
   play(kind) {
     const tone = this.tones[kind];
     if (!tone) return false;
