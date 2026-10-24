@@ -1,0 +1,7 @@
+{
+  "name": "opensro-team-relay-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Workers edition of the opensro-bot-lean team relay (Durable Objects, WebSocket hibernation)."
+}

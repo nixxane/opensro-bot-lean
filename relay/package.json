@@ -1,0 +1,13 @@
+{
+  "name": "opensro-team-relay",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Reference WebSocket relay for opensro-bot-lean team mode: rooms by key, presence fanout, no game logic.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

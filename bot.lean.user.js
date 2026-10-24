@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         nixxane bot
 // @namespace    https://opensro.online/
-// @version      1.2.128
+// @version      1.4.3
 // @updateURL    https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.meta.js
 // @downloadURL  https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.user.js
-// @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
+// @description  Combat, reliable looting, potions, restocking, walk-back and an optional team relay in one compact panel.
 // @author       Adapted from TSK's OpenSRO Assistant
 // @license      GPL-2.0-or-later
 // @match        https://opensro.online/play*
@@ -22,7 +22,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[NIX] Another SRO assistant is active. Disable it and reload to use NIX.');
   return;
 }
-const VERSION = '1.2.128';
+const VERSION = '1.4.3';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -187,6 +187,7 @@ const NOTES_URL = 'https://nixxane.github.io/opensro-bot-lean-site/#patch-notes'
 const CLASS_KEYS = ['normal', 'champion', 'giant', 'party', 'elite', 'unique'];
 const DEFAULT_PROFILE = {
   items: { rules: {} },
+  stall: { title: '', greeting: '', network: true, closeWhenEmpty: true, prices: {} },
   alchemy: { target: 3, limit: 20, elixir: 0, powder: false, use: { luck: false, steady: false, immortal: false, astral: false }, stones: { luck: 1, steady: 1, immortal: 1, astral: 1 }, stoneLimit: 0,
     // The plus from which each helper is used: a failure from +5 up can destroy the item (Steady and Immortal matter from there),
     // Luck and lucky powder help at every plus, and Astral keeps +4 on a failure.
@@ -198,6 +199,7 @@ const DEFAULT_PROFILE = {
   mastery: { enabled: false, ids: [], gap: 0, skills: false, scope: 'rotation', reserve: 0, order: 'masteries' },
   party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', autoRes: false, acceptRes: false, resRadius: 300, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
     support: { enabled: false, whileStopped: false, range: 30, heal: { id: 0, group: 0, pct: 60, self: false }, group: { id: 0, group: 0, pct: 60, count: 2 }, buffs: [] } },
+  team: { enabled: false, url: '', token: '', role: 'none', assist: false, townSync: false, converge: false, share: { public: false, monsters: true, players: true, uniques: true } },
   wardrobe: { on: true, phantom: true, realAnim: true, hideAvatars: false,
     eq: {}, av: {}, pet: { atk: 0, pick: 0, mount: 0 }, presets: {}, undo: null },
   macro: {
@@ -241,7 +243,7 @@ const DEFAULT_PROFILE = {
 function botProfile(input) {
   const result = deepMerge(DEFAULT_PROFILE, {});
   if (!input || typeof input !== 'object') return result;
-  for (const key of ['macro', 'potion', 'hunt', 'wardrobe', 'party', 'alchemy', 'mastery', 'statPoints', 'trace', 'items']) {
+  for (const key of ['macro', 'potion', 'hunt', 'wardrobe', 'party', 'team', 'alchemy', 'mastery', 'statPoints', 'trace', 'items', 'stall']) {
     if (!input[key] || typeof input[key] !== 'object') continue;
     for (const field of Object.keys(DEFAULT_PROFILE[key])) {
       if (field in input[key]) result[key][field] = deepMerge(DEFAULT_PROFILE[key][field], input[key][field]);
@@ -316,7 +318,7 @@ const Sound = {
     } catch {}
   },
   // Only these alerts are audible; existing combat/UI calls stay silent.
-  tones: { 'pet-full': { notes: [659.25, 830.61, 987.77], gap: 0.18 }, sox: { notes: [783.99, 987.77, 1174.66, 1567.98], gap: 0.11 } },
+  tones: { 'pet-full': { notes: [659.25, 830.61, 987.77], gap: 0.18 }, sox: { notes: [783.99, 987.77, 1174.66, 1567.98], gap: 0.11 }, unique: { notes: [523.25, 659.25, 783.99, 1046.5], gap: 0.12 } },
   play(kind) {
     const tone = this.tones[kind];
     if (!tone) return false;
@@ -4348,6 +4350,287 @@ const Town = {
 };
 
 
+// Auto stall: open the character's own street stall in town and sell bag items at prices you set per item
+// (like sBot's stall). The worker contract, read from the live client: stall-name enters a local naming phase,
+// stall-create {title, greeting} opens the stall (phase 'owner'), stall-add {slot, bagSlot, quantity, price}
+// registers an offer while the stall is still closed, stall-open {open, network} opens it for business and can
+// list it on the stall network, stall-close tears it down. World.gp.stall is undefined while no stall is open,
+// otherwise { phase: 'none'|'naming'|'owner'|'visitor', owner, title, open, offers: [{slot, item, bagSlot,
+// quantity, price}], visitors }. A sale shows as the offer disappearing while gold rises; a dispatch is never
+// proof, every step waits for its state change and is never resent.
+const STALL_MAX_OFFERS = 10;
+const STALL_STEP_TIMEOUT_MS = 15000;
+const Stall = {
+  run: null, pending: null, message: 'Idle. Price items on this page, stand in town and open the stall.',
+  started: false,
+  cfg() { return Settings.profile.stall; },
+  // A price entry is the offer rule for that exact item id; 0 or invalid clears it.
+  price(id) { const p = Number(this.cfg().prices?.[id]); return Number.isInteger(p) && p >= 1 && p <= 4294967295 ? p : 0; },
+  setPrice(id, price) {
+    const prices = this.cfg().prices;
+    if (Number.isInteger(price) && price >= 1 && price <= 4294967295) prices[id] = price;
+    else delete prices[id];
+    Settings.saveProfile();
+  },
+  stall() { const s = World.gp?.stall; return s && s.phase !== 'none' ? s : null; },
+  offers() { return this.stall()?.phase === 'owner' ? this.stall().offers || [] : []; },
+  // Bag items with a price that are not already offered or skipped. A price is explicit intent, so the general
+  // loot protections do not apply; stackables offer their whole stack, equipment one piece.
+  candidates(r = this.run) {
+    const offered = new Set(this.offers().map(o => o.bagSlot)), skip = r ? r.skip : new Set();
+    return World.items().filter(i => !offered.has(i.slot) && !skip.has(i.slot) && this.price(i.refObjId) > 0);
+  },
+  // ownStall: the session's own stall is expected mid-run; only a fresh start refuses any open stall.
+  blocked(ownStall = false) {
+    const gp = World.gp;
+    if (!World.inWorld() || !gp || !World.local()) return 'Enter the game world first.';
+    if (World.isDead()) return 'Stall stopped: character died.';
+    if (Alchemy.run || Alchemy.pending) return 'Stop alchemy and wait for its result first.';
+    if (BuffGear.run || BuffGear.recovery) return 'Restore or review combat gear first.';
+    if (Hunt.running || Town.trip || WalkBack.active || Restock.trip || Restock.recording || Resurrect.trip || Controller.resumeAfterRevive) return 'Stop hunting, travel and route recording first.';
+    if (Loot.active) return 'Stop collection and wait for its inventory transaction first.';
+    if (Restock.activeShop() || gp.storage || gp.exchange?.open || gp.exchange?.requesting) return 'Close shop, storage and trade first.';
+    if (!ownStall && gp.stall?.phase && gp.stall.phase !== 'none') return 'Close the open stall first.';
+    if (World.isCasting() || gp.pendingMoves) return 'Wait for casts and movement to finish.';
+    return '';
+  },
+  start() {
+    if (this.run) return;
+    const gp = World.gp, error = this.blocked();
+    const reject = text => { this.message = text; UI.toast(text, 'warn'); };
+    if (error) return reject(error);
+    if (gp.inventoryPending) return reject('Wait for settled inventory state.');
+    if (World.isSitting()) return reject('Stand up first.');
+    if (!Town.detect()) return reject('Stalls open in town only: stand inside one of the known towns.');
+    const c = this.cfg();
+    const list = this.candidates();
+    if (!list.length) return reject('No priced bag items to offer. Give items a price on this page first.');
+    this.run = { phase: 'name', character: World.charName, config: JSON.stringify(c), manualAt: Manual.lastAt,
+      skip: new Set(), refusals: 0, sold: 0, earned: 0n, openedAt: 0, lastGold: toBigInt(gp.progression?.gold), offersAt: null };
+    this.pending = null;
+    this.message = 'Opening the stall.';
+    Activity.emit({ category: 'stall', code: 'stall-started', text: 'Stall session started: offering ' + list.length + ' priced item' + (list.length === 1 ? '' : 's') + '.', outcome: 'requested' });
+  },
+  // Stop the session. A stall this session opened is closed again (only when the observed state still shows it,
+  // so a world reset never sends a command the worker would refuse); `quiet` drops it without any command.
+  stop(reason = 'Stall session stopped.', quiet = false) {
+    const r = this.run; this.run = null; this.pending = null;
+    this.message = reason;
+    if (!r) return;
+    if (r.phase === 'done') return;
+    Activity.emit({ category: 'stall', code: 'stall-stopped', level: 'warn', text: reason, outcome: 'cancelled' });
+    if (quiet) return;
+    const phase = World.gp?.stall?.phase;
+    if (phase === 'naming') Cmd.raw({ kind: 'stall-name-cancel' }, 'Stall: cancel naming');
+    else if (phase === 'owner' && World.inWorld()) Cmd.raw({ kind: 'stall-close' }, 'Stall: close our stall');
+  },
+  finish(text, code = 'stall-closed') {
+    const r = this.run; this.run = null; this.pending = null;
+    this.message = text;
+    Activity.emit({ category: 'stall', code, text, outcome: 'summary', details: { sold: r.sold, earned: String(r.earned) } });
+  },
+  fail(text) { Log.warn('Stall: ' + text); this.stop(text); },
+  // The next free stall slot, 1-based; the server keeps its own limit and refuses beyond it.
+  freeSlot() {
+    const used = new Set(this.offers().map(o => o.slot));
+    for (let slot = 1; slot <= STALL_MAX_OFFERS; slot++) if (!used.has(slot)) return slot;
+    return 0;
+  },
+  // A confirmed step observes its state change; on timeout the step is skipped (an offer) or fails the session,
+  // and no command is ever resent.
+  confirmPending(gp) {
+    const p = this.pending;
+    if (!p) return true;
+    if (now() - p.at > STALL_STEP_TIMEOUT_MS) {
+      this.pending = null;
+      if (p.kind === 'add') {
+        this.run.skip.add(p.bagSlot); this.run.refusals++;
+        this.message = 'Stall: one item was not registered; skipping it.';
+        return false;
+      }
+      this.fail('Stall: ' + p.kind + ' was not confirmed after 15 s. No repeat command sent.');
+      return false;
+    }
+    if (gp.inventoryPending || now() - p.at < 500) return false;
+    const stall = gp.stall;
+    if (p.kind === 'name') { if (stall?.phase === 'naming') { this.pending = null; return true; } return false; }
+    if (p.kind === 'create') {
+      if (stall?.phase === 'owner' && stall.owner === gp.localGid) { this.pending = null; return true; }
+      return false;
+    }
+    if (p.kind === 'add') {
+      if ((stall?.offers || []).some(o => o.bagSlot === p.bagSlot && o.slot === p.slot)) {
+        this.pending = null; this.run.refusals = 0;
+        Activity.emit({ category: 'stall', code: 'stall-offer', text: 'Stall: ' + p.name + ' registered at ' + p.price.toLocaleString('en-US') + ' gold.', outcome: 'confirmed', details: { refObjId: p.ref, quantity: p.quantity, price: p.price } });
+        return true;
+      }
+      return false;
+    }
+    if (p.kind === 'open') { if (stall?.open) { this.pending = null; return true; } return false; }
+    if (p.kind === 'close') { if (!stall) { this.pending = null; return true; } return false; }
+    return false;
+  },
+  send(kind, command, label, extra = {}) {
+    if (!Cmd.spaced(command.kind) || !Cmd.raw(command, 'Stall: ' + label)) return false;
+    this.pending = { kind, at: now(), ...extra };
+    return true;
+  },
+  // A sale: an offer disappears while gold rises. Nothing else moves gold while the session owns the character,
+  // so an offer vanishing without a gold gain is not claimed as a sale.
+  observeSales(r, gp) {
+    const stall = gp.stall;
+    if (!stall || stall.phase !== 'owner') return;
+    const gold = toBigInt(gp.progression?.gold);
+    if (r.offersAt === null) { r.offersAt = stall.offers.map(o => ({ ...o })); r.lastGold = gold; return; }
+    const before = r.offersAt, after = stall.offers;
+    for (const old of before) {
+      const kept = after.find(o => o.slot === old.slot);
+      const quantity = old.quantity - (kept ? Math.min(kept.quantity, old.quantity) : 0);
+      if (quantity <= 0 || gold <= r.lastGold) continue;
+      const value = BigInt(old.price) * BigInt(quantity);
+      r.sold += quantity; r.earned += value;
+      r.saleNoteAt = now();
+      this.message = 'Sold ' + quantity + ' × ' + (old.item?.name || Items.name(old.item?.refObjId) || 'item') + ' for ' + value.toLocaleString('en-US') + ' gold.';
+      Activity.emit({ category: 'stall', code: 'stall-sale', text: this.message, outcome: 'confirmed',
+        details: { refObjId: old.item?.refObjId, quantity, price: old.price, slot: old.slot } });
+    }
+    r.offersAt = after.map(o => ({ ...o }));
+    r.lastGold = gold;
+  },
+  watchSelling(r, gp) {
+    this.observeSales(r, gp);
+    const stall = gp.stall;
+    if (!stall || stall.phase !== 'owner') return this.finish('The stall closed. Sold ' + r.sold + ' item' + (r.sold === 1 ? '' : 's') + ' for ' + r.earned.toLocaleString('en-US') + ' gold.');
+    if (r.phase !== 'selling') return;
+    const offers = stall.offers || [];
+    // A sale line stays up briefly instead of being stamped over by the rolling status.
+    if (!r.saleNoteAt || now() - r.saleNoteAt > 5000)
+      this.message = 'Stall open: ' + offers.length + ' offer' + (offers.length === 1 ? '' : 's') + ' left' +
+        (stall.visitors?.length ? ', ' + stall.visitors.length + ' browsing' : '') +
+        (r.sold ? '; sold ' + r.sold + ' for ' + r.earned.toLocaleString('en-US') + ' gold.' : '.');
+    if (!offers.length && this.cfg().closeWhenEmpty) {
+      r.phase = 'close';
+      if (!r.saleNoteAt || now() - r.saleNoteAt > 5000) this.message = 'Everything sold; closing the stall.';
+    }
+  },
+  tick() {
+    const r = this.run, gp = World.gp;
+    if (!r) return false;
+    if (!World.inWorld()) { this.stop('Stall stopped: left the game world.'); return true; }
+    if (!this.confirmPending(gp)) { if (this.run && ['selling', 'close'].includes(this.run.phase)) this.watchSelling(this.run, gp); return true; }
+    if (!this.run) return true; // the confirmation itself may have ended the session
+    const blocked = this.blocked(true);
+    if (blocked || r.character !== World.charName || r.manualAt !== Manual.lastAt || r.config !== JSON.stringify(this.cfg()))
+      return this.fail(blocked || 'Stall stopped: settings, character or manual control changed.'), true;
+    if (World.isDead()) return this.fail('Stall stopped: character died.'), true;
+    const stall = gp.stall;
+    if (stall?.phase === 'visitor') return this.fail('Stall stopped: browsing another stall.'), true;
+    if (r.phase === 'name') {
+      this.message = 'Stall: naming the stall.';
+      if (!stall || stall.phase === 'none') this.send('name', { kind: 'stall-name' }, 'begin naming');
+      else if (stall.phase === 'naming') r.phase = 'create';
+      return true;
+    }
+    if (r.phase === 'create') {
+      this.message = 'Stall: opening the stall.';
+      if (stall?.phase === 'owner' && stall.owner === gp.localGid) {
+        r.phase = 'add';
+        Activity.emit({ category: 'stall', code: 'stall-created', text: 'Stall created: ' + (stall.title || 'unnamed') + '.', outcome: 'confirmed' });
+      }
+      else if (stall?.phase === 'naming') this.send('create', { kind: 'stall-create', title: this.cfg().title || World.charName || 'Stall', greeting: this.cfg().greeting || '' }, 'create the stall');
+      else r.phase = 'name'; // the naming phase was lost; start over
+      return true;
+    }
+    if (r.phase === 'add') {
+      if (r.refusals >= 2) { r.phase = 'open'; return true; }
+      const item = this.nextCandidate(r), slot = this.freeSlot();
+      if (!item || !slot) { r.phase = 'open'; return true; }
+      const price = this.price(item.refObjId), quantity = Math.max(1, item.quantity || 1), name = item.name || Items.name(item.refObjId);
+      this.message = 'Stall: registering ' + name + '.';
+      this.send('add', { kind: 'stall-add', slot, bagSlot: item.slot, quantity, price }, 'offer ' + name,
+        { slot, bagSlot: item.slot, quantity, price, ref: item.refObjId, name });
+      return true;
+    }
+    if (r.phase === 'open') {
+      if (stall?.open) {
+        r.phase = 'selling'; r.openedAt = now(); r.offersAt = null;
+        Activity.emit({ category: 'stall', code: 'stall-opened', text: 'Stall open for business with ' + (stall.offers?.length || 0) + ' offer' + ((stall.offers?.length || 0) === 1 ? '' : 's') + '.', outcome: 'confirmed' });
+        return true;
+      }
+      if (!this.offers().length) return this.fail('Stall: nothing could be registered.');
+      this.message = 'Stall: opening for business.';
+      this.send('open', { kind: 'stall-open', open: true, network: !!this.cfg().network }, 'open for business');
+      return true;
+    }
+    if (r.phase === 'selling') { this.watchSelling(r, gp); return true; }
+    if (r.phase === 'close') {
+      if (!stall) return this.finish('Stall closed. Sold ' + r.sold + ' item' + (r.sold === 1 ? '' : 's') + ' for ' + r.earned.toLocaleString('en-US') + ' gold.'), true;
+      this.message = 'Stall: closing.';
+      this.send('close', { kind: 'stall-close' }, 'close the stall');
+      return true;
+    }
+    return true;
+  },
+  nextCandidate(r) {
+    for (const item of this.candidates(r)) {
+      if (this.offers().some(o => o.bagSlot === item.slot)) continue;
+      return item;
+    }
+    return null;
+  },
+  init() {
+    if (this.started) return; this.started = true;
+    // Any manual native gameplay command can interfere with the stall; our own Cmd.raw bypasses these observers.
+    Hook.observers.push(command => { if (command.kind === 'gameplay' && this.run) this.stop('Stall stopped by manual game control.'); });
+    bus.on('game-error', text => { if (this.run && /stall|inventory/i.test(String(text))) this.stop('Stall stopped after a game refusal; wait for the state to settle.'); });
+    // A world reset clears the stall server-side too; drop the session without sending anything.
+    bus.on('reset', () => this.stop('Stall stopped after world reset.', true));
+  },
+  status() {
+    const r = this.run, stall = this.stall();
+    if (r) return this.message;
+    if (stall?.phase === 'owner') return 'A stall of yours is open in the game; the bot is not managing it.';
+    if (stall?.phase === 'visitor') return 'You are browsing another player\'s stall.';
+    if (stall?.phase === 'naming') return 'A stall is being named in the game.';
+    return this.message;
+  },
+  draw() {
+    const c = () => this.cfg();
+    const setup = UI.group('Stall',
+      UI.text('Stall name', () => c().title, v => c().title = v, 'defaults to your character name'),
+      UI.text('Greeting', () => c().greeting, v => c().greeting = v, 'shown to visitors'),
+      UI.check('List the stall on the stall network', () => c().network, v => c().network = v),
+      UI.check('Close when everything is sold', () => c().closeWhenEmpty, v => c().closeWhenEmpty = v),
+      UI.row(UI.button('Open stall', () => this.start()), UI.button('Stop stall', () => this.stop())),
+      el('p', 'Opens your street stall where you stand and offers every priced bag item from this page. Works in town only, while hunting, travel and alchemy are stopped: the stall keeps the character in place. Each offer sells the whole stack at your price. Sold items are confirmed by the offer disappearing and gold arriving; a step the game does not confirm is skipped, never resent. Stop (or F8) closes a stall this page opened.', 'muted'));
+    UI.stallNote = el('p', this.status(), 'muted'); setup.append(UI.stallNote);
+    UI.pane.append(setup);
+    const prices = UI.group('Items and prices');
+    const entries = Object.entries(c().prices);
+    if (!entries.length) prices.append(el('div', 'No prices set. Add items from your bag below.', 'empty'));
+    for (const [id, price] of entries) {
+      const item = Number(id), name = Items.name(item) || ('#' + item);
+      const inBag = World.items().filter(i => i.refObjId === item).reduce((n, i) => n + (i.quantity ?? 1), 0);
+      const remove = UI.button('×', () => { this.setPrice(item, 0); UI.draw(); });
+      remove.className = 'mini'; remove.setAttribute('aria-label', 'Stop selling ' + name);
+      prices.append(UI.row(
+        el('span', name + (inBag ? ' · ' + inBag + ' in bag' : ' · not in bag'), 'item-name'),
+        UI.number(name + ' price (gold)', () => price, v => this.setPrice(item, v), 1, 4294967295),
+        remove));
+    }
+    const unnamed = [...new Map(World.items().filter(i => this.price(i.refObjId) === 0 && i.tooltip?.fields?.canSell !== 0).map(i => [i.refObjId, i])).values()];
+    if (unnamed.length) prices.append(UI.select('Add a bag item to sell', () => [[0, 'Choose an item'], ...unnamed.map(i => [i.refObjId, (i.name || Items.name(i.refObjId)) + ' ×' + (i.quantity ?? 1)])],
+      () => 0, v => { const id = Number(v); if (id) { this.setPrice(id, 100); UI.draw(); } }));
+    prices.append(el('p', 'Prices are per exact item and saved with this character, so the same drop sells at the same price on the next stall. A new entry starts at 100 gold; change it to what the item is worth. Items the merchant cannot sell are not offered. Items already in a stall you keep open in the game are left alone.', 'muted'));
+    UI.pane.append(prices);
+  },
+  refresh() {
+    if (!UI.is('Stall') || !UI.stallNote) return;
+    UI.stallNote.textContent = this.status();
+  },
+};
+
+
 // Confirm every native inventory move before casting or restoring combat gear.
 const BuffGear = {
   run: null, recovery: null, message: 'Buff weapon swapping off.', skipped: new Map(), waiting: '', started: false,
@@ -4699,11 +4982,452 @@ const Support = {
 };
 
 
+// Team relay bus: a private WebSocket channel between this bot and the player's other characters.
+// Phase 1 carries presence only: who is connected, hunting, alive, at what level. Every character that
+// knows the room key joins the same room on the relay; the relay forwards beats between them and holds
+// no game logic. The bus is an independent service: it runs with hunting stopped, survives world
+// transitions, and a relay that is off or unreachable changes nothing about the bot's own behaviour.
+const TEAM_BEAT_MS = 5000;   // presence cadence; the relay drops a client silent for 30 s
+const TEAM_PEER_TTL_MS = 15000; // a peer whose beat stops is forgotten, not kept half-alive
+const TEAM_BACKOFF_MS = [5000, 10000, 20000, 60000]; // reconnect delay per consecutive failure
+const Team = {
+  socket: null, state: 'off', message: 'Team relay off.', peers: new Map(), name: '',
+  attempts: 0, retryAt: -Infinity, sentAt: -Infinity, cfgKey: null, handlers: {},
+  cfg() { return Settings.profile.team; },
+  online() { return this.socket?.readyState === 1; },
+  // An event for the room, or for everyone on the relay when the public lane is on for it.
+  emit(event, scope = 'room') { return this.send({ type: 'msg', scope, payload: { kind: 'event', event } }); },
+  reset() {
+    this.close();
+    this.peers.clear();
+    this.attempts = 0; this.retryAt = -Infinity; this.sentAt = -Infinity;
+    const on = !!this.cfg().enabled;
+    this.state = on ? 'connecting' : 'off';
+    this.message = on ? 'Connecting to the team relay…' : 'Team relay off.';
+  },
+  close() {
+    const s = this.socket;
+    this.socket = null;
+    if (s) { s.onopen = s.onclose = s.onmessage = s.onerror = null; try { s.close(); } catch {} }
+  },
+  // Extension point for later phases (shared intel, coordination): subscribe to a message type.
+  on(type, fn) { (this.handlers[type] ||= []).push(fn); },
+  payload() {
+    const pose = World.pose();
+    return { hunting: !!Hunt.running, alive: World.inWorld() && !World.isDead(),
+      mode: String(Controller.mode || 'idle'), level: World.gp?.progression?.level ?? null,
+      role: String(this.cfg().role || 'none'), townTrip: !!Town.trip, hasRes: !!Resurrect.skill(),
+      pos: pose ? { regionId: pose.regionId, x: Math.round(pose.x), z: Math.round(pose.z) } : null };
+  },
+  send(msg) {
+    if (this.socket?.readyState !== 1) return false;
+    try { this.socket.send(JSON.stringify(msg)); return true; } catch { return false; }
+  },
+  connect(url, token) {
+    // The room key rides in the URL for hosts that route by it (Cloudflare Workers); the Node
+    // relay ignores the query, so one address format works everywhere.
+    const address = url + (url.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(token);
+    let s = null;
+    try { s = new W.WebSocket(address); } catch (e) {
+      this.message = 'Relay address refused: ' + (e?.message || e).slice?.(0, 100);
+      this.scheduleRetry();
+      return;
+    }
+    this.socket = s;
+    this.state = 'connecting';
+    this.message = 'Connecting to the team relay…';
+    s.onopen = () => {
+      if (this.socket !== s) return;
+      this.attempts = 0;
+      this.state = 'online';
+      this.message = 'Connected as ' + this.name + '.';
+      this.sentAt = now();
+      this.send({ v: 1, type: 'hello', token, name: this.name, state: this.payload() });
+      UI.toast('Team relay connected.', 'info', 3000);
+    };
+    s.onmessage = e => { if (this.socket === s) this.receive(e?.data); };
+    // The browser always fires close after an error, so retries are owned by close alone.
+    s.onerror = () => {};
+    s.onclose = () => { if (this.socket === s) { this.socket = null; this.scheduleRetry(); } };
+  },
+  scheduleRetry(note = '') {
+    const delay = TEAM_BACKOFF_MS[Math.min(this.attempts, TEAM_BACKOFF_MS.length - 1)];
+    this.attempts++;
+    this.retryAt = now() + delay;
+    this.state = 'retrying';
+    this.message = (note || 'Relay connection lost') + '; retrying in ' + Math.round(delay / 1000) + ' s.';
+    if (this.attempts <= 2) Log.warn('Team relay: ' + this.message);
+  },
+  receive(text) {
+    let msg = null;
+    try { msg = JSON.parse(String(text)); } catch { return; }
+    if (!msg || typeof msg !== 'object') return;
+    switch (msg.type) {
+      case 'welcome':
+        this.peers = new Map((Array.isArray(msg.peers) ? msg.peers : [])
+          .filter(p => p?.name && p.name !== this.name)
+          .map(p => [p.name, { state: p.state || {}, at: now() }]));
+        break;
+      case 'peer':
+        if (msg.name && msg.name !== this.name) this.peers.set(msg.name, { state: msg.state || {}, at: now() });
+        break;
+      case 'join':
+        if (msg.name && msg.name !== this.name && !this.peers.has(msg.name)) {
+          this.peers.set(msg.name, { state: {}, at: now() });
+          UI.toast(msg.name + ' joined the team relay.', 'info', 3000);
+        }
+        break;
+      case 'leave':
+        if (msg.name && this.peers.delete(msg.name)) UI.toast(msg.name + ' left the team relay.', 'info', 3000);
+        break;
+      case 'error': {
+        const note = 'Relay: ' + String(msg.message || 'error').slice(0, 120);
+        Log.warn('Team relay: ' + note);
+        this.close();
+        this.scheduleRetry(note);
+        break;
+      }
+    }
+    for (const fn of this.handlers[msg.type] || []) {
+      try { fn(msg); } catch (e) { Log.error('Team handler error: ' + (e?.message || e)); }
+    }
+  },
+  tick() {
+    const c = this.cfg();
+    const key = !!c.enabled + '|' + c.url + '|' + c.token;
+    if (key !== this.cfgKey) { this.cfgKey = key; this.reset(); }
+    const t = now();
+    for (const [name, peer] of this.peers) if (t - peer.at > TEAM_PEER_TTL_MS) this.peers.delete(name);
+    if (!c.enabled) return;
+    const url = String(c.url || '').trim();
+    // The game page is HTTPS: a remote relay must use wss, or the browser blocks the socket silently.
+    if (!/^wss:\/\//i.test(url)) { this.state = 'off'; this.message = 'The relay address must start with wss://.'; return; }
+    if (typeof W.WebSocket !== 'function') { this.state = 'off'; this.message = 'This browser has no WebSocket.'; return; }
+    const name = String(World.charName || World.gp?.social?.localName || '');
+    if (!name) { this.state = 'waiting'; this.message = 'Waiting for the character name…'; return; }
+    this.name = name;
+    if (!this.socket && t >= this.retryAt) this.connect(url, String(c.token || ''));
+    if (this.socket?.readyState === 1 && t - this.sentAt >= TEAM_BEAT_MS) {
+      if (this.send({ type: 'beat', name: this.name, state: this.payload() })) this.sentAt = t;
+    }
+  },
+  status() {
+    if (!this.cfg().enabled) return 'Team relay off.';
+    if (this.state === 'online') return 'Connected as ' + this.name + '; ' + this.peers.size + (this.peers.size === 1 ? ' peer' : ' peers') + ' in the room.';
+    return this.message;
+  },
+  peerRows() {
+    const t = now();
+    return [...this.peers.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([name, peer]) => {
+      const s = peer.state || {};
+      const what = s.townTrip ? 'in town' : s.hunting ? 'hunting' : s.alive === false ? 'dead' : s.mode || 'idle';
+      return name + (s.role && s.role !== 'none' ? ' (' + s.role + ')' : '') + ' · ' + what + (Number.isInteger(s.level) ? ' · level ' + s.level : '') + ' · ' + Math.max(0, Math.round((t - peer.at) / 1000)) + ' s ago';
+    });
+  },
+};
+
+
+// Team intel: the live shared world. Each character publishes a small digest of what it sees —
+// interesting monsters (champion and up, party mobs, uniques), other players, and the combat edges
+// observed from every cast in view (who attacks what, with how much damage) — and merges the digests
+// of its room peers. Entries are keyed by the server's entity gid, which is identical across clients;
+// they carry their source and a short TTL, and the local view always wins over a shared one.
+// Shards: entries from implausible regions (not own or adjacent) are kept out of the merge, so two
+// characters on different divisions never smear each other's maps.
+const INTEL_PUBLISH_MS = 2500;
+const INTEL_MONSTER_TTL_MS = 15000;
+const INTEL_PLAYER_TTL_MS = 20000;
+const INTEL_EDGE_TTL_MS = 8000; // matches the bot's own "another player's target" window
+const TeamIntel = {
+  world: new Map(), // gid -> {kind, gid, name, cls, level, hpPct, regionId, x, z, unique, src, at}
+  edges: new Map(), // target gid -> {caster, casterName, target, dmg, at}
+  sentAt: -Infinity,
+  share() { return Settings.profile.team?.share || {}; },
+  reset() { this.world.clear(); this.edges.clear(); this.sentAt = -Infinity; },
+  // A monster worth reporting: champion and up, party mobs; normals are everywhere and worth little.
+  interesting(e) {
+    if (e?.kind !== 'monster' || !World.isAlive(e)) return false;
+    return e.rarity === 3 || e.rarity === 1 || e.rarity === 4 || e.rarity === 5 || e.rarity === 6 || e.rarityAuxIcon === 1;
+  },
+  regionOk(regionId) {
+    const pose = World.pose();
+    if (!pose || !Number.isInteger(regionId)) return true; // nothing to compare against: accept
+    const dx = Math.abs((regionId & 255) - (pose.regionId & 255)), dz = Math.abs((regionId >>> 8) - (pose.regionId >>> 8));
+    return dx <= 1 && dz <= 1;
+  },
+  row(e, kind) {
+    return { kind, gid: e.gid, name: e.name || null, cls: kind === 'monster' ? monsterClass(e) : null,
+      level: e.level ?? null, hpPct: World.hpPctOf(e) ?? null, unique: kind === 'monster' && e.rarity === 3,
+      regionId: e.regionId, x: Math.round(e.x), z: Math.round(e.z) };
+  },
+  // What this character sees right now, capped so a busy area cannot flood the room.
+  snapshot() {
+    const monsters = [], players = [];
+    for (const e of World.ents.values()) {
+      if (!e?.gid) continue;
+      if (this.interesting(e)) { if (monsters.length < 40) monsters.push(this.row(e, 'monster')); }
+      else if (e.kind === 'player' && e.name && e.gid !== World.localGid() && players.length < 30) players.push(this.row(e, 'player'));
+    }
+    const t = now();
+    const edges = [...this.edges.values()].sort((a, b) => b.at - a.at).slice(0, 12)
+      .map(x => ({ c: x.caster, cn: x.casterName, t: x.target, d: Math.min(0xffffff, Math.round(x.dmg)), age: Math.max(0, Math.round(t - x.at)) }));
+    return { monsters, players, edges };
+  },
+  publish(payload, scope) {
+    return Team.send({ type: 'msg', scope, payload: { kind: 'intel', payload } });
+  },
+  tick() {
+    const t = now();
+    for (const [gid, row] of this.world) if (t - row.at > (row.kind === 'player' ? INTEL_PLAYER_TTL_MS : INTEL_MONSTER_TTL_MS)) this.world.delete(gid);
+    for (const [gid, edge] of this.edges) if (t - edge.at > INTEL_EDGE_TTL_MS) this.edges.delete(gid);
+    if (!Team.online() || t - this.sentAt < INTEL_PUBLISH_MS) return;
+    const snap = this.snapshot();
+    this.publish(snap, 'room');
+    const share = this.share();
+    if (share?.public) {
+      const open = { monsters: share.monsters ? snap.monsters : [], players: share.players ? snap.players : [], edges: [] };
+      if (open.monsters.length || open.players.length) this.publish(open, 'public');
+    }
+    this.sentAt = t;
+  },
+  merge(from, payload) {
+    const t = now();
+    for (const list of [payload?.monsters, payload?.players]) {
+      for (const row of Array.isArray(list) ? list : []) {
+        if (!row || !Number.isInteger(row.gid) || !this.regionOk(row.regionId)) continue;
+        const known = this.world.get(row.gid);
+        if (known && known.src === 'me') continue; // own eyes are fresher than any report
+        if (known && known.at > t - 1000) continue;
+        this.world.set(row.gid, { kind: row.cls ? 'monster' : 'player',
+          gid: row.gid, name: row.name, cls: row.cls, level: row.level ?? null, hpPct: row.hpPct ?? null,
+          unique: !!row.unique, regionId: row.regionId, x: row.x, z: row.z, src: from, at: t });
+        TeamKnowledge.saw(row, from);
+      }
+    }
+    for (const edge of Array.isArray(payload?.edges) ? payload.edges : []) {
+      if (!edge || !Number.isInteger(edge.t) || !Number.isInteger(edge.c)) continue;
+      const known = this.edges.get(edge.t);
+      if (known && t - (known.at || t) < 1000) continue;
+      this.edges.set(edge.t, { caster: edge.c, casterName: String(edge.cn || ''), target: edge.t, dmg: edge.d || 0, at: t - (edge.age || 0) });
+    }
+  },
+  // Every cast in view, ours and everyone else's, feeds the combat edges. A cast aimed at the local
+  // player from a player outside the party is also a hostility datum for the knowledge base.
+  onCast(cast) {
+    if (!cast || !Number.isInteger(cast.caster) || !cast.target) return;
+    const caster = World.ents.get(cast.caster);
+    const owner = caster?.kind === 'cos' ? World.ents.get(caster.ownerGid) : caster;
+    const targets = new Set([cast.target, ...(cast.results || []).map(r => r?.target).filter(Number.isInteger)]);
+    let dmg = 0, fatal = false;
+    for (const r of cast.results || []) for (const i of r?.impacts || []) { dmg += i?.damage || 0; fatal ||= !!i?.fatal; }
+    const t = now();
+    for (const gid of targets) {
+      const e = World.ents.get(gid);
+      if (e?.kind !== 'monster') continue;
+      const edge = this.edges.get(gid);
+      if (edge && edge.caster !== cast.caster && t - edge.at < 1500) continue; // keep the main attacker
+      this.edges.set(gid, { caster: cast.caster, casterName: owner?.name || '', target: gid, dmg: (edge?.caster === cast.caster ? edge.dmg : 0) + dmg, at: t });
+      if (e.rarity === 3 && fatal) TeamKnowledge.killed(e, owner?.name || 'someone');
+    }
+    if (owner?.kind === 'player' && targets.has(World.localGid())) {
+      const social = World.gp?.social;
+      const member = Array.isArray(social?.members) && social.members.some(m => m?.name === owner.name);
+      if (!member && owner.name !== social?.localName) TeamKnowledge.hostile(owner);
+    }
+  },
+  rows() { const t = now(); return [...this.world.values()].filter(r => t - r.at <= (r.kind === 'player' ? INTEL_PLAYER_TTL_MS : INTEL_MONSTER_TTL_MS)); },
+};
+bus.on('cast', cast => TeamIntel.onCast(cast));
+Team.on('msg', m => {
+  const payload = m?.payload;
+  if (payload?.kind === 'intel') TeamIntel.merge(m.from, payload.payload);
+  else if (payload?.kind === 'event') { TeamKnowledge.event(m.from, payload.event); TeamArbiter.event(m.from, payload.event); }
+});
+
+
+// Team knowledge: the persistent, shared memory of the room. The unique tracker turns the game's
+// own division-wide announcements (UIIT_MSG_APPEAR/DEAD notices, already on the bot's bus) plus
+// first-hand sightings into spawn history with respawn windows (the timer restarts at death; 3-6 h
+// per unique). The player database keys on names with deterministic gids, remembers hostility (a
+// player outside the party casting at us) and last positions. Drop counters come from the loot bus.
+// Everything is kept in the room's key-value store on the relay (last writer merges), so a late
+// joiner hydrates from what the room already knows. Wall-clock times (Date.now) because records
+// outlive sessions; nothing personal about the local character leaves the room.
+const KNOWLEDGE_SYNC_MS = 30000;
+const KNOWLEDGE_MAX_PLAYERS = 200, KNOWLEDGE_MAX_DROPS = 300;
+// Respawn hours per unique, from the game's own tables; unknown names take the 6 h default.
+const UNIQUE_HOURS = { tiger: 6, cerberus: 6, ivy: 6, isyutaru: 6, uruchi: 3, yarkan: 6, shaitan: 6, medusa: 4, jupiter: 4, bonlord: 6, tahomet: 6 };
+const TeamKnowledge = {
+  uniques: new Map(), // name -> {name, appearAt, deadAt, pos, src, at}
+  players: new Map(), // name -> {gid, level, regionId, x, z, hostile, hits, at}
+  drops: new Map(),   // item name -> count
+  gold: 0, dirty: false, syncedAt: -Infinity, hostileAt: new Map(),
+  share() { return Settings.profile.team?.share || {}; },
+  reset() { this.dirty = true; }, // records stay; the relay is the memory, a reset only re-syncs
+  hoursFor(name) {
+    const text = String(name || '').toLowerCase();
+    for (const [word, hours] of Object.entries(UNIQUE_HOURS)) if (text.includes(word)) return hours;
+    return 6;
+  },
+  // ---- unique tracker ----
+  onNotice(n) {
+    const m = String(n?.key || '').match(/^UIIT_MSG_(APPEAR|DEAD|ANYONE_DEAD)_([A-Z_]+)$/);
+    if (!m) return;
+    const args = Array.isArray(n.args) ? n.args.map(a => String(a ?? '').trim()) : [];
+    if (m[2] === 'UNIC' && !args[0]) return;
+    const name = m[2] === 'UNIC' ? args[0] : m[2].split('_').map(w => w[0] + w.slice(1).toLowerCase()).join(' ');
+    if (m[1] === 'APPEAR') this.appear(name, null, 'announcement');
+    else this.dead(name);
+  },
+  appear(name, pos, src) {
+    const record = this.uniques.get(name) || { name, at: 0 };
+    record.appearAt = Date.now(); record.deadAt = null; record.at = record.appearAt;
+    record.src = src || 'sighting'; if (pos) record.pos = pos;
+    this.uniques.set(name, record);
+    this.dirty = true;
+    UI.toast(name + ' appeared' + (pos ? '' : ' (somewhere on this server)'), 'warn', 6000);
+    if (Settings.profile.hunt.pickup.soxSound) Sound.play('unique');
+    this.announce({ kind: 'unique', name, state: 'appear', pos: pos || record.pos || null });
+    TeamArbiter.event('local', { kind: 'unique', name, state: 'appear', pos: pos || record.pos || null });
+  },
+  dead(name, pos) {
+    const record = this.uniques.get(name) || { name, at: 0 };
+    record.deadAt = Date.now(); record.at = record.deadAt; if (pos) record.pos = pos;
+    this.uniques.set(name, record);
+    this.dirty = true;
+    UI.toast(name + ' is dead; respawn window ' + this.hoursFor(name) + ' h.', 'info', 6000);
+    this.announce({ kind: 'unique', name, state: 'dead', pos: pos || record.pos || null });
+    TeamArbiter.event('local', { kind: 'unique', name, state: 'dead', pos: pos || record.pos || null });
+  },
+  killed(e, killer) {
+    if (e?.kind === 'monster' && e.rarity === 3 && e.name) this.dead(e.name, { regionId: e.regionId, x: Math.round(e.x), z: Math.round(e.z) });
+  },
+  announce(event) {
+    if (!Team.online()) return;
+    Team.emit(event, 'room');
+    if (this.share().public && this.share().uniques) Team.emit(event, 'public');
+  },
+  // ---- player database ----
+  saw(row, src) {
+    if (!row?.name || row.cls) return;
+    const t = Date.now(), known = this.players.get(row.name) || { hostile: 0, hits: 0, at: 0 };
+    if (t - known.at < 20000) return; // sightings are dense; one record per 20 s is plenty
+    this.players.set(row.name, { gid: row.gid, level: row.level ?? known.level ?? null,
+      regionId: row.regionId, x: row.x, z: row.z, hostile: known.hostile, hits: known.hits, at: t });
+    this.dirty = true;
+  },
+  hostile(owner) {
+    if (!owner?.name) return;
+    const t = Date.now();
+    if (t - (this.hostileAt.get(owner.name) || 0) < 10000) return;
+    this.hostileAt.set(owner.name, t);
+    const known = this.players.get(owner.name) || { hostile: 0, hits: 0, at: t, gid: owner.gid, level: owner.level ?? null, regionId: owner.regionId, x: owner.x, z: owner.z };
+    known.hostile++; known.hits++; known.at = t;
+    this.players.set(owner.name, known);
+    this.dirty = true;
+    Log.warn('Team: ' + owner.name + ' attacked you; recorded as hostile.');
+  },
+  // ---- drop log ----
+  onLoot(e) {
+    if (e?.kind === 'item' && e.name) {
+      this.drops.set(e.name, (this.drops.get(e.name) || 0) + (e.count || 1));
+      if (this.drops.size > KNOWLEDGE_MAX_DROPS) [...this.drops.entries()].sort((a, b) => b[1] - a[1]).slice(KNOWLEDGE_MAX_DROPS).forEach(([k]) => this.drops.delete(k));
+      this.dirty = true;
+    } else if (e?.kind === 'gold' && e.gold) { this.gold += Number(e.gold) || 0; this.dirty = true; }
+  },
+  // ---- room events from peers ----
+  event(from, ev) {
+    if (ev?.kind === 'unique') {
+      if (ev.state === 'appear') {
+        const record = this.uniques.get(ev.name) || { name: ev.name, at: 0 };
+        // Only the announcement or a fresher sighting updates the clock.
+        if (!record.appearAt || Date.now() - record.appearAt > 60000) {
+          record.appearAt = Date.now(); record.deadAt = null; record.at = record.appearAt; record.src = from;
+          if (ev.pos) record.pos = ev.pos;
+          this.uniques.set(ev.name, record); this.dirty = true;
+          UI.toast(ev.name + ' spotted by ' + from + '.', 'warn', 6000);
+          if (Settings.profile.hunt.pickup.soxSound) Sound.play('unique');
+        }
+      } else if (ev.state === 'dead') {
+        // A remote death is recorded quietly: re-announcing it would echo between clients forever.
+        const record = this.uniques.get(ev.name) || { name: ev.name, at: 0 };
+        record.deadAt = Date.now(); record.at = record.deadAt; if (ev.pos) record.pos = ev.pos;
+        this.uniques.set(ev.name, record); this.dirty = true;
+        UI.toast(ev.name + ' is dead (' + from + '); respawn window ' + this.hoursFor(ev.name) + ' h.', 'info', 6000);
+      }
+    } else if (ev?.kind === 'hostile' && ev.name) {
+      const known = this.players.get(ev.name) || { hostile: 0, hits: 0, at: Date.now() };
+      known.hostile++; known.at = Date.now();
+      this.players.set(ev.name, known); this.dirty = true;
+    }
+  },
+  // ---- relay key-value sync ----
+  doc() {
+    return { uniques: Object.fromEntries(this.uniques), players: Object.fromEntries([...this.players.entries()].slice(-KNOWLEDGE_MAX_PLAYERS)),
+      drops: Object.fromEntries(this.drops), gold: this.gold };
+  },
+  hydrate(value) {
+    if (!value || typeof value !== 'object') return;
+    const mergeRow = (map, key, row) => {
+      if (!row || typeof row !== 'object') return;
+      const known = map.get(key);
+      if (!known || (row.at || 0) > (known.at || 0)) map.set(key, row);
+    };
+    for (const [key, row] of Object.entries(value.uniques || {})) mergeRow(this.uniques, key, row);
+    for (const [key, row] of Object.entries(value.players || {})) mergeRow(this.players, key, row);
+    for (const [key, count] of Object.entries(value.drops || {})) if (Number.isFinite(count)) this.drops.set(key, Math.max(this.drops.get(key) || 0, count));
+    if (Number.isFinite(value.gold)) this.gold = Math.max(this.gold, value.gold);
+    // Local changes that were still waiting for their own put stay waiting: a peer's store
+    // write must never cancel a sync this client owes the room.
+  },
+  tick() {
+    if (!Team.online()) return;
+    const t = Date.now();
+    if (this.dirty && t - this.syncedAt > KNOWLEDGE_SYNC_MS) {
+      if (Team.send({ type: 'kv-put', key: 'knowledge', scope: 'room', value: this.doc() })) {
+        this.dirty = false; this.syncedAt = t;
+        if (this.share().public && this.share().uniques) Team.send({ type: 'kv-put', key: 'knowledge', scope: 'public', value: this.doc() });
+      }
+    } else if (!this.dirty) this.syncedAt = t; // a fresh sync keeps the next change prompt
+  },
+  // One line per unique for the Team page: state and, when waiting, the predicted window.
+  uniqueRows() {
+    const t = Date.now();
+    return [...this.uniques.values()].sort((a, b) => (b.at || 0) - (a.at || 0)).map(r => {
+      if (r.deadAt) {
+        const next = r.deadAt + this.hoursFor(r.name) * 3600000;
+        return r.name + ' · died ' + Math.round((t - r.deadAt) / 60000) + ' min ago · window in ' + (next > t ? Math.round((next - t) / 60000) + ' min' : 'now (+' + Math.round((t - next) / 60000) + ' min)');
+      }
+      if (r.appearAt) return r.name + ' · appeared ' + Math.round((t - r.appearAt) / 60000) + ' min ago · alive or unfound';
+      return r.name + ' · no sighting yet';
+    });
+  },
+  playerRows() {
+    const t = Date.now();
+    return [...this.players.values()].sort((a, b) => (b.hostile - a.hostile) || (b.at - a.at)).slice(0, 12)
+      .map(p => (p.hostile ? '⚠ ' : '') + p.name + (Number.isFinite(p.level) ? ' · level ' + p.level : '') + ' · seen ' + Math.round((t - (p.at || t)) / 60000) + ' min ago' + (p.hostile ? ' · hostile ×' + p.hostile : ''));
+  },
+  dropRows() {
+    return [...this.drops.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([name, n]) => name + ' ×' + n).concat(this.gold ? ['Gold ' + this.gold] : []);
+  },
+};
+bus.on('notice', n => TeamKnowledge.onNotice(n));
+bus.on('loot', e => TeamKnowledge.onLoot(e));
+Team.on('welcome', () => {
+  if (!Team.online()) return;
+  Team.send({ type: 'kv-get', key: 'knowledge', scope: 'room' });
+  if (Settings.profile.team?.share?.public && Settings.profile.team.share.uniques) Team.send({ type: 'kv-get', key: 'knowledge', scope: 'public' });
+});
+Team.on('kv-value', m => TeamKnowledge.hydrate(m?.value));
+
+
 // Single owner for movement/combat/pickup. Potion use remains a separate emergency lane.
 const startHunting = Hunt.start;
 Hunt.start = function (...args) {
   if (BuffGear.run || BuffGear.recovery) return UI.toast('Restore or review combat gear before hunting.', 'warn');
   if (Alchemy.run || Alchemy.pending) return UI.toast('Stop alchemy and wait for its result before hunting.', 'warn');
+  if (Stall.run) return UI.toast('Stop the stall session before hunting.', 'warn');
+  if (World.gp?.stall?.phase && World.gp.stall.phase !== 'none') return UI.toast('Close the stall before hunting.', 'warn');
   return startHunting.apply(this, args);
 };
 Hunt.lootAllowed = e => Loot.allowed(e);
@@ -4785,7 +5509,7 @@ Hunt.tick = function () {
     this.state = 'resting'; return;
   }
   if (Combat.buffs(true)) { this.state = 'buff'; return; }
-  const target = this.threat(current) || current || this.chooseTarget();
+  const target = this.threat(current) || current || this.teamTarget(current) || this.chooseTarget();
   if (target) { this.engage(target); return; }
   this.targetGid = 0; this.state = Loot.active?.petGid ? 'loot' : 'search';
   if (H.returnToCenter && H.center && dist2D(World.pose(), H.center) > Math.max(40, H.radius * 0.5) && now() - this.lastMoveAt > 2500) {
@@ -4798,6 +5522,7 @@ Hunt.tick = function () {
 function stopAll() {
   Town.record('stop');
   Alchemy.stop();
+  Stall.stop();
   BuffGear.cancel();
   const townActive = !!Town.trip;
   Town.cancel();
@@ -4874,6 +5599,7 @@ const Controller = {
   tick() {
     try {
       this.guard('Reconnect', () => Reconnect.tick());
+      this.guard('Team', () => { Team.tick(); TeamIntel.tick(); TeamKnowledge.tick(); TeamArbiter.tick(); });
       Restock.sample();
       Alchemy.tick();
       if (BuffGear.run) {
@@ -4881,6 +5607,7 @@ const Controller = {
         if (BuffGear.tick()) { this.mode = 'buff gear'; return; }
       }
       if (Alchemy.run || Alchemy.pending) { if (World.inWorld()) Party.tick(); this.mode = 'alchemy'; return; }
+      if (Stall.run) { if (World.inWorld()) { Party.tick(); Potion.tick(); } Stall.tick(); this.mode = 'stall'; return; }
       if (World.inWorld() && World.isDead() && Hunt.running) {
         Town.cancel(); Resurrect.cancelTrip(); Resurrect.holdUntil = 0;
         Party.acceptResurrection();
@@ -4934,6 +5661,156 @@ const Controller = {
     }
   },
 };
+
+
+// Team arbiter: the decisions that make a group of characters act like a team instead of five solo
+// bots in the same field. Assist focuses your target chooser on the monster a teammate is fighting
+// (party members' hits never mark a monster, and by default any other player's hits do — so team
+// etiquette between unpartied characters is already the bot's no-KS rule; assist is the other half).
+// Town sync makes the room recall together. Resurrection claims stop the dead member reviving
+// itself while a peer walks over. Spot claims warn when two characters start on top of each other.
+// The room's console (served by the relay) can stop everyone or call a group town trip. Every rule
+// is local and advisory: each bot still acts only through its own command layer.
+const TeamArbiter = {
+  resClaimAt: -Infinity, resClaimBy: '', townFollowAt: -Infinity, spotWarnAt: -Infinity, converge: null,
+  cfg() { return Settings.profile.team; },
+  reset() { this.resClaimAt = -Infinity; this.townFollowAt = -Infinity; },
+  // ---- assist: fight what a teammate fights ----
+  assistTarget(current) {
+    try {
+      if (current || !this.cfg().assist || !Team.online()) return null;
+      const social = World.gp?.social, t = now();
+      const isParty = n => Array.isArray(social?.members) && social.members.some(m => m?.name === n);
+      let best = null;
+      for (const edge of TeamIntel.edges.values()) {
+        const name = edge.casterName;
+        if (!name || name === World.charName || t - edge.at > INTEL_EDGE_TTL_MS) continue;
+        if (!Team.peers.has(name) && !isParty(name)) continue;
+        const e = World.ents.get(edge.target);
+        if (!e || !isAttackableMob(e) || Hunt.banned(Hunt.ban, e.gid)) continue;
+        if (!best || edge.at > best.edge.at) best = { edge, e };
+      }
+      if (best) Log.info('Team assist: joining ' + best.edge.casterName + "'s fight.");
+      return best?.e || null;
+    } catch { return null; }
+  },
+  // ---- room events ----
+  event(from, ev) {
+    if (!ev || typeof ev !== 'object') return;
+    if (ev.kind === 'town' && ev.who !== World.charName && this.cfg().townSync) {
+      if (Hunt.running && !Town.trip && now() - this.townFollowAt > 60000) {
+        this.townFollowAt = now();
+        UI.toast(from + ' went to town; starting the town trip too.', 'info', 5000);
+        try { Town.begin(); } catch (e) { Log.error('Team town sync: ' + (e?.message || e)); }
+      }
+    } else if (ev.kind === 'res-claim' && ev.target === World.charName) {
+      this.resClaimAt = now(); this.resClaimBy = from;
+      UI.toast(from + ' is coming to resurrect you.', 'info', 5000);
+    } else if (ev.kind === 'unique') this.uniqueEvent(ev);
+    else if (ev.kind === 'cmd') this.command(ev);
+  },
+  // ---- unique converge (opt-in): hunt at the unique's position until it dies or 20 minutes pass ----
+  uniqueEvent(ev) {
+    if (ev.state === 'dead') {
+      if (this.converge?.name === ev.name) this.restoreSpot(ev.name + ' is dead; back to the saved hunting spot.');
+      return;
+    }
+    if (ev.state !== 'appear' || !this.cfg().converge || this.converge) return;
+    const pos = ev.pos || TeamKnowledge.uniques.get(ev.name)?.pos;
+    if (!pos || !Number.isInteger(pos.regionId)) return;
+    const H = Settings.profile.hunt;
+    if (!Hunt.running || !H.center || Town.trip || !World.inWorld() || World.isDead()) return;
+    this.converge = { name: ev.name, prev: { ...H.center }, at: now() };
+    H.center = { regionId: pos.regionId, x: Math.round(pos.x), y: H.center.y || 0, z: Math.round(pos.z) };
+    Settings.saveProfile(); bus.emit('center');
+    UI.toast('Going to ' + ev.name + "'s position; the saved spot comes back after.", 'warn', 6000);
+  },
+  restoreSpot(message) {
+    const c = this.converge;
+    if (!c) return;
+    this.converge = null;
+    Settings.profile.hunt.center = c.prev;
+    Settings.saveProfile(); bus.emit('center');
+    if (message) UI.toast(message, 'info', 5000);
+  },
+  tick() {
+    if (this.converge && now() - this.converge.at > 20 * 60000) this.restoreSpot('Unique hunt timed out; back to the saved hunting spot.');
+  },
+  command(ev) {
+    const action = String(ev.action || '');
+    if (action === 'stop') { stopAll(); UI.toast('Team console: everyone stops.', 'warn', 5000); }
+    else if (action === 'town') {
+      if (Hunt.running && !Town.trip) { try { Town.begin(); } catch (e) { Log.error('Team console town: ' + (e?.message || e)); } }
+    }
+  },
+  resIncoming() { return now() - this.resClaimAt < 45000; },
+  // Warn once a minute when a hunting teammate sits on our spot; picking another spot stays ours.
+  spotCheck() {
+    try {
+      const pose = World.pose(), center = Settings.profile.hunt.center;
+      const me = center && pose ? center : pose;
+      if (!me || now() - this.spotWarnAt < 60000) return;
+      for (const [name, peer] of Team.peers) {
+        const pos = peer.state?.pos;
+        if (!peer.state?.hunting || !pos || !Number.isInteger(pos.regionId)) continue;
+        const d = regionDelta(me, pos);
+        if (d && Math.hypot(...d) < 400) {
+          this.spotWarnAt = now();
+          UI.toast(name + ' is hunting about ' + Math.round(Math.hypot(...d) / 10) + ' m from your spot.', 'warn', 6000);
+          return;
+        }
+      }
+    } catch {}
+  },
+  // ---- unique converge (manual): move the saved spot to a tracked unique's last position ----
+  huntAtUnique(name) {
+    const record = TeamKnowledge.uniques.get(name), pose = World.pose();
+    if (!record?.pos || !Number.isInteger(record.pos.regionId)) { UI.toast('No position is known for ' + name + ' yet.', 'warn'); return false; }
+    this.converge = null; // a manual move cancels any automatic converge so its restore cannot clobber it
+    Settings.profile.hunt.center = { regionId: record.pos.regionId, x: Math.round(record.pos.x), y: Number(pose?.y) || 0, z: Math.round(record.pos.z) };
+    Settings.saveProfile(); bus.emit('center');
+    UI.toast('Hunting spot moved to ' + name + "'s last known position.");
+    return true;
+  },
+};
+// Assist slots into the target line between the engaged target and the chooser.
+Hunt.teamTarget = function (current) { return TeamArbiter.assistTarget(current); };
+// Announce town trips so the room can recall together; the revival trip stays private.
+{
+  const teamTownBegin = Town.begin;
+  Town.begin = function (revival = false) {
+    const out = teamTownBegin.call(this, revival);
+    if (out !== false && !revival && Team.online()) Team.emit({ kind: 'town', who: World.charName });
+    return out;
+  };
+}
+// A resurrection approach tells the dead member to wait for it, up to a minute.
+{
+  const teamResTick = Resurrect.tick;
+  Resurrect.tick = function (...args) {
+    const before = this.trip ? this.trip.name : null;
+    const out = teamResTick.apply(this, args);
+    const name = this.trip && this.trip.phase === 'approach' ? this.trip.name : null;
+    if (name && name !== before && Team.online()) Team.emit({ kind: 'res-claim', target: name });
+    return out;
+  };
+  const teamReviveDelay = Party.reviveDelay;
+  Party.reviveDelay = function () { return TeamArbiter.resIncoming() ? 60000 : teamReviveDelay.call(this); };
+  const teamWaitNote = Party.waitNote;
+  Party.waitNote = function () {
+    if (TeamArbiter.resIncoming()) return 'waiting up to 60 s; ' + TeamArbiter.resClaimBy + ' is coming to resurrect you.';
+    return teamWaitNote.call(this);
+  };
+}
+// Spot claims: check the room's beats once, right after hunting starts.
+{
+  const teamHuntStart = Hunt.start;
+  Hunt.start = function (...args) {
+    const out = teamHuntStart.apply(this, args);
+    if (this.running) TeamArbiter.spotCheck();
+    return out;
+  };
+}
 
 
 // Anti-stuck watchdog. While hunting it watches for confirmed progress (kills, XP, gold,
@@ -8824,7 +9701,7 @@ const Alchemy = {
 };
 
 
-const RELEASE_NOTES = [{"version": "1.2.128", "title": "Town trips no longer stop on an item the merchant won't buy", "items": ["A town trip could stop at the weapon merchant with \"Inventory rejected: 2\". The bot had tried to sell an item the game does not allow merchants to buy (quest and event items, for example), and one refusal ended the whole trip.", "Items the game marks unsellable are now never offered, even with a Sell rule. They stay in the pet or bag.", "If the merchant still refuses an item, the bot keeps it, logs a warning and sells the rest, then carries on with the trip.", "Written from the code and simulated game state; not yet seen on a live server."]}, {"version": "1.2.127", "title": "Bag selling no longer stops on a full bag", "items": ["With **Sell items from the character bag too** on, a town trip with a completely full bag stopped before it ever reached the merchant that sells: at arrival (\"free a character bag slot\"), or at the potion merchant (no room for potions).", "Now, with that switch on, the trip goes to the repair merchant first (sell, ammunition, repair), then the potion merchant, then the world statue. A full bag is emptied before potions are bought. With the switch off, the order is unchanged.", "Written from the code and simulated game state; not yet seen on a live server."]}, {"version": "1.2.126", "title": "Sell from the character bag on town trips", "items": ["New switch in Scroll town cycle: **Sell items from the character bag too**. When on, the town trip sells unprotected items from your own bag at the repair merchant, after the pet loot, by the same rules as pet loot. Off by default.", "Never sold from the bag: potions, scrolls, supplies, Keep names, buff-set gear, the alchemy weapon, and anything with a Store, Keep or Drop rule. A Sell rule always sells.", "Tested in simulation only; not yet confirmed on the live server."]}, {"version": "1.2.125", "title": "Keep reconnecting through a long outage", "items": ["Overnight the bot could end up stopped with the game's \"Disconnected from the server.\" box on screen. Two gaps: that plain box (no \"session ended\" text) only ever repeated the same enter-character attempts, which fail once the server has dropped the login; and the limit of 3 page reloads per 30 minutes was permanent, so a server that was down for hours used up the reloads and the bot never tried again.", "Now, when the resume and three fresh entries have failed, the bot reloads the page just like after \"session ended\": the game restores the login from its own session cookie, the bot enters the character and hunting resumes.", "The reload limit is a pause: once the oldest reload is 30 minutes old, the bot tries again, for up to the 12 hours it keeps reconnecting."], "note": "Written from the code and simulated game state; not yet seen on a live server."}, {"version": "1.2.124", "title": "After a disconnect in town, do the town services and reverse", "items": ["After reconnecting, the bot walked from town to the hunting spot in short legs. From town that route often does not exist (\"no walkable route to the hunting spot\"), so it gave up and the character stayed in town.", "Now, when the character is back in a town far from the hunting spot and the town cycle's \"Revive in town and reverse to last scroll point\" is on, the bot runs the same trip as after a death: town services (potions, repairs, storage), then the reverse scroll to the last scroll point, then hunting. This covers a disconnect in town, while loading town, or a death while disconnected.", "Without that setting, or when the character is not in a known town, it still walks back as before."], "note": "Written from the code and simulated game state; not yet seen on a live server."}, {"version": "1.2.123", "title": "Alt accounts keep applying to the main's party", "items": ["With two alt accounts joining the same main, one could get in while the other sat on \"Waiting for the party board…\" forever. The main answers one application at a time, so the second application could be dropped, and the alt never tried again.", "An application that has not been answered after 30 seconds is now sent again, for as long as the alt is outside the main's party. The check already ran on every tick; only this wait was open-ended."], "note": "Found by reading the code with two alts in mind; not yet confirmed on a live server. If an alt still fails to join, its status line under Party says why."}, {"version": "1.2.122", "title": "Revive and return after dying while disconnected", "items": ["If the character was killed while the connection was gone (mobs kept hitting it), the bot came back, saw a dead character and gave up: \"hunting was not resumed\". It never revived or walked back to the hunting spot.", "Now, when hunting was running and the character comes back dead, the bot starts hunting again so the normal death handling takes over: it revives (with \"Revive at return point and continue\" or the town auto-revive on) and walks back to the hunting spot. With \"On death\" set to \"Stop hunting\", it stops after the death, as it always does."]}, {"version": "1.2.121", "title": "Recover from \"Your session ended while the connection was gone\"", "items": ["When the connection is gone for more than about 30 seconds the server ends the game session, and the game shows \"Your session ended while the connection was gone. Please log in again.\" The bot used to keep trying to resume that session, which can no longer work, and the window stayed on screen.", "The bot now skips the resume and enters the character again straight away. If that has not brought the character back after 30 seconds, it reloads the page: the game restores your login from its own session cookie, the bot enters the character and hunting resumes, as after a failed load (1.2.120). It shares that reload limit of 3 per 30 minutes.", "The window's Confirm button is never pressed, because it logs you out. If the login really is gone, the status line says so and the bot waits for you."], "note": "Written from the game's own code and simulated game state; not yet seen on a live server."}];
+const RELEASE_NOTES = [{"version": "1.4.3", "title": "Relay hosting: the administrator's choice; auto stall", "items": ["The relay can now run in three places with the same protocol: Cloudflare Workers (new edition under relay/cloudflare: Durable Objects, WebSocket hibernation, storage that survives restarts, zero administration), fly.io (the Node relay as-is with a Dockerfile), or your own VPS (systemd unit included).", "The bot now sends the room key in the WebSocket URL (?key=…) for hosts that route by it; the Node relay ignores it, so all three hosts work with one address format.", "relay/smoke-test.cjs can verify a live deployment: WS_URL=wss://your-relay/ws node smoke-test.cjs.", "Auto stall: price items on a new page, stand in town, and the character opens its own street stall, offers them, and runs it; a sale is confirmed by the offer disappearing and gold rising, never by a dispatch. Hunting refuses to start while a stall session runs."], "note": "Both parts are tested in simulation (464 tests). The Workers edition follows the documented Durable Objects patterns but has only been syntax-checked and reviewed, not deployed — run its smoke test after wrangler deploy. Neither has run with real characters."}, {"version": "1.4.2", "title": "Coherence fixes for the team layer", "items": ["A unique's death reported by a teammate is recorded quietly; it used to be re-announced, which echoed between clients forever.", "A teammate's store write no longer cancels the sync this client still owes the room (a pending local sighting could be lost until the next change).", "Moving the hunting spot from the tracker cancels any automatic unique converge, so its later restore cannot overwrite the manual spot.", "Shared live intel is cleared when the character changes; the \"Hunt here\" button still works the same."], "note": "Found by re-reading the code with two clients in mind; tested in simulation, not yet with real characters."}, {"version": "1.4.1", "title": "Team edition rounded out", "items": ["Optional unique converge: when a unique appears and its position is known, a hunting character moves its hunting spot there (toasts say so); the saved spot comes back when the unique dies or after 20 minutes. Off by default.", "The public pool grows a memory: with public sharing on, the unique tracker also reads and writes the relay's public store, so every room keeps the spawn history.", "Bug reports now include a team summary line (shared entities, combat edges, tracked uniques, known players).", "The repository README describes this fork's team edition."], "note": "Still simulation-tested only; no live run with real characters yet."}, {"version": "1.4.0", "title": "Team edition complete (phases 2-6)", "items": ["Live shared world: each character publishes the interesting monsters it sees (champion and up, party mobs, uniques with an HP estimate), the other players in view, and who attacks what (observed from every cast around); the map draws it all as a dimmed team layer, own view always winning.", "Unique tracker: the game's own server-wide announcements plus shared sightings build a history per unique with respawn windows (the timer restarts at death; 3-6 h per unique), toasts, a sound, map pins, and a Hunt here button that moves your hunting spot to the last known position.", "Player knowledge: every player the team sees is remembered with position and level; a player attacking a teammate outside a party is marked hostile (red on the map, flagged in the panel).", "Team drops: the room shares pickup counters.", "Team decisions: assist (fight what a teammate or party member fights), spot claims (a warning when two characters start hunting on top of each other), synchronized town trips (optional; a teammate's town trip starts yours), and resurrection claims (the dead member waits up to 60 s for the peer walking over instead of reviving itself).", "The room key holders always see everything; an optional public pool (per-relay, per-category checkboxes) shares monsters, players and unique events with every room on your relay — never your own position or inventory.", "The reference relay grows a room key-value store (the team's shared memory, persisted across restarts) and a console page (/?key=room key) showing the fleet with Stop everyone and Town trip buttons."], "note": "All of it is tested in simulation and against a local relay only; a live check with real characters is still to do."}, {"version": "1.3.0", "title": "Team relay (phase 1: presence)", "items": ["New Team page: connect several characters through your own WebSocket relay; while it runs, each character sees the others' presence (name, hunting, alive, level) in the panel.", "A reference relay server (rooms by room key, presence forwarding, no game logic) is included under relay/ in the repository.", "Presence is private to one room key; nothing is shared beyond it. The bot never depends on the relay: off or unreachable, everything else works exactly as before."], "note": "Presence, heartbeats and reconnection are tested in simulation only; a live relay check is still to do."}, {"version": "1.2.128", "title": "Town trips no longer stop on an item the merchant won't buy", "items": ["A town trip could stop at the weapon merchant with \"Inventory rejected: 2\". The bot had tried to sell an item the game does not allow merchants to buy (quest and event items, for example), and one refusal ended the whole trip.", "Items the game marks unsellable are now never offered, even with a Sell rule. They stay in the pet or bag.", "If the merchant still refuses an item, the bot keeps it, logs a warning and sells the rest, then carries on with the trip.", "Written from the code and simulated game state; not yet seen on a live server."]}, {"version": "1.2.127", "title": "Bag selling no longer stops on a full bag", "items": ["With **Sell items from the character bag too** on, a town trip with a completely full bag stopped before it ever reached the merchant that sells: at arrival (\"free a character bag slot\"), or at the potion merchant (no room for potions).", "Now, with that switch on, the trip goes to the repair merchant first (sell, ammunition, repair), then the potion merchant, then the world statue. A full bag is emptied before potions are bought. With the switch off, the order is unchanged.", "Written from the code and simulated game state; not yet seen on a live server."]}, {"version": "1.2.126", "title": "Sell from the character bag on town trips", "items": ["New switch in Scroll town cycle: **Sell items from the character bag too**. When on, the town trip sells unprotected items from your own bag at the repair merchant, after the pet loot, by the same rules as pet loot. Off by default.", "Never sold from the bag: potions, scrolls, supplies, Keep names, buff-set gear, the alchemy weapon, and anything with a Store, Keep or Drop rule. A Sell rule always sells.", "Tested in simulation only; not yet confirmed on the live server."]}];
 
 // Check trusted repository metadata; never execute downloaded update code.
 const Updates = {
@@ -9087,7 +9964,8 @@ const Diagnostics = {
   snapshot() {
     const gp = World.gp, c = Settings.profile, pet = Loot.pet(), social = gp?.social, matching = gp?.partyMatching;
     return {
-      action: this.main(), partyStatus: this.party(), petStatus: this.pet(), townStatus: this.town(), townDetail: this.townDetail(), townReason: this.townReason(),
+      action: this.main(), partyStatus: this.party(), teamStatus: Settings.profile.team?.enabled ? Team.status() : '',
+      teamDetail: Settings.profile.team?.enabled ? TeamIntel.rows().length + ' shared entities, ' + TeamIntel.edges.size + ' combat edges, ' + TeamKnowledge.uniques.size + ' tracked uniques, ' + TeamKnowledge.players.size + ' known players' : '', petStatus: this.pet(), townStatus: this.town(), townDetail: this.townDetail(), townReason: this.townReason(),
       navigationReady: !!Navigation.scene, navigationError: String(Navigation.error || '').slice(0, 80),
       buffGearStatus: BuffGear.cfg().buffSwap ? String(BuffGear.status()).slice(0, 600) : '', buffGearActive: !!BuffGear.run, buffGearRestoring: !!BuffGear.run?.restoring, buffGearMovePending: !!BuffGear.run?.pending, buffGearRecovery: !!BuffGear.recovery,
       alchemyActive: !!Alchemy.run, alchemyPending: !!Alchemy.pending, alchemyAttempts: this.number(Alchemy.result?.attempts),
@@ -9645,6 +10523,41 @@ const LeanMap = {
       if (!s) continue;
       put('party', clamp(sx(s.X), 6, w - 6), clamp(sy(s.Z), 6, h - 6), 9, '#5aff7a');
     }
+    // Team intel: entities the room's other characters see, dimmer and without signs; own view wins.
+    if (Settings.profile.team?.enabled && typeof TeamIntel !== 'undefined') {
+      ctx.save(); ctx.globalAlpha = 0.55;
+      for (const row of TeamIntel.rows()) {
+        if (World.ents.has(row.gid)) continue;
+        const s = this.space({ regionId: row.regionId, x: row.x, z: row.z });
+        if (!s) continue;
+        const x = sx(s.X), y = sy(s.Z);
+        if (x < -10 || y < -10 || x > w + 10 || y > h + 10) continue;
+        if (row.kind === 'player') {
+          const hostile = typeof TeamKnowledge !== 'undefined' && TeamKnowledge.players.get(row.name)?.hostile;
+          ctx.fillStyle = hostile ? MAP_CLASS_COLOR.unique : '#5ab4ff';
+          ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.stroke();
+          if (upp <= 4 && row.name) this.label(ctx, row.name + ' (' + row.src + ')', x + 7, y - 4, hostile ? '#ffb0b0' : '#cfe8ff');
+        } else {
+          ctx.fillStyle = MAP_CLASS_COLOR[row.cls] || MAP_CLASS_COLOR.normal;
+          ctx.beginPath(); ctx.arc(x, y, row.unique ? 5 : 4, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.stroke();
+          if (row.unique && row.name) this.label(ctx, row.name + ' (' + row.src + ')', x + 8, y - 4, '#ffb0b0');
+        }
+      }
+      ctx.restore();
+      // Unique tracker pins: the last known place of every unique the room has tracked.
+      if (typeof TeamKnowledge !== 'undefined') {
+        for (const record of TeamKnowledge.uniques.values()) {
+          if (!record?.pos || !Number.isInteger(record.pos.regionId)) continue;
+          const s = this.space(record.pos);
+          if (!s) continue;
+          const x = sx(s.X), y = sy(s.Z);
+          ctx.strokeStyle = '#ff5a5a'; ctx.lineWidth = 2; ctx.setLineDash([4, 3]);
+          ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2); ctx.stroke();
+          ctx.setLineDash([]);
+          this.label(ctx, record.name, x + 11, y + 3, '#ffb0b0');
+        }
+      }
+    }
     // A marked point (click), then you on top. Heading 0 = east, counter-clockwise; the sign points east.
     if (this.picked) {
       const s = this.space(this.picked), x = sx(s.X), y = sy(s.Z);
@@ -9910,7 +10823,7 @@ const UI = {
     // Busy comes from the live trips, not from Controller.mode: that label lags a tick behind (it still says
     // "returning" for up to 100 ms after Stop all ended a walk-back).
     const busy = Town.trip ? 'Town trip' : WalkBack.active ? 'Returning' : Reconnect.active() ? 'Reconnecting' : Restock.trip ? 'Shopping'
-      : Resurrect.trip ? 'Resurrecting' : BuffGear.run ? 'Buff gear' : Alchemy.run || Alchemy.pending ? 'Alchemy' : '';
+      : Resurrect.trip ? 'Resurrecting' : BuffGear.run ? 'Buff gear' : Alchemy.run || Alchemy.pending ? 'Alchemy' : Stall.run ? 'Stall' : '';
     const label = dead ? 'Dead' : error ? 'Error' : busy || (Hunt.running ? 'Hunting' : 'Stopped');
     // `note` is what only the state can say; the icon falls back to the first wait reason, which the wide window shows below the strip.
     const note = Town.trip ? Town.status() : WalkBack.active ? WalkBack.status() : Reconnect.active() && Reconnect.message ? Reconnect.message
@@ -10213,8 +11126,12 @@ const UI = {
       this.sections('townTrip', 'townWhen', 'townCycle', 'townAmmo');
     } else if (this.current === 'Party') {
       this.sections('partyMembers', 'partyHeal', 'partyBuffs', 'partyParty', 'partyTrace');
+    } else if (this.current === 'Team') {
+      this.sections('teamRelay', 'teamWorld');
     } else if (this.current === 'Items') {
       this.drawItems();
+    } else if (this.current === 'Stall') {
+      Stall.draw();
     } else if (this.current === 'Setup') {
       Setup.draw(this.pane);
     } else if (this.current === 'Map') {
@@ -10232,7 +11149,7 @@ const UI = {
   },
   // ---- Classic layout: an SBot-style frame and tab order (opt-in, screens at least 900 px wide) ----
   // Each tab is a list of the page sections above (title = the heading it gets here); a tab only exists when we have
-  // the feature, so there is no Chat, Union Party, Quest, Stall or Alarms tab yet.
+  // the feature, so there is no Chat, Union Party, Quest or Alarms tab yet.
   classicTabs() {
     return [
       { name: 'Settings', icon: 'action\\icon_cha_helper', pages: ['Supplies', 'Loot', 'Town', 'Combat', 'Settings'], sections: [
@@ -10243,10 +11160,12 @@ const UI = {
         ['combatRotation'], ['combatOptions'], ['combatBuffs'], ['combatImbue']] },
       { name: 'Items/Storage', icon: 'action\\cos_cmd_inventory', pages: ['Items', 'Town'], draw() {
         this.drawItems(); this.sections('townTrip', 'townCycle', 'townAmmo'); } },
+      { name: 'Stall', pages: ['Stall'], draw() { Stall.draw(); } },
       { name: 'Training place', icon: 'action\\icon_cha_camp', pages: ['Combat', 'Party'], sections: [['combatHuntArea', 'Training place'], ['partyTrace']] },
       { name: 'Party/Autores', icon: 'action\\icon_cha_party', pages: ['Party'], sections: [
         ['partyMembers', 'Current party'], ['partyParty', 'Party settings'], ['partyHeal']] },
       { name: 'Player buffing', icon: 'action\\icon_cha_party', pages: ['Party'], sections: [['partyBuffs', 'Player buffing']] },
+      { name: 'Team', icon: 'action\\icon_cha_party', pages: ['Team'], sections: [['teamRelay', 'Team relay']] },
       { name: 'Auto alchemy', icon: 'action\\icon_cha_alchemy', pages: ['Alchemy'], draw() { Alchemy.draw(); } },
       { name: 'Extra', icon: 'action\\icon_cha_helper', pages: ['Settings'], sections: [
         ['settingsStats'], ['settingsMastery'], ['settingsStatPoints'], ['settingsProfiles'], ['settingsShare'], ['settingsReports'], ['settingsActivity']] },
@@ -10293,7 +11212,7 @@ const UI = {
     const icons = { Items: 'action\\cos_cmd_inventory', Party: 'action\\icon_cha_party', Combat: 'action\\icon_cha_auto_attack', Loot: 'action\\icon_cha_autoget', Supplies: 'action\\icon_cha_recovery', Town: 'item\\etc\\mall_return_scroll',
       Alchemy: 'action\\icon_cha_alchemy', Wardrobe: 'action\\icon_cha_shop', Settings: 'action\\icon_cha_helper', Setup: 'action\\icon_cha_camp' };
     const entries = this.classic ? this.classicTabs().map(t => ({ name: t.name, icon: t.icon, open: () => { this.ctab = t.name; this.draw(); } }))
-      : ['Setup', 'Map', 'Combat', 'Party', 'Loot', 'Items', 'Supplies', 'Town', 'Alchemy', 'Wardrobe', 'Settings'].map(name => ({ name, icon: icons[name], open: () => { this.current = name; this.draw(); } }));
+      : ['Setup', 'Map', 'Combat', 'Party', 'Team', 'Loot', 'Items', 'Supplies', 'Town', 'Stall', 'Alchemy', 'Wardrobe', 'Settings'].map(name => ({ name, icon: icons[name], open: () => { this.current = name; this.draw(); } }));
     // Page icons are the game's own action-bar icons; they show only in the wide and classic windows' page lists.
     for (const entry of entries) {
       const tab = this.button(entry.name, entry.open);
@@ -10658,6 +11577,43 @@ const UI = {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
       Trace.draw(host);
   },
+  section_teamRelay(host) {
+    const team = () => Settings.profile.team;
+    this.teamNote = el('p', '', 'muted');
+    this.teamPeers = el('div');
+    host.append(this.group('Team relay',
+      this.check('Connect to a team relay', () => team().enabled, v => { team().enabled = v; Team.reset(); this.draw(); }),
+      this.text('Relay address (wss://…)', () => team().url, v => { team().url = v; Team.tick(); }),
+      this.text('Room key', () => team().token, v => { team().token = v; Team.tick(); }),
+      this.select('This character\'s role', [['none', 'No role'], ['tank', 'Tank'], ['healer', 'Healer'], ['support', 'Support'], ['dps', 'Damage'], ['scout', 'Scout']], () => team().role, v => team().role = v),
+      this.check('Assist: fight what a teammate fights', () => team().assist, v => team().assist = v),
+      this.check('Recall to town together', () => team().townSync, v => team().townSync = v),
+      this.check('Go to a unique that appears (the saved spot comes back)', () => team().converge, v => team().converge = v),
+      this.teamNote,
+      el('p', 'A private channel between your own characters over a WebSocket relay you control. Characters that enter the same room key see each other\'s presence here; nothing is sent to anyone else, and the bot never depends on it: with the relay off or unreachable everything else works exactly as before. The address must start with wss://. Assist joins the fight a teammate (or party member) is already in; town sync starts your town trip when a teammate starts theirs. The room\'s console page on the relay can stop everyone or call a group town trip.', 'muted')));
+    const share = this.group('Sharing');
+    share.append(this.check('Also share with every room on this relay', () => team().share.public, v => team().share.public = v),
+      this.check('Shared: interesting monsters (champion and up)', () => team().share.monsters, v => team().share.monsters = v),
+      this.check('Shared: other players seen', () => team().share.players, v => team().share.players = v),
+      this.check('Shared: unique appearances', () => team().share.uniques, v => team().share.uniques = v),
+      el('p', 'The room key holders always see everything above. The public pool (every room on your relay) only ever receives what these boxes allow, and never your own position, build or inventory. Unique announcements from the game\'s server are shared as events; your own sightings carry positions.', 'muted'));
+    host.append(share);
+    const peers = this.group('Connected characters');
+    peers.append(this.teamPeers, el('p', 'Each character announces itself every 5 seconds and is dropped from this list after 15 seconds of silence.', 'muted'));
+    host.append(peers);
+  },
+  section_teamWorld(host) {
+    this.teamUniques = el('div');
+    this.teamPlayers = el('div');
+    this.teamDrops = el('div');
+    const uniques = this.group('Unique tracker');
+    uniques.append(this.teamUniques, el('p', 'Built from the game\'s own server-wide announcements, shared sightings and kills. The respawn timer restarts at death (3-6 h depending on the unique). Hunt here moves your saved hunting spot to the last known position.', 'muted'));
+    const players = this.group('Players seen by the team');
+    players.append(this.teamPlayers, el('p', 'Every player the team sees, newest first. A player who attacks a teammate outside a party is marked hostile.', 'muted'));
+    const drops = this.group('Team drops');
+    drops.append(this.teamDrops);
+    host.append(uniques, players, drops);
+  },
   section_settingsStats(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
       Stats.draw(host);
@@ -10857,7 +11813,7 @@ const UI = {
   },
   update() {
     Stats.sample(); Stats.render();
-    Alchemy.refresh(); Setup.refresh();
+    Alchemy.refresh(); Setup.refresh(); Stall.refresh();
     if (this.is('Combat', 'Buffs & imbue') && BuffGear.note) BuffGear.note.textContent = BuffGear.status();
     Reports.render();
     const diagnosticState = Diagnostics.sample();
@@ -10874,6 +11830,28 @@ const UI = {
       if (Settings.profile.party.joinMain && Party.joinMessage) notes.push(Party.joinMessage);
       if (Settings.profile.party.autoRes) notes.push(Resurrect.message);
       this.partyNote.textContent = notes.join(' ');
+    }
+    if (this.is('Team') && this.teamNote) {
+      this.teamNote.textContent = Team.status();
+      const rows = Team.peerRows();
+      this.teamPeers.replaceChildren(...(rows.length ? rows.map(text => el('div', text)) : [el('div', 'No other character in the room yet.', 'muted')]));
+      if (this.teamUniques) {
+        const uniqueRows = TeamKnowledge.uniqueRows();
+        this.teamUniques.replaceChildren(...(uniqueRows.length ? uniqueRows.map((text, i) => {
+          const name = [...TeamKnowledge.uniques.values()].sort((a, b) => (b.at || 0) - (a.at || 0))[i]?.name;
+          const row = el('div', text);
+          if (name) row.append(this.button('Hunt here', () => TeamArbiter.huntAtUnique(name)));
+          return row;
+        }) : [el('div', 'No unique recorded yet; they appear when the server announces one or someone sees one.', 'muted')]));
+      }
+      if (this.teamPlayers) {
+        const playerRows = TeamKnowledge.playerRows();
+        this.teamPlayers.replaceChildren(...(playerRows.length ? playerRows.map(text => el('div', text)) : [el('div', 'No other player seen yet.', 'muted')]));
+      }
+      if (this.teamDrops) {
+        const dropRows = TeamKnowledge.dropRows();
+        this.teamDrops.replaceChildren(...(dropRows.length ? dropRows.map(text => el('div', text)) : [el('div', 'Nothing picked up yet.', 'muted')]));
+      }
     }
     if (!this.status) return;
     if (this.is('Supplies') && this.petPotionNote) this.petPotionNote.textContent = PetPotion.message;
@@ -11077,7 +12055,7 @@ observed evidence; an operation ID never implies a server transaction ID.
 ===========================================================================
 */
 const ACTIVITY_LIMIT = { normal: 400, commands: 1000, text: 1000, repeatMs: 1000, captureMs: 600000 };
-const ACTIVITY_CATEGORIES = [ "session", "combat", "movement", "town", "potion", "loot", "party", "buff", "alchemy", "reconnect", "settings", "engine", "assets" ];
+const ACTIVITY_CATEGORIES = [ "session", "combat", "movement", "town", "stall", "potion", "loot", "party", "buff", "alchemy", "reconnect", "settings", "engine", "assets" ];
 const ACTIVITY_DETAIL_KEYS = [ "durationMs", "distance", "attempt", "quantity", "hpPct", "mpPct", "delayMs", "choice", "errorCode", "goldChange", "kills", "deaths", "potions", "items", "revision", "visited", "progressAgeMs", "monsterId", "skillId", "attackingPlayer", "leg", "legs" ];
 const Activity = {
 	commands: [], revision: 0, sequence: 0, session: 0, operation: 0, captureUntil: 0,
@@ -11706,7 +12684,7 @@ UI.showActivityExport = function() {
 
 
 function toggleBot() {
-  if (Alchemy.run || Alchemy.pending || Hunt.running || Town.trip || WalkBack.active || Restock.trip || Resurrect.trip || Controller.resumeAfterRevive) stopAll();
+  if (Alchemy.run || Alchemy.pending || Stall.run || Hunt.running || Town.trip || WalkBack.active || Restock.trip || Resurrect.trip || Controller.resumeAfterRevive) stopAll();
   else if (Restock.recording) UI.toast('Finish or cancel route recording before starting the bot.', 'warn');
   else Hunt.start();
 }
@@ -11737,12 +12715,12 @@ function boot() {
   }, true);
   // Scrolling the panel must not also zoom or move the game camera underneath it.
   W.addEventListener('wheel', e => { if (e.composedPath().includes(UI.root?.host)) e.stopImmediatePropagation(); }, { capture: true, passive: true });
-  Combat.init(); Loot.init(); Alchemy.init(); BuffGear.init();
+  Combat.init(); Loot.init(); Alchemy.init(); BuffGear.init(); Stall.init();
   bus.on('character', name => {
     const key = name ? 'profile:' + name : 'profile:default';
     if (key !== Settings.profileKey) { Town.lastScrollPoint = null; Town.deathPoint = null; stopAll(); Settings.useCharacter(name); }
   });
-  bus.on('profile', () => { PetPotion.reset(); AutoMastery.reset(); StatPoints.reset(); Trace.reset(); BuffGear.reset(); Town.lastScrollPoint = null; Town.deathPoint = null; SpeedScroll.reset(); Party.reset(); Resurrect.reset(); stopAll(); Restock.cancelRecording(); Loot.reset(); Wardrobe.applyNow(); UI.draw(); });
+  bus.on('profile', () => { PetPotion.reset(); AutoMastery.reset(); StatPoints.reset(); Trace.reset(); BuffGear.reset(); Team.reset(); TeamIntel.reset(); Town.lastScrollPoint = null; Town.deathPoint = null; SpeedScroll.reset(); Party.reset(); Resurrect.reset(); stopAll(); Restock.cancelRecording(); Loot.reset(); Wardrobe.applyNow(); UI.draw(); });
   bus.on('phase', phase => {
     if (phase !== 'world') {
       BuffGear.interrupt('World transition interrupted buff swaps.');
@@ -11780,7 +12758,7 @@ function boot() {
   }, true);
   Ticker.start(() => Controller.tick(), 100);
   setInterval(() => { Wardrobe.tick(); UI.update(); }, 500);
-  W.SROLean = { version: VERSION, stats: Stats, updates: Updates, diagnostics: Diagnostics, reports: Reports, alchemy: Alchemy, buffGear: BuffGear, world: World, settings: Settings, hunt: Hunt, loot: Loot, speedScroll: SpeedScroll, resurrect: Resurrect,
+  W.SROLean = { version: VERSION, stats: Stats, updates: Updates, diagnostics: Diagnostics, reports: Reports, alchemy: Alchemy, buffGear: BuffGear, stall: Stall, world: World, settings: Settings, hunt: Hunt, loot: Loot, speedScroll: SpeedScroll, resurrect: Resurrect, team: Team, teamIntel: TeamIntel, teamKnowledge: TeamKnowledge, teamArbiter: TeamArbiter,
     restock: Restock, town: Town, walkBack: WalkBack, antiStuck: AntiStuck, chase: Chase, trap: Trap, autoMastery: AutoMastery, statPoints: StatPoints, share: ProfileShare, trace: Trace, setup: Setup, reconnect: Reconnect, petPotion: PetPotion, navigation: Navigation, route: Route, wardrobe: Wardrobe, wardrobeData: WdData, learned: Learned, controller: Controller, ui: UI, activity: Activity, map: LeanMap, support: Support, items: ItemRules, stop: stopAll, log: Log };
   Log.info('NIX ready. F8 starts/stops; F7 folds; the × minimises; Shift+F7 hides/shows the window.');
 }

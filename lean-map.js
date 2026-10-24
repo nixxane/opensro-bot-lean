@@ -251,6 +251,41 @@ const LeanMap = {
       if (!s) continue;
       put('party', clamp(sx(s.X), 6, w - 6), clamp(sy(s.Z), 6, h - 6), 9, '#5aff7a');
     }
+    // Team intel: entities the room's other characters see, dimmer and without signs; own view wins.
+    if (Settings.profile.team?.enabled && typeof TeamIntel !== 'undefined') {
+      ctx.save(); ctx.globalAlpha = 0.55;
+      for (const row of TeamIntel.rows()) {
+        if (World.ents.has(row.gid)) continue;
+        const s = this.space({ regionId: row.regionId, x: row.x, z: row.z });
+        if (!s) continue;
+        const x = sx(s.X), y = sy(s.Z);
+        if (x < -10 || y < -10 || x > w + 10 || y > h + 10) continue;
+        if (row.kind === 'player') {
+          const hostile = typeof TeamKnowledge !== 'undefined' && TeamKnowledge.players.get(row.name)?.hostile;
+          ctx.fillStyle = hostile ? MAP_CLASS_COLOR.unique : '#5ab4ff';
+          ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.stroke();
+          if (upp <= 4 && row.name) this.label(ctx, row.name + ' (' + row.src + ')', x + 7, y - 4, hostile ? '#ffb0b0' : '#cfe8ff');
+        } else {
+          ctx.fillStyle = MAP_CLASS_COLOR[row.cls] || MAP_CLASS_COLOR.normal;
+          ctx.beginPath(); ctx.arc(x, y, row.unique ? 5 : 4, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.stroke();
+          if (row.unique && row.name) this.label(ctx, row.name + ' (' + row.src + ')', x + 8, y - 4, '#ffb0b0');
+        }
+      }
+      ctx.restore();
+      // Unique tracker pins: the last known place of every unique the room has tracked.
+      if (typeof TeamKnowledge !== 'undefined') {
+        for (const record of TeamKnowledge.uniques.values()) {
+          if (!record?.pos || !Number.isInteger(record.pos.regionId)) continue;
+          const s = this.space(record.pos);
+          if (!s) continue;
+          const x = sx(s.X), y = sy(s.Z);
+          ctx.strokeStyle = '#ff5a5a'; ctx.lineWidth = 2; ctx.setLineDash([4, 3]);
+          ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2); ctx.stroke();
+          ctx.setLineDash([]);
+          this.label(ctx, record.name, x + 11, y + 3, '#ffb0b0');
+        }
+      }
+    }
     // A marked point (click), then you on top. Heading 0 = east, counter-clockwise; the sign points east.
     if (this.picked) {
       const s = this.space(this.picked), x = sx(s.X), y = sy(s.Z);

@@ -1,0 +1,11 @@
+name = "opensro-team-relay"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+# One Durable Object holds every room; SQLite-backed classes are the free-tier kind.
+[[durable_objects.bindings]]
+name = "RELAY"
+class_name = "Relay"
+
+[[migrations]]
+new_sqlite_classes = ["Relay"]
