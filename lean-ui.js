@@ -754,7 +754,7 @@ const UI = {
       options.append(this.select('Default collector', [['character', 'Character'], ['pet', 'Pickup pet']], () => L().collector, v => { L().collector = v; Loot.reset(); }));
       options.append(this.check('Chime when pet bag is full', () => L().petFullSound, v => { L().petFullSound = v; Loot.fullAlert = null; }), this.button('Test pet chime', () => Sound.test()),
         this.check('Chime and notice when a SoX item is picked up', () => L().soxSound, v => L().soxSound = v), this.button('Test SoX chime', () => Sound.test('sox')));
-      this.petNote = el('p', '', 'muted'); options.append(this.petNote);
+      this.petNote = el('p', '', 'muted pet-note'); options.append(this.petNote);
       options.append(this.row(...[['Elixirs only','elixirs'],['Elixirs + gold','elixirs-gold'],['All items','all']].map(([label,mode]) => this.button(label, () => { Loot.preset(mode); this.draw(); }))));
       for (const [key, label] of [['enabled', 'Collect drops'], ['soxOnly', 'Equipment: only SoX (Star / Moon / Sun)'], ['afterKillOnly', 'Character: finish the current fight before picking up']]) options.append(this.check(label, () => L()[key], v => L()[key] = v));
       options.append(this.number('Pickup radius (m)', () => L().radius / 10, v => L().radius = v * 10, 3, 100),
@@ -1210,7 +1210,7 @@ const UI = {
     if (!this.status) return;
     if (this.is('Supplies') && this.petPotionNote) this.petPotionNote.textContent = PetPotion.message;
     if (this.is('Supplies') && this.speedNote) this.speedNote.textContent = SpeedScroll.message;
-    if (this.is('Loot') && this.petNote) { this.petNote.hidden = !Loot.petMode(); this.petNote.textContent = Loot.petStatus(); }
+    if (this.is('Loot') && this.petNote) { this.petNote.style.visibility = Loot.petMode() ? '' : 'hidden'; this.petNote.textContent = Loot.petStatus(); this.petNote.title = this.petNote.textContent; }
     Learned.repair();
     if (this.is('Combat') && this.lastSkillKey !== this.skillKey()) { this.draw(); return; }
     const me = World.me(), center = Settings.profile.hunt.center;
