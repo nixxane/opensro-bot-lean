@@ -2901,6 +2901,17 @@ test('town cycle is opt-in, hunting-only and overrides walking restock without r
   f.Town.tick(); f.advance(600); f.Town.tick(); f.advance(100); f.Town.tick();
   assert.equal(f.Town.trip.phase, 'recall-wait');
 });
+test('town trip started while already in town never uses a return scroll', () => {
+  const f = townFixture(); f.Hunt.start();
+  f.Town.detect = () => ({ key: 'town' });
+  f.Town.begin();
+  assert.ok(f.Town.trip, 'the trip starts');
+  assert.ok(f.Town.trip.phase.startsWith('walk-'), 'goes straight to the services');
+  assert.equal(f.commands.some(c => c.kind === 'item-use'), false);
+  f.Town.cancel();
+  f.World.gp.inventory = f.World.gp.inventory.filter(i => i.typeFlags !== 0x09ec);
+  f.Town.begin(); assert.ok(f.Town.trip, 'no return scroll needed in town');
+});
 test('pet storage protects supplies, keep names and items with missing metadata', () => {
   const f = townFixture(); f.Town.cfg().store.others = true;
   for (const item of [...f.World.items(), f.pet.inventory[2], f.pet.inventory[3], { name: 'Unknown', refObjId: 123 }]) assert.equal(f.Town.eligible(item), false);

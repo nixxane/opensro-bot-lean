@@ -317,12 +317,14 @@ const Town = {
     if (key !== this.xpKey) { this.xpKey = key; this.lastXpAt = now(); }
   },
   restartClocks() { this.lastXpAt = this.cycleFrom = now(); },
+  // Already standing in a known town (all four services in range): no return scroll is needed or wanted.
+  inTown(revival = false) { return !revival && !!World.pose() && !!this.detect(World.pose()); },
   validate(revival = false) {
     const c = this.cfg(), supplies = this.supplies();
     const missing = [['arrival', 'arrival point'], ['vendor', 'potion merchant'], ['smith', 'repair merchant'], ['gate', 'world statue / teleport'], ...(c.petFull ? [['storage', 'warehouse']] : [])].filter(([key]) => !c[key]).map(([, label]) => label);
     if (missing.length) return 'Save missing town services: ' + missing.join(', ') + '.';
     if (!supplies.length || supplies.some(s => !s.refObjId || !Number.isInteger(s.low) || !Number.isInteger(s.target) || s.low < 0 || s.target <= s.low || s.target > 10000)) return 'Choose potions and valid low-stock/refill quantities.';
-    if ((!revival && !this.scroll(0x09ec)) || !this.scroll(0x19ec)) return revival ? 'Carry a reverse return scroll for revival return.' : 'Carry a return scroll and a reverse return scroll before hunting.';
+    if ((!revival && !this.inTown() && !this.scroll(0x09ec)) || !this.scroll(0x19ec)) return revival ? 'Carry a reverse return scroll for revival return.' : 'Carry a return scroll and a reverse return scroll before hunting.';
     if (toBigInt(World.gp.progression?.gold ?? 0) <= 0n) return 'Carry gold for potions, storage and repairs.';
     return '';
   },
@@ -372,6 +374,8 @@ const Town = {
     this.trip.haltSent = Cmd.move(World.pose());
     this.trip.haltAt = now();
     this.trip.haltAttempts = this.trip.haltSent ? 1 : 0;
+    // Started in town: skip the return scroll and go straight to the services.
+    if (this.inTown(revival)) { this.arrived(); return; }
     if (revival) this.enter('revive-arrival');
     else this.message = 'Using return scroll; recall must be bound to your town.';
   },
