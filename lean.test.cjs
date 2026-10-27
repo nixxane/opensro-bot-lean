@@ -2912,6 +2912,19 @@ test('town trip started while already in town never uses a return scroll', () =>
   f.World.gp.inventory = f.World.gp.inventory.filter(i => i.typeFlags !== 0x09ec);
   f.Town.begin(); assert.ok(f.Town.trip, 'no return scroll needed in town');
 });
+test('town trip started in town returns to the hunt, not the town', () => {
+  const f = townFixture(); f.Hunt.start(); f.Town.detect = () => ({ key: 'town' });
+  const hunt = { ...f.Hunt.cfg().center }; f.Town.lastScrollPoint = null;
+  f.Town.begin();
+  assert.deepEqual({ x: f.Town.trip.origin.x, y: f.Town.trip.origin.y }, { x: hunt.x, y: hunt.y }, 'return target is the hunt point');
+  assert.equal(f.Town.trip.inTown, true);
+  f.Town.enter('reverse-wait'); f.Town.phase('entering-world'); f.World.gp.pose = { ...f.World.gp.pose, x: hunt.x, y: hunt.y };
+  f.Town.tick(); assert.equal(f.Town.trip, null, f.Town.message);
+  const g = townFixture(); g.Hunt.start(); g.Town.detect = () => ({ key: 'town' }); g.Town.lastScrollPoint = { ...g.World.pose(), x: 1500 };
+  g.Town.begin(); assert.equal(g.Town.trip.origin.x, 1500, 'uses the remembered scroll point');
+  g.Hunt.cfg().center = null; g.Town.cancel(); g.Town.lastScrollPoint = null; g.Town.begin();
+  assert.equal(g.Town.trip, null); assert.match(g.Town.message, /hunting/);
+});
 test('pet storage protects supplies, keep names and items with missing metadata', () => {
   const f = townFixture(); f.Town.cfg().store.others = true;
   for (const item of [...f.World.items(), f.pet.inventory[2], f.pet.inventory[3], { name: 'Unknown', refObjId: 123 }]) assert.equal(f.Town.eligible(item), false);

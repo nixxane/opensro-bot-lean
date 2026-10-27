@@ -353,8 +353,10 @@ const Town = {
     const H = Hunt.cfg(), deathInArea = !!(this.deathPoint && H.center && dist2D(this.deathPoint, H.center) <= H.radius);
     const reverseChoice = revival && this.cfg().deathReturn === 'death' && deathInArea ? TOWN_REVERSE.death : TOWN_REVERSE.recall;
     if (revival && this.cfg().deathReturn === 'death' && !deathInArea) Log.info('Died outside the hunting area: reversing to the last return-scroll point so hunting can start again.');
-    const origin = revival ? (reverseChoice === TOWN_REVERSE.death ? this.deathPoint || Hunt.cfg().center : this.lastScrollPoint || Hunt.cfg().center) : World.pose();
-    if (!origin) return this.fail('No saved hunting point for revival return.');
+    // Started in town: the pose is the town, not the hunt. The reverse scroll goes back to the last scroll point.
+    const inTown = this.inTown(revival);
+    const origin = revival || inTown ? (reverseChoice === TOWN_REVERSE.death ? this.deathPoint || Hunt.cfg().center : this.lastScrollPoint || Hunt.cfg().center) : World.pose();
+    if (!origin) return this.fail(inTown ? 'No saved hunting point to return to; set the hunting area first.' : 'No saved hunting point for revival return.');
     if (revival) Hunt.running = true;
     Restock.trip = null;
     Resurrect.cancelTrip('', true); Resurrect.holdUntil = 0; Loot.suspend();
@@ -362,8 +364,8 @@ const Town = {
     // Say why, once: the trigger is only visible before departure, and people ask why the bot went to town.
     const why = revival ? 'returning after a death' : this.reason() || 'started by you';
     this.lastTrip = { why, at: now() };
-    this.trip = { phase: 'recall', at: now(), started: now(), origin: { ...origin }, revival, reverseChoice, why,
-      huntArea: revival && !(reverseChoice === TOWN_REVERSE.death && this.deathPoint) && Hunt.cfg().center ? { center: { ...Hunt.cfg().center }, radius: Hunt.cfg().radius } : null,
+    this.trip = { phase: 'recall', at: now(), started: now(), origin: { ...origin }, revival, inTown, reverseChoice, why,
+      huntArea: (revival || inTown) && !(reverseChoice === TOWN_REVERSE.death && this.deathPoint) && Hunt.cfg().center ? { center: { ...Hunt.cfg().center }, radius: Hunt.cfg().radius } : null,
       manualAt: Manual.lastAt, character: World.charName, petRef: Loot.pet()?.rec.refObjId,
       config: JSON.stringify(this.cfg()), supplies: this.supplies(), sellFirst: !!this.cfg().sellBag };
     Hunt.targetGid = Hunt.lootGid = 0;
@@ -375,7 +377,7 @@ const Town = {
     this.trip.haltAt = now();
     this.trip.haltAttempts = this.trip.haltSent ? 1 : 0;
     // Started in town: skip the return scroll and go straight to the services.
-    if (this.inTown(revival)) { this.arrived(); return; }
+    if (inTown) { this.arrived(); return; }
     if (revival) this.enter('revive-arrival');
     else this.message = 'Using return scroll; recall must be bound to your town.';
   },
@@ -714,7 +716,7 @@ const Town = {
       // After death the game's last scroll point need not equal the saved
       // hunt center (or an older remembered scroll point). Accept the saved
       // hunting area too, but only after confirmed, settled world travel.
-      const inHuntArea = t.phase === 'reverse-wait' && t.revival && t.huntArea &&
+      const inHuntArea = t.phase === 'reverse-wait' && (t.revival || t.inTown) && t.huntArea &&
         dist2D(World.pose(), t.huntArea.center) <= t.huntArea.radius;
       if (t.transition && (distance <= radius || inHuntArea) && !gp.inventoryPending && !gp.returnScroll) {
         if (t.phase === 'recall-wait') { this.lastScrollPoint = { ...t.origin }; this.arrived(); }
