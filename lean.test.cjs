@@ -812,6 +812,11 @@ test('native metadata checks flat and percent MP costs', () => {
   assert.equal(f.Combat.mpOk(5, { mp: 29, maxMp: 100 }), false);
   assert.equal(f.Combat.mpOk(5, { mp: 30, maxMp: 100 }), true);
 });
+test('skill names use the official English text, also after the catalog is rebuilt', () => {
+  const f = fixture(); f.Learned.english.set(7, 'Thunderdragon force');
+  f.World.rebuildCatalog([{ id: 7, name: 'SKILL_CH_LIGHTNING_A' }]);
+  assert.equal(f.World.skillName(7), 'Thunderdragon force');
+});
 test('return mode owns movement; arrival can start hunting', () => {
   const f = fixture(); f.Settings.profile.hunt.center.x = 300; f.WalkBack.start(true); f.Controller.tick();
   assert.equal(f.Controller.mode, 'returning'); assert.equal(f.commands.at(-1).kind, 'move');
