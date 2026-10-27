@@ -4551,9 +4551,23 @@ const BuffGear = {
     const kinds = this.need(id), w = this.at(6);
     return kinds && this.weapon(w) ? !kinds.includes(this.kind(w)) : false;
   },
+  // The skill needs a shield in the off-hand (fire shield and the like), judged from its required item or its name.
+  shieldSkill(id) {
+    const info = World.skill(id), admit = info?.admit;
+    if (!info) return false;
+    return !!(admit?.shield || admit?.reqShield || admit?.reqi && /shield/i.test(JSON.stringify(admit.reqi)) || /_SHIELD_/i.test(String(info.code || info.codename || info.name || '')));
+  },
+  // A shield skill is due while no shield is worn, or a two-handed weapon is.
+  shieldMissing(id) { return this.shieldSkill(id) && !this.shield(this.at(7)); },
+  // The bag shield to wear for a shield skill: the primary / secondary shield picked on the Items page first.
+  pickShield() {
+    const gp = World.gp, list = this.items().filter(i => i.slot >= (gp.equipmentSlotCount || 13) && this.shield(i) && (i.durability ?? 1) > 0 && !this.bad.has(this.key(i)));
+    list.sort((a, b) => (ItemRules.guarded(b) ? 1 : 0) - (ItemRules.guarded(a) ? 1 : 0) || (b.plus ?? 0) - (a.plus ?? 0) || a.slot - b.slot);
+    return list[0] || null;
+  },
   auto() { const c = this.cfg(); return !!(c.buffSwap && c.buffAuto); },
   // Buffs the gear cycle owns for the weapon they need, not the weapon someone assigned.
-  owns(b) { return this.auto() && !!b.enabled && !b.gearSet && this.mismatch(Combat.resolve(b)); },
+  owns(b) { return this.auto() && !!b.enabled && !b.gearSet && (this.mismatch(Combat.resolve(b)) || this.shieldMissing(Combat.resolve(b))); },
   // The bag weapon to wear for this skill: the highest plus the character can wield, or why there is none.
   pick(kinds) {
     const gp = World.gp, level = gp?.progression?.level;
@@ -4659,12 +4673,20 @@ const BuffGear = {
         if (!this.owns(b)) continue;
         const id = this.due(b, true);
         if (!id) continue;
-        const kinds = this.need(id), weapon = this.pick(kinds);
+        const wantShield = this.shieldMissing(id);
+        let kinds = this.need(id), weapon;
+        if (wantShield) {
+          // A shield only goes with a one-handed weapon: keep the worn one if it is, otherwise wear a one-handed bag weapon.
+          const worn = this.at(6);
+          kinds = kinds ? kinds.filter(k => this.oneHanded(k)) : [];
+          weapon = this.weapon(worn) && this.oneHanded(this.kind(worn)) && (!kinds.length || this.need(id)?.includes(this.kind(worn))) ? worn : this.pick(kinds.length ? kinds : [10, 15, 2, 3, 7, 13]);
+          if (!this.pickShield()) { note = `${World.skillName(id)} needs a shield, and none you can use is in your bag.`; continue; }
+        } else weapon = this.pick(kinds);
         if (!weapon) { note = `${World.skillName(id)} needs a ${this.kindName(kinds)}, and none you can use is in your bag.`; continue; }
-        const key = this.key(weapon);
+        const key = this.key(weapon) + (wantShield ? ':shield' : '');
         if (!byWeapon.has(key)) {
-          const shield = this.oneHanded(this.kind(weapon)) && this.shield(this.at(7)) ? home.shield : null;
-          byWeapon.set(key, { set: { id: 'auto:' + key, name: weapon.name || Items.name(weapon.refObjId), auto: true, weapon: key, shield }, buffs: [] });
+          const shield = wantShield ? this.key(this.pickShield()) : this.oneHanded(this.kind(weapon)) && this.shield(this.at(7)) ? home.shield : null;
+          byWeapon.set(key, { set: { id: 'auto:' + key, name: weapon.name || Items.name(weapon.refObjId), auto: true, weapon: this.key(weapon), shield }, buffs: [] });
         }
         byWeapon.get(key).buffs.push({ b, id });
       }

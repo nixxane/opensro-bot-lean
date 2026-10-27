@@ -4713,6 +4713,20 @@ test('buff gear wears the weapon each buff needs and restores the combat weapon 
   assert.equal(JSON.stringify(f.BuffGear.setup()),home);
   assert.equal(f.BuffGear.recovery,null);
 });
+test('buff gear wears a bag shield (and a one-handed weapon) for a shield buff, then restores the two-handed weapon',()=>{
+  const f=autoGearFixture(), gp=f.World.gp, home=JSON.stringify({}) ;
+  gp.inventory=gp.inventory.filter(i=>i.slot!==7&&i.slot!==15);
+  f.World.catalog.set(20,{...f.World.catalog.get(20),admit:{weaponKinds:[255],reqi:[{shield:true}]}});
+  f.Settings.profile.macro.buffs=[f.Settings.profile.macro.buffs[0]];
+  const before=JSON.stringify(f.BuffGear.setup());
+  assert.equal(f.BuffGear.owns(f.Settings.profile.macro.buffs[0]),true);
+  assert.equal(f.BuffGear.tick(),true);
+  const casts=[]; const cast=f.Combat.cast.bind(f.Combat); f.Combat.cast=(id,...a)=>{casts.push([id,gp.inventory.find(i=>i.slot===6).refObjId,gp.inventory.find(i=>i.slot===7)?.refObjId]);return cast(id,...a);};
+  f.drive();
+  assert.deepEqual(casts.map(c=>c[0]),[20]);
+  assert.deepEqual(casts[0].slice(1),[200,201]);
+  assert.equal(JSON.stringify(f.BuffGear.setup()),before);
+});
 test('buff gear leaves buffs the worn weapon already satisfies to the normal buff loop',()=>{
   const f=autoGearFixture(), gp=f.World.gp;
   gp.inventory.find(i=>i.slot===6).typeFlags=(15<<11)|(6<<7)|44;
