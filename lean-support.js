@@ -74,7 +74,7 @@ const Support = {
     if (World.isCasting() || World.isSitting() || World.local()?.mountedOn || World.gp.inventoryPending || World.gp.targetPending ||
       now() - Combat.lastCastAt < Settings.profile.macro.castGapMs) return false;
     const members = this.members(), party = members.filter(m => !m.self);
-    if (!party.length && !c.heal.self) { this.message = 'Not in a party.'; return false; }
+    if (!party.length && !c.heal.self && !c.buffs.length) { this.message = 'Not in a party.'; return false; }
     const living = members.filter(m => m.alive && m.inRange && (!m.self || c.heal.self));
     // 1. Group heal when enough members are low.
     const groupId = this.skillOf(c.group);
@@ -94,8 +94,9 @@ const Support = {
       const id = this.skillOf(b);
       if (!id || !this.ready(id)) continue;
       const only = splitList(b.only || '');
-      for (const m of party) {
-        if (!m.alive || !m.inRange || only.length && !only.includes(m.name.toLowerCase())) continue;
+      // The caster comes last: friendly buffs such as Body Deity and Soul Deity can be cast on oneself too.
+      for (const m of [...party, ...members.filter(x => x.self)]) {
+        if (!m.alive || !m.inRange || only.length && !only.includes(String(m.name || '').toLowerCase())) continue;
         const key = m.name + ':' + b.group, sent = this.sent.get(key), miss = this.misses.get(key) || { n: 0, until: 0 };
         if (this.has(m.gid, id)) { this.misses.delete(key); this.sent.delete(key); continue; }
         if (t < miss.until) continue;

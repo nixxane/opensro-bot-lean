@@ -1614,6 +1614,8 @@ test('party support is off by default, then heals the lowest member in range bef
   f.World.gp.attachedEffects = [{ gid: 60, skill: 2002, token: 1 }]; f.commands.length = 0;
   f.advance(2000); f.Controller.tick(); assert.deepEqual(casts(f), ['select 61', 'skill 2002 61'], 'Tank has it, Mage is next');
   f.World.gp.attachedEffects.push({ gid: 61, skill: 2002, token: 2 }); f.commands.length = 0;
+  f.advance(2000); f.Controller.tick(); assert.deepEqual(casts(f), ['skill 2002 1'], 'party is buffed: the caster gets it last');
+  f.World.gp.attachedEffects.push({ gid: 1, skill: 2002, token: 3 }); f.commands.length = 0;
   f.advance(2000); f.Controller.tick(); assert.deepEqual(casts(f), [], 'everyone is buffed');
   assert.match(f.Support.message, /healed and buffed/);
 });
