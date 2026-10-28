@@ -48,7 +48,7 @@ Always rebuild before running tests, because tests read the generated `bot.lean.
 Plain JavaScript (no bundler, no package.json), LF line endings, match the surrounding module's idiom and comment density. Python files: read/write with explicit `encoding='utf-8'`. Never edit sources with shell redirection that could change encoding or EOLs.
 
 ## Releases
-Merged PRs are released automatically by `.github/workflows/release.yml` (next patch version, notes, build, tests, GitHub release, Discord, website). Do not release a merged PR by hand as well. By hand, only when the user asks:
+Merged PRs are released automatically by `.github/workflows/release.yml` (next patch version, notes, build, tests, GitHub release, Discord; the website entry only when the `SITE_TOKEN` secret is set). PR reviews, the review-fix-merge job and the release notes run Claude Code on DeepSeek (`deepseek-flash`); issue fixes run on Claude. Do not release a merged PR by hand as well. By hand, only when the user asks:
 1. Bump BOTH version strings in `build-lean.py` (userscript `@version` and runtime `VERSION`). Versions are integer `major.minor.patch` (1.2.11 is newer than 1.2.9). Never reuse a published version for changed behaviour.
 2. Add `notes/<version>.md` (short, plain language; state what was only tested in simulation).
 3. Run build, `node --check`, `node lean.test.cjs`, `git diff --check`. Confirm both generated headers and runtime `VERSION` agree.
