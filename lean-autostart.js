@@ -35,7 +35,7 @@ const AutoStart = {
     if (World.charName && Settings.profileKey !== 'profile:' + World.charName) { this.message = 'Auto-start: waiting for the character settings.'; return; }
     if (!this.on()) { this.entry = null; return; }
     if (!Hunt.cfg().center) {
-      this.cancel('Auto-start: no hunting spot is saved. Set one in Combat → Hunt area.');
+      this.cancel('Auto-start: no hunting spot is saved. Set one in Combat → Hunt area (Training place in the Classic window).');
       return UI.toast(this.message, 'warn', 6000);
     }
     const wait = this.waiting(entry);
