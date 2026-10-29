@@ -98,6 +98,8 @@ const Loot = {
     if (!gi) return false;
     const local = World.localGid();
     if (gi.claimantGid !== undefined && gi.claimantGid !== local) return false;
+    // "Only my own drops": a drop owned by a party member is left for them.
+    if (Hunt.cfg().pickup.ownOnly && gi.ownerJid !== undefined && gi.ownerJid !== local) return false;
     const party = World.gp?.social?.members || [];
     return gi.ownerJid === undefined || gi.ownerJid === local || party.some(m => m.id === gi.ownerJid);
   },

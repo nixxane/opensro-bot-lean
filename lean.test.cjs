@@ -636,6 +636,14 @@ test('filters foreign ownership and permits own/party claims', () => {
   d.groundItem.claimantGid = 3; assert.equal(f.Loot.choose(), null);
   d.groundItem.claimantGid = 1; assert.equal(f.Loot.choose().gid, d.gid);
 });
+test('only-my-own-drops skips party members drops but keeps own and unowned', () => {
+  const f = fixture(), d = f.drop(), P = f.Settings.profile.hunt.pickup;
+  f.World.gp.social.members = [{ id: 2 }]; d.groundItem.ownerJid = 2;
+  assert.equal(f.Loot.allowed(d), true);
+  P.ownOnly = true; assert.equal(f.Loot.allowed(d), false);
+  d.groundItem.ownerJid = 1; assert.equal(f.Loot.allowed(d), true);
+  delete d.groundItem.ownerJid; assert.equal(f.Loot.allowed(d), true);
+});
 test('include cannot bypass exclusion or capacity; existing stack can merge', () => {
   const f = fixture(), d = f.drop(), p = f.Settings.profile.hunt.pickup;
   p.include = 'potion'; p.exclude = 'potion'; assert.equal(f.Loot.allowed(d), false);
