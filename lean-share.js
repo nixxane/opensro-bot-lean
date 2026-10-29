@@ -8,15 +8,17 @@ const ProfileShare = {
   isMap(v) { return !!v && typeof v === 'object' && !Array.isArray(v); },
   clone(v) { return JSON.parse(JSON.stringify(v)); },
   // The fields that mean nothing on another character; an import keeps the importer's own.
+  // The team relay's room key is access control, so it is personal too: a share code must
+  // never publish it, and an import must never connect the importer to someone else's relay.
   personal(p) {
     const r = p.potion.restock, t = r.town;
     return this.clone({ center: p.hunt.center, vendor: r.vendor, route: r.route, offers: r.offers,
-      town: { arrival: t.arrival, storage: t.storage, vendor: t.vendor, smith: t.smith, gate: t.gate }, buffSets: p.macro.buffSets, gear: p.items.gear, wardrobe: p.wardrobe, follow: p.trace.name, pullPoints: p.lure.points });
+      town: { arrival: t.arrival, storage: t.storage, vendor: t.vendor, smith: t.smith, gate: t.gate }, buffSets: p.macro.buffSets, gear: p.items.gear, wardrobe: p.wardrobe, follow: p.trace.name, pullPoints: p.lure.points, team: p.team });
   },
   restore(p, own) {
     const r = p.potion.restock, t = r.town;
     p.hunt.center = own.center; r.vendor = own.vendor; r.route = own.route; r.offers = own.offers;
-    Object.assign(t, own.town); p.macro.buffSets = own.buffSets; p.items.gear = own.gear; p.wardrobe = own.wardrobe; p.trace.name = own.follow; p.lure.points = own.pullPoints;
+    Object.assign(t, own.town); p.macro.buffSets = own.buffSets; p.items.gear = own.gear; p.wardrobe = own.wardrobe; p.trace.name = own.follow; p.lure.points = own.pullPoints; p.team = own.team;
     // A buff assigned to a weapon set means nothing without the sets; one assigned to the primary or secondary weapon or
     // the shield uses the importer's own.
     for (const b of p.macro.buffs) if (b && !BUFF_GEAR_KINDS.includes(b.gearSet) && !p.macro.buffSets.some(s => s.id === Number(b.gearSet))) b.gearSet = 0;

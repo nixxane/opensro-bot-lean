@@ -3,7 +3,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(__dirname + '/bot.lean.user.js', 'utf8');
 const isolated = source.slice(0, source.lastIndexOf('installWorkerHook();')) +
-  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, stopAll, toggleBot, boot, Ticker, Sound, LeanMap};\n})();';
+  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, Team, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, stopAll, toggleBot, boot, Ticker, Sound, LeanMap};\n})();';
 function fixture(document) {
   let time = 100000;
   const storage = new Map(), commands = [], notices = [], intervals = [], timers = [];
@@ -6336,4 +6336,105 @@ test('a price change mid-session stops the stall instead of mixing old offers', 
   f.advance(400); f.Controller.tick(); stallRespond(f);
   assert.equal(f.Stall.run, null);
   assert.equal(f.commands.at(-1).kind, 'stall-close');
+});
+// ---- Team relay (phase 1: presence) ----
+function teamFixture(url = 'wss://relay.example', token = 'room-key') {
+  const f = fixture(), sockets = [];
+  class FakeSocket {
+    constructor(address) { this.url = address; this.readyState = 0; this.sent = []; sockets.push(this); }
+    send(text) { this.sent.push(JSON.parse(text)); }
+    close() { if (this.readyState < 2) { this.readyState = 3; this.onclose && this.onclose({ code: 1000 }); } }
+    open() { this.readyState = 1; this.onopen && this.onopen(); }
+    receive(msg) { this.onmessage && this.onmessage({ data: JSON.stringify(msg) }); }
+    drop() { if (this.readyState < 2) { this.readyState = 3; this.onclose && this.onclose({}); } }
+  }
+  f.win.WebSocket = FakeSocket;
+  f.World.charName = 'RelayOne';
+  Object.assign(f.Settings.profile.team, { enabled: true, url, token });
+  return Object.assign(f, { teamSockets: sockets });
+}
+
+test('the team relay connects, announces itself and tracks the peers the relay reports', () => {
+  const f = teamFixture();
+  f.Team.tick();
+  assert.equal(f.teamSockets.length, 1);
+  const s = f.teamSockets[0];
+  s.open();
+  assert.equal(s.sent[0].type, 'hello'); assert.equal(s.sent[0].token, 'room-key'); assert.equal(s.sent[0].name, 'RelayOne');
+  assert.ok(f.Team.status().includes('Connecting'), 'an open socket is not online until the relay welcomes it');
+  assert.ok(!f.notices.some(n => n.includes('Team relay connected')), 'no connected toast before the welcome');
+  s.receive({ type: 'welcome', you: 'RelayOne', peers: [{ name: 'AltTwo', state: { hunting: true, level: 42 } }] });
+  assert.ok(f.Team.status().includes('Connected as RelayOne'));
+  assert.ok(f.notices.some(n => n.includes('Team relay connected')), 'the welcome announces the connection');
+  assert.ok(f.Team.peerRows().some(r => r.includes('AltTwo') && r.includes('hunting')));
+  s.receive({ type: 'peer', name: 'AltTwo', state: { hunting: false, level: 42 } });
+  assert.ok(f.Team.peerRows().every(r => !r.includes('hunting')), 'the fresher beat wins');
+  s.receive({ type: 'peer', name: 'RelayOne', state: { hunting: true } });
+  assert.ok(f.Team.peerRows().every(r => !r.includes('RelayOne')), 'echoes of own name are ignored');
+});
+
+test('the team relay beats every five seconds and forgets a silent peer after fifteen', () => {
+  const f = teamFixture();
+  f.Team.tick(); const s = f.teamSockets[0]; s.open();
+  s.sent.length = 0;
+  f.Team.tick(); assert.equal(s.sent.length, 0, 'no beat before five seconds');
+  f.advance(5000); f.Team.tick();
+  assert.equal(s.sent.at(-1).type, 'beat'); assert.equal(s.sent.at(-1).name, 'RelayOne'); assert.equal(s.sent.at(-1).state.hunting, false);
+  s.receive({ type: 'peer', name: 'AltTwo', state: {} });
+  f.advance(15001); f.Team.tick();
+  assert.ok(f.Team.peerRows().every(r => !r.includes('AltTwo')), 'a silent peer expires');
+});
+
+test('a remote relay address must use wss (plain ws only to localhost), and rejected hellos retry with backoff', () => {
+  const f = teamFixture('ws://relay.example');
+  f.Team.tick(); assert.equal(f.teamSockets.length, 0); assert.ok(f.Team.status().includes('wss://'));
+  f.Settings.profile.team.url = 'ws://127.0.0.1:4701';
+  f.Team.tick(); assert.equal(f.teamSockets.length, 1, 'plain ws to localhost is allowed, like the browser itself does');
+  f.Settings.profile.team.url = 'wss://relay.example';
+  f.Team.tick(); f.teamSockets.at(-1).open(); f.teamSockets.at(-1).drop();
+  assert.equal(f.Team.state, 'retrying');
+  f.advance(5000); f.Team.tick(); assert.equal(f.teamSockets.length, 3, 'first retry after five seconds');
+  // An open socket whose hello the relay keeps rejecting must not reset the backoff or look connected.
+  f.teamSockets.at(-1).open(); f.teamSockets.at(-1).receive({ type: 'error', message: 'hello needs a token and a name' });
+  assert.equal(f.Team.attempts, 2); assert.ok(!f.notices.some(n => n.includes('Team relay connected')));
+  f.advance(10000); f.Team.tick(); assert.equal(f.teamSockets.length, 4, 'the rejected hello waits the longer backoff');
+  f.teamSockets.at(-1).open();
+  f.teamSockets.at(-1).receive({ type: 'welcome', you: 'RelayOne', peers: [] });
+  assert.equal(f.Team.attempts, 0, 'the welcome, not the socket opening, resets the backoff');
+});
+
+test('a relay error is reported without touching the bot, and the switch closes every socket', () => {
+  const f = teamFixture();
+  f.Team.tick(); const s = f.teamSockets[0]; s.open();
+  s.receive({ type: 'error', message: 'first message must be a v1 hello' });
+  assert.ok(f.Team.status().includes('hello'));
+  assert.equal(s.readyState, 3, 'the socket is closed after a relay error');
+  f.Hunt.start(); assert.equal(f.Hunt.running, true, 'hunting starts with the relay down');
+  f.Settings.profile.team.enabled = false; f.Team.tick();
+  assert.ok(f.teamSockets.every(x => x.readyState === 3), 'everything is closed once switched off');
+  assert.equal(f.Team.status(), 'Team relay off.');
+});
+
+test('a changed room key reconnects into the new room, and the bus waits for the character name', () => {
+  const f = teamFixture();
+  f.Team.tick(); const s = f.teamSockets[0]; s.open();
+  f.Settings.profile.team.token = 'second-key';
+  f.Team.tick();
+  assert.equal(s.readyState, 3, 'the old connection is closed');
+  const next = f.teamSockets.at(-1); next.open();
+  assert.equal(next.sent[0].token, 'second-key');
+  const g = teamFixture(); g.World.charName = '';
+  g.Team.tick(); assert.equal(g.teamSockets.length, 0); assert.ok(g.Team.status().includes('character name'));
+});
+
+test('a settings share never carries the relay address or room key, and the diagnostics line omits the name', () => {
+  const f = teamFixture();
+  Object.assign(f.Settings.profile.team, { enabled: true, url: 'wss://relay.example', token: 'room-key' });
+  const stripped = f.ProfileShare.strip(f.Settings.profile);
+  assert.equal(stripped.team.enabled, false); assert.equal(stripped.team.url, ''); assert.equal(stripped.team.token, '', 'a share code strips the room key');
+  assert.ok(f.ProfileShare.personal(f.Settings.profile).team.token === 'room-key', 'the importer keeps their own team settings');
+  assert.equal(f.Diagnostics.snapshot().teamStatus.includes('RelayOne'), false, 'reports omit the character name');
+  f.Team.tick(); f.teamSockets[0].open();
+  f.teamSockets[0].receive({ type: 'welcome', you: 'RelayOne', peers: [{ name: 'AltTwo', state: {} }] });
+  assert.equal(f.Diagnostics.snapshot().teamStatus, 'online, 1 peer in the room');
 });

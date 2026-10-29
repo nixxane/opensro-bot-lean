@@ -201,6 +201,7 @@ const DEFAULT_PROFILE = {
   lure: { enabled: false, points: [], taunt: { id: 0, group: 0 }, area: { id: 0, group: 0 }, holdS: 10, pauseEveryM: 10, pauseS: 4, radius: 15, returnHpPct: 50, stopAt: 0 },
   party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', leaveIfNotLeader: false, acceptNames: '', autoRes: false, acceptRes: false, resRadius: 300, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
     support: { enabled: false, whileStopped: false, range: 30, heal: { id: 0, group: 0, pct: 60, self: false }, group: { id: 0, group: 0, pct: 60, count: 2 }, buffs: [] } },
+  team: { enabled: false, url: '', token: '' },
   wardrobe: { on: true, phantom: true, realAnim: true, hideAvatars: false,
     eq: {}, av: {}, pet: { atk: 0, pick: 0, mount: 0 }, presets: {}, undo: null },
   macro: {
@@ -244,7 +245,7 @@ const DEFAULT_PROFILE = {
 function botProfile(input) {
   const result = deepMerge(DEFAULT_PROFILE, {});
   if (!input || typeof input !== 'object') return result;
-  for (const key of ['macro', 'potion', 'hunt', 'lure', 'wardrobe', 'party', 'alchemy', 'mastery', 'statPoints', 'trace', 'items', 'trade', 'stall']) {
+  for (const key of ['macro', 'potion', 'hunt', 'lure', 'wardrobe', 'party', 'team', 'alchemy', 'mastery', 'statPoints', 'trace', 'items', 'trade', 'stall']) {
     if (!input[key] || typeof input[key] !== 'object') continue;
     for (const field of Object.keys(DEFAULT_PROFILE[key])) {
       if (field in input[key]) result[key][field] = deepMerge(DEFAULT_PROFILE[key][field], input[key][field]);
@@ -8914,6 +8915,146 @@ const Support = {
 };
 
 
+// Team relay bus: a private WebSocket channel between this bot and the player's other characters.
+// Presence only: every character that knows the room key joins the same room on a relay the player
+// operates, and each sees the others' name, hunting state and level. The bus is an independent
+// service: it runs with hunting stopped, survives world transitions, and a relay that is off or
+// unreachable changes nothing about the bot's own behaviour.
+const TEAM_BEAT_MS = 5000;      // presence cadence; the relay drops a client silent for 30 s
+const TEAM_PEER_TTL_MS = 15000; // a peer whose beat stops is forgotten, not kept half-alive
+const TEAM_BACKOFF_MS = [5000, 10000, 20000, 60000]; // reconnect delay per consecutive failure
+const Team = {
+  socket: null, state: 'off', message: 'Team relay off.', peers: new Map(), name: '',
+  attempts: 0, retryAt: -Infinity, sentAt: -Infinity, cfgKey: null,
+  cfg() { return Settings.profile.team; },
+  reset() {
+    this.close();
+    this.peers.clear();
+    this.attempts = 0; this.retryAt = -Infinity; this.sentAt = -Infinity;
+    const on = !!this.cfg().enabled;
+    this.state = on ? 'connecting' : 'off';
+    this.message = on ? 'Connecting to the team relay…' : 'Team relay off.';
+  },
+  close() {
+    const s = this.socket;
+    this.socket = null;
+    if (s) { s.onopen = s.onclose = s.onmessage = s.onerror = null; try { s.close(); } catch {} }
+  },
+  payload() {
+    return { hunting: !!Hunt.running, alive: World.inWorld() && !World.isDead(),
+      mode: String(Controller.mode || 'idle'), level: World.gp?.progression?.level ?? null };
+  },
+  send(msg) {
+    if (this.socket?.readyState !== 1) return false;
+    try { this.socket.send(JSON.stringify(msg)); return true; } catch { return false; }
+  },
+  connect(url) {
+    let s = null;
+    try { s = new W.WebSocket(url); } catch (e) {
+      this.scheduleRetry('Relay address refused: ' + (e?.message || e).slice?.(0, 100));
+      return;
+    }
+    this.socket = s;
+    this.state = 'connecting';
+    this.message = 'Connecting to the team relay…';
+    s.onopen = () => {
+      if (this.socket !== s) return;
+      this.sentAt = now();
+      this.send({ v: 1, type: 'hello', token: String(this.cfg().token || ''), name: this.name, state: this.payload() });
+    };
+    s.onmessage = e => { if (this.socket === s) this.receive(e?.data); };
+    // The browser always fires close after an error, so retries are owned by close alone.
+    s.onerror = () => {};
+    s.onclose = () => { if (this.socket === s) { this.socket = null; this.scheduleRetry(); } };
+  },
+  scheduleRetry(note = '') {
+    const delay = TEAM_BACKOFF_MS[Math.min(this.attempts, TEAM_BACKOFF_MS.length - 1)];
+    this.attempts++;
+    this.retryAt = now() + delay;
+    this.state = 'retrying';
+    this.message = (note || 'Relay connection lost') + '; retrying in ' + Math.round(delay / 1000) + ' s.';
+    if (this.attempts <= 2) Log.warn('Team relay: ' + this.message);
+  },
+  receive(text) {
+    let msg = null;
+    try { msg = JSON.parse(String(text)); } catch { return; }
+    if (!msg || typeof msg !== 'object') return;
+    switch (msg.type) {
+      case 'welcome':
+        // The room accepted us: only now are we really online, and only now does the backoff
+        // reset — an open socket whose hello the relay keeps rejecting must not retry every 5 s.
+        this.attempts = 0;
+        this.state = 'online';
+        this.message = 'Connected as ' + this.name + '.';
+        this.peers = new Map((Array.isArray(msg.peers) ? msg.peers : [])
+          .filter(p => p?.name && p.name !== this.name)
+          .map(p => [p.name, { state: p.state || {}, at: now() }]));
+        UI.toast('Team relay connected.', 'info', 3000);
+        break;
+      case 'peer':
+        if (msg.name && msg.name !== this.name) this.peers.set(msg.name, { state: msg.state || {}, at: now() });
+        break;
+      case 'join':
+        if (msg.name && msg.name !== this.name && !this.peers.has(msg.name)) {
+          this.peers.set(msg.name, { state: {}, at: now() });
+          UI.toast(msg.name + ' joined the team relay.', 'info', 3000);
+        }
+        break;
+      case 'leave':
+        if (msg.name && this.peers.delete(msg.name)) UI.toast(msg.name + ' left the team relay.', 'info', 3000);
+        break;
+      case 'error': {
+        const note = 'Relay: ' + String(msg.message || 'error').slice(0, 120);
+        Log.warn('Team relay: ' + note);
+        this.close();
+        this.scheduleRetry(note);
+        break;
+      }
+    }
+  },
+  tick() {
+    const c = this.cfg();
+    const key = !!c.enabled + '|' + c.url + '|' + c.token;
+    if (key !== this.cfgKey) { this.cfgKey = key; this.reset(); }
+    const t = now();
+    for (const [name, peer] of this.peers) if (t - peer.at > TEAM_PEER_TTL_MS) this.peers.delete(name);
+    if (!c.enabled) return;
+    const url = String(c.url || '').trim();
+    // The game page is HTTPS: a remote relay must use wss. Plain ws survives only to localhost,
+    // exactly the sockets the browser itself still allows, so local tests work as documented.
+    const local = /^ws:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/|$)/i.test(url);
+    if (!/^wss:\/\//i.test(url) && !local) { this.state = 'off'; this.message = 'The relay address must start with wss://.'; return; }
+    if (typeof W.WebSocket !== 'function') { this.state = 'off'; this.message = 'This browser has no WebSocket.'; return; }
+    const name = String(World.charName || World.gp?.social?.localName || '');
+    if (!name) { this.state = 'waiting'; this.message = 'Waiting for the character name…'; return; }
+    this.name = name;
+    if (!this.socket && t >= this.retryAt) this.connect(url);
+    if (this.socket?.readyState === 1 && t - this.sentAt >= TEAM_BEAT_MS) {
+      if (this.send({ type: 'beat', name: this.name, state: this.payload() })) this.sentAt = t;
+    }
+  },
+  status() {
+    if (!this.cfg().enabled) return 'Team relay off.';
+    if (this.state === 'online') return 'Connected as ' + this.name + '; ' + this.peers.size + (this.peers.size === 1 ? ' peer' : ' peers') + ' in the room.';
+    return this.message;
+  },
+  // The diagnostics line: same information, without the character name (reports omit names).
+  diag() {
+    if (!this.cfg().enabled) return '';
+    if (this.state === 'online') return 'online, ' + this.peers.size + (this.peers.size === 1 ? ' peer' : ' peers') + ' in the room';
+    return this.message;
+  },
+  peerRows() {
+    const t = now();
+    return [...this.peers.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([name, peer]) => {
+      const s = peer.state || {};
+      const what = s.hunting ? 'hunting' : s.alive === false ? 'dead' : s.mode || 'idle';
+      return name + ' · ' + what + (Number.isInteger(s.level) ? ' · level ' + s.level : '') + ' · ' + Math.max(0, Math.round((t - peer.at) / 1000)) + ' s ago';
+    });
+  },
+};
+
+
 // Automatic trading. Buys specialty goods into the summoned transport at one town's trade merchant, walks to another
 // town (the long-range route graph of WalkBack) and sells them there. The rules are the server's: a trader job suit,
 // a summoned transport within 100 m of the merchant and goods bought by this character. This module only drives them
@@ -9528,6 +9669,7 @@ const Controller = {
     try {
       this.guard('Reconnect', () => Reconnect.tick());
       this.guard('Auto-start', () => AutoStart.tick());
+      this.guard('Team', () => Team.tick());
       Restock.sample();
       Alchemy.tick();
       BuffGear.resume();
@@ -11101,15 +11243,17 @@ const ProfileShare = {
   isMap(v) { return !!v && typeof v === 'object' && !Array.isArray(v); },
   clone(v) { return JSON.parse(JSON.stringify(v)); },
   // The fields that mean nothing on another character; an import keeps the importer's own.
+  // The team relay's room key is access control, so it is personal too: a share code must
+  // never publish it, and an import must never connect the importer to someone else's relay.
   personal(p) {
     const r = p.potion.restock, t = r.town;
     return this.clone({ center: p.hunt.center, vendor: r.vendor, route: r.route, offers: r.offers,
-      town: { arrival: t.arrival, storage: t.storage, vendor: t.vendor, smith: t.smith, gate: t.gate }, buffSets: p.macro.buffSets, gear: p.items.gear, wardrobe: p.wardrobe, follow: p.trace.name, pullPoints: p.lure.points });
+      town: { arrival: t.arrival, storage: t.storage, vendor: t.vendor, smith: t.smith, gate: t.gate }, buffSets: p.macro.buffSets, gear: p.items.gear, wardrobe: p.wardrobe, follow: p.trace.name, pullPoints: p.lure.points, team: p.team });
   },
   restore(p, own) {
     const r = p.potion.restock, t = r.town;
     p.hunt.center = own.center; r.vendor = own.vendor; r.route = own.route; r.offers = own.offers;
-    Object.assign(t, own.town); p.macro.buffSets = own.buffSets; p.items.gear = own.gear; p.wardrobe = own.wardrobe; p.trace.name = own.follow; p.lure.points = own.pullPoints;
+    Object.assign(t, own.town); p.macro.buffSets = own.buffSets; p.items.gear = own.gear; p.wardrobe = own.wardrobe; p.trace.name = own.follow; p.lure.points = own.pullPoints; p.team = own.team;
     // A buff assigned to a weapon set means nothing without the sets; one assigned to the primary or secondary weapon or
     // the shield uses the importer's own.
     for (const b of p.macro.buffs) if (b && !BUFF_GEAR_KINDS.includes(b.gearSet) && !p.macro.buffSets.some(s => s.id === Number(b.gearSet))) b.gearSet = 0;
@@ -13845,7 +13989,7 @@ const Diagnostics = {
   snapshot() {
     const gp = World.gp, c = Settings.profile, pet = Loot.pet(), social = gp?.social, matching = gp?.partyMatching;
     return {
-      action: this.main(), partyStatus: this.party(), petStatus: this.pet(), townStatus: this.town(), townDetail: this.townDetail(), townReason: this.townReason(),
+      action: this.main(), partyStatus: this.party(), teamStatus: Team.diag(), petStatus: this.pet(), townStatus: this.town(), townDetail: this.townDetail(), townReason: this.townReason(),
       navigationReady: !!Navigation.scene, navigationError: String(Navigation.error || '').slice(0, 80),
       buffGearStatus: BuffGear.cfg().buffSwap ? String(BuffGear.status()).slice(0, 600) : '', buffGearActive: !!BuffGear.run, buffGearRestoring: !!BuffGear.run?.restoring, buffGearMovePending: !!BuffGear.run?.pending, buffGearRecovery: !!BuffGear.recovery,
       alchemyActive: !!Alchemy.run, alchemyPending: !!Alchemy.pending, alchemyAttempts: this.number(Alchemy.result?.attempts),
@@ -15167,6 +15311,8 @@ const UI = {
       this.sections('townTrip', 'townWhen', 'townCycle', 'townAmmo');
     } else if (this.current === 'Party') {
       this.sections('partyMembers', 'partyHeal', 'partyBuffs', 'partyParty', 'partyTrace');
+    } else if (this.current === 'Team') {
+      this.sections('teamRelay');
     } else if (this.current === 'Items') {
       this.drawItems();
     } else if (this.current === 'Setup') {
@@ -15205,6 +15351,7 @@ const UI = {
       { name: 'Party/Autores', icon: 'action\\icon_cha_party', pages: ['Party'], sections: [
         ['partyMembers', 'Current party'], ['partyParty', 'Party settings'], ['partyHeal']] },
       { name: 'Player buffing', icon: 'action\\icon_cha_party', pages: ['Party'], sections: [['partyBuffs', 'Player buffing']] },
+      { name: 'Team', icon: 'action\\icon_cha_party', pages: ['Team'], sections: [['teamRelay', 'Team relay']] },
       { name: 'Auto alchemy', icon: 'action\\icon_cha_alchemy', pages: ['Alchemy'], draw() { Alchemy.draw(); } },
       { name: 'Stall', icon: 'action\\icon_cha_shop', pages: ['Stall'], draw() { Stall.draw(); } },
       { name: 'Extra', icon: 'action\\icon_cha_helper', pages: ['Settings'], sections: [
@@ -15253,7 +15400,7 @@ const UI = {
     const icons = { Items: 'action\\cos_cmd_inventory', Party: 'action\\icon_cha_party', Combat: 'action\\icon_cha_auto_attack', Loot: 'action\\icon_cha_autoget', Supplies: 'action\\icon_cha_recovery', Town: 'item\\etc\\mall_return_scroll',
       Alchemy: 'action\\icon_cha_alchemy', Trade: 'action\\icon_cha_shop', Wardrobe: 'action\\icon_cha_shop', Settings: 'action\\icon_cha_helper', Setup: 'action\\icon_cha_camp' };
     const entries = this.classic ? this.classicTabs().map(t => ({ name: t.name, icon: t.icon, open: () => { this.ctab = t.name; this.draw(); } }))
-      : ['Setup', 'Map', 'Combat', 'Party', 'Loot', 'Items', 'Supplies', 'Town', 'Stall', 'Alchemy', 'Trade', 'Wardrobe', 'Settings'].map(name => ({ name, icon: icons[name], open: () => { this.current = name; this.draw(); } }));
+      : ['Setup', 'Map', 'Combat', 'Party', 'Team', 'Loot', 'Items', 'Supplies', 'Town', 'Stall', 'Alchemy', 'Trade', 'Wardrobe', 'Settings'].map(name => ({ name, icon: icons[name], open: () => { this.current = name; this.draw(); } }));
     // Page icons are the game's own action-bar icons; they show only in the wide and classic windows' page lists.
     for (const entry of entries) {
       const tab = this.button(entry.name, entry.open);
@@ -15646,6 +15793,20 @@ const UI = {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
       Trace.draw(host);
   },
+  section_teamRelay(host) {
+    const team = () => Settings.profile.team;
+    this.teamNote = el('p', '', 'muted');
+    this.teamPeers = el('div');
+    host.append(this.group('Team relay',
+      this.check('Connect to a team relay', () => team().enabled, v => { team().enabled = v; Team.reset(); this.draw(); }),
+      this.text('Relay address (wss://…)', () => team().url, v => { team().url = v; Team.tick(); }),
+      this.text('Room key', () => team().token, v => { team().token = v; Team.tick(); }),
+      this.teamNote,
+      el('p', 'A private presence channel between your own characters over a WebSocket relay you control. Characters that enter the same room key see each other here (name, hunting, alive, level); nothing is sent to anyone else, and the bot never depends on it: with the relay off or unreachable everything else works exactly as before. The address must start with wss://; a reference relay ships in relay/ in the repository.', 'muted')));
+    const peers = this.group('Connected characters');
+    peers.append(this.teamPeers, el('p', 'Each character announces itself every 5 seconds and is dropped from this list after 15 seconds of silence.', 'muted'));
+    host.append(peers);
+  },
   section_settingsStats(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
       Stats.draw(host);
@@ -15869,6 +16030,11 @@ const UI = {
       if (Settings.profile.party.joinMain && Party.joinMessage) notes.push(Party.joinMessage);
       if (Settings.profile.party.autoRes) notes.push(Resurrect.message);
       this.partyNote.textContent = notes.join(' ');
+    }
+    if (this.is('Team') && this.teamNote) {
+      this.teamNote.textContent = Team.status();
+      const rows = Team.peerRows();
+      this.teamPeers.replaceChildren(...(rows.length ? rows.map(text => el('div', text)) : [el('div', 'No other character in the room yet.', 'muted')]));
     }
     if (!this.status) return;
     if (this.is('Supplies') && this.petPotionNote) { this.petPotionNote.textContent = this.petPotionNote.title = PetPotion.message; }
@@ -16739,7 +16905,7 @@ function boot() {
     const key = name ? 'profile:' + name : 'profile:default';
     if (key !== Settings.profileKey) { Town.lastScrollPoint = null; Town.deathPoint = null; stopAll(); Settings.useCharacter(name); }
   });
-  bus.on('profile', () => { PetPotion.reset(); AutoMastery.reset(); StatPoints.reset(); Trace.reset(); BuffGear.reset(); Town.lastScrollPoint = null; Town.deathPoint = null; SpeedScroll.reset(); RepairHammer.reset(); Party.reset(); Resurrect.reset(); stopAll(); Restock.cancelRecording(); Loot.reset(); Wardrobe.applyNow(); UI.draw(); });
+  bus.on('profile', () => { PetPotion.reset(); AutoMastery.reset(); StatPoints.reset(); Trace.reset(); BuffGear.reset(); Team.reset(); Town.lastScrollPoint = null; Town.deathPoint = null; SpeedScroll.reset(); RepairHammer.reset(); Party.reset(); Resurrect.reset(); stopAll(); Restock.cancelRecording(); Loot.reset(); Wardrobe.applyNow(); UI.draw(); });
   bus.on('phase', phase => {
     if (phase !== 'world') {
       BuffGear.interrupt('World transition interrupted buff swaps.', true);
@@ -16779,7 +16945,7 @@ function boot() {
   }, true);
   Ticker.start(() => Controller.tick(), 100);
   setInterval(() => { Wardrobe.tick(); UI.update(); }, 500);
-  W.SROLean = { version: VERSION, stats: Stats, updates: Updates, diagnostics: Diagnostics, reports: Reports, alchemy: Alchemy, buffGear: BuffGear, world: World, settings: Settings, hunt: Hunt, loot: Loot, speedScroll: SpeedScroll, repairHammer: RepairHammer, resurrect: Resurrect, stall: Stall,
+  W.SROLean = { version: VERSION, stats: Stats, updates: Updates, diagnostics: Diagnostics, reports: Reports, alchemy: Alchemy, buffGear: BuffGear, world: World, settings: Settings, hunt: Hunt, loot: Loot, speedScroll: SpeedScroll, repairHammer: RepairHammer, resurrect: Resurrect, stall: Stall, team: Team,
     restock: Restock, town: Town, walkBack: WalkBack, travel: Travel, antiStuck: AntiStuck, chase: Chase, trap: Trap, autoMastery: AutoMastery, statPoints: StatPoints, share: ProfileShare, trace: Trace, setup: Setup, reconnect: Reconnect, petPotion: PetPotion, navigation: Navigation, route: Route, wardrobe: Wardrobe, wardrobeData: WdData, learned: Learned, controller: Controller, ui: UI, activity: Activity, map: LeanMap, render: RenderControl, support: Support, items: ItemRules, stop: stopAll, log: Log };
   Log.info('NIX ready. F8 starts/stops; F7 folds; F6 or the × minimises and restores; Shift+F7 hides/shows the window.');
 }

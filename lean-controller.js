@@ -205,6 +205,7 @@ const Controller = {
     try {
       this.guard('Reconnect', () => Reconnect.tick());
       this.guard('Auto-start', () => AutoStart.tick());
+      this.guard('Team', () => Team.tick());
       Restock.sample();
       Alchemy.tick();
       BuffGear.resume();
