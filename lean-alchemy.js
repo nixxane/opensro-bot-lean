@@ -12,6 +12,8 @@ const STONES = {
   astral: { label: 'Astral', option: 'MATTR_ASTRAL', base: 6883 },
 };
 const STONE_MAX = 6;
+// Enhancement attempts one run may make. A run also stops at the target, or when the elixirs, powder or stones run out.
+const ALCHEMY_MAX_ATTEMPTS = 9999;
 // The attributes an item's stat percentages come from, in the order the server keeps them (alchemy stones.go
 // attributes()): the index is the item's 5-bit variance field. Durability has no stone.
 const ATTRIBUTES = {
@@ -187,7 +189,7 @@ const Alchemy = {
     if (wants.length && !this.degree(item)) return reject('Weapon degree is unknown; cannot choose matching stones.');
     if (wants.length && !this.attributesKnown(item)) return reject('The weapon\'s attributes are not loaded yet. Try again in a moment.');
     if (!stonesOnly) {
-    if (!Number.isInteger(c.target) || c.target < 1 || c.target > 250 || !Number.isInteger(c.limit) || c.limit < 1 || c.limit > 1000) return reject('Set target + from 1 to 250 and attempts from 1 to 1000.');
+    if (!Number.isInteger(c.target) || c.target < 1 || c.target > 250 || !Number.isInteger(c.limit) || c.limit < 1 || c.limit > ALCHEMY_MAX_ATTEMPTS) return reject(`Set target + from 1 to 250 and attempts from 1 to ${ALCHEMY_MAX_ATTEMPTS}.`);
     if (item.plus >= c.target) return reject('Weapon already meets the target +.');
     const materials = this.materials(item);
     if (!materials.elixir) return reject(`No selected ${this.kind(item)} elixirs in the bag.`);
@@ -392,7 +394,7 @@ const Alchemy = {
     const group = UI.group('Item enhancement');
     group.append(UI.select('Item', items, () => this.selected?.slot ?? -1, slot => { this.select(slot); UI.draw(); }),
       UI.number('Target +', () => c().target, n => c().target = n, 1, 250),
-      UI.number('Maximum attempts', () => c().limit, n => c().limit = n, 1, 1000),
+      UI.number('Maximum attempts', () => c().limit, n => c().limit = n, 1, ALCHEMY_MAX_ATTEMPTS),
       UI.select('Elixir', elixirs, () => c().elixir, value => c().elixir = Number(value)),
       UI.check('Use lucky powder of matching degree', () => c().powder, value => c().powder = value),
       UI.number('Lucky powder from +', () => c().from.powder, n => c().from.powder = n, 0, 250),

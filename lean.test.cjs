@@ -5331,6 +5331,12 @@ function alchemyFixture(powder = false) {
   return { ...f, result };
 }
 
+test('alchemy takes up to 9999 enhancement attempts', () => {
+  let f = alchemyFixture(); f.Settings.profile.alchemy.limit = 9999; f.Alchemy.start();
+  assert.ok(f.Alchemy.run, f.Alchemy.message); assert.equal(f.Alchemy.run.cfg.limit, 9999);
+  f = alchemyFixture(); f.Settings.profile.alchemy.limit = 10000; f.Alchemy.start();
+  assert.equal(f.Alchemy.run, null); assert.match(f.Alchemy.message, /attempts from 1 to 9999/);
+});
 test('alchemy closes its native window on stop without cancelling a sent reinforcement', () => {
   const f = alchemyFixture(); f.Alchemy.start(); f.Controller.tick();
   f.World.applyGameplay({ ...f.World.gp, alchemy: { ...f.World.gp.alchemy, pending: true, slot: 13 } });
