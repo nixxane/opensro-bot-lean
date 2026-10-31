@@ -820,6 +820,9 @@ const UI = {
       this.speedNote = el('p', '', 'muted');
       pots.append(this.check('Use beginner +100% speed scroll automatically', () => P().speedScroll, v => { P().speedScroll = v; SpeedScroll.reset(); }),
         el('p', 'Uses only the beginner scroll during hunting or travel when no movement-speed buff is active. Works during combat casts; potions have priority. Waits for buff confirmation and stops retrying after three unconfirmed attempts.', 'muted'), this.speedNote);
+      pots.append(this.check('Keep a 20% damage scroll active', () => Settings.profile.scroll.damageInc, v => { Settings.profile.scroll.damageInc = v; ScrollBuff.reset(); }),
+        this.check('Keep a 20% resistance scroll active', () => Settings.profile.scroll.damageAbs, v => { Settings.profile.scroll.damageAbs = v; ScrollBuff.reset(); }),
+        el('p', 'While hunting, uses a 20% damage increase and/or resistance scroll from your bag whenever its 30-minute buff runs out, like the speed scroll above: potions have priority, each use waits for its buff, and it stops retrying after three unconfirmed attempts. Buying more scrolls is set under Item mall below.', 'muted'));
       const R = () => P().repairHammer;
       this.hammerNote = el('p', '', 'muted');
       pots.append(this.check('Use a repair hammer when gear is worn', () => R().on, v => { R().on = v; RepairHammer.reset(); }),
@@ -878,7 +881,7 @@ const UI = {
       host.append(shop);
   },
   section_suppliesMall(host) {
-    const M = () => Settings.profile.mall, S = () => Settings.profile.scroll;
+    const M = () => Settings.profile.mall;
     host.append(this.group('Item mall',
       this.check('Buy from the Item mall', () => M().on, v => M().on = v),
       this.number('Silk budget per bot run (0 = never buy)', () => M().budgetSilk, v => M().budgetSilk = v, 0, 100000),
@@ -899,11 +902,8 @@ const UI = {
       this.check('Buy Reverse Return Scrolls here (the merchant with gold stays cheaper)', () => M().reverse.on, v => M().reverse.on = v),
       this.number('Reverse scrolls low stock ≤', () => M().reverse.low, v => M().reverse.low = v, 0, 999),
       this.number('Reverse scrolls refill to', () => M().reverse.target, v => M().reverse.target = v, 1, 9999),
-      el('p', 'One bag or pack is bought per order and the delivered amount is measured from the inventory, so an unknown pack size only means another order. Prices come from the live catalogue, never from remembered addresses.', 'muted')),
-      this.group('Battle scrolls',
-        this.check('Keep a 20% damage scroll active', () => S().damageInc, v => S().damageInc = v),
-        this.check('Keep a 20% resistance scroll active', () => S().damageAbs, v => S().damageAbs = v),
-        el('p', 'While the bot hunts, a scroll from your bag is used whenever its 30-minute buff runs out. Buying more is set above.', 'muted')));
+      el('p', 'Merchant first, mall second: keep these low marks BELOW the potion restock marks above and the merchant refills with gold while the mall only steps in when that was not enough. Raise a mark above the merchant one and the mall spends silk first instead — for wallets that can afford it. One bag or pack is bought per order and the delivered amount is measured from the inventory, so an unknown pack size only means another order. Prices come from the live catalogue, never from remembered addresses.', 'muted')),
+      el('p', 'Keeping the scrolls active is set under Automatic potion use above; the switches here only refill the stock.', 'muted'));
   },
   section_townTrip(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
