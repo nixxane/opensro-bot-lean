@@ -46,12 +46,14 @@ const MallBuyer = {
   unpoison() { this.poison = false; this.probeRevision = null; },
   // The live offer whose package contains this item. Never a remembered address: the server stale-checks packageId.
   offerFor(ref) { return (this.state()?.offers || []).find(o => (o.itemIds || []).includes(ref) && (o.silk || 0) > 0) || null; },
-  // What may be bought right now, in priority order. HP counts the whole potion stock, mall bags included.
+  // What may be bought right now, in priority order. HP/MP count the whole potion stock, mall bags included.
   buyers() {
     const c = this.cfg(), out = [];
     if (c.hp?.on) out.push({ label: 'HP potion bag', ref: MALL_HP_REF, low: c.hp.low, target: c.hp.target, count: () => Potion.count('hp') });
+    if (c.mp?.on) out.push({ label: 'MP potion bag', ref: 5913, low: c.mp.low, target: c.mp.target, count: () => Potion.count('mp') });
     if (c.damageInc?.on) out.push({ label: '20% damage scroll pack', ref: 3767, low: c.damageInc.low, target: c.damageInc.target, count: () => this.count(3767) });
     if (c.damageAbs?.on) out.push({ label: '20% resistance scroll pack', ref: 3768, low: c.damageAbs.low, target: c.damageAbs.target, count: () => this.count(3768) });
+    if (c.reverse?.on) out.push({ label: 'Reverse Return Scroll pack', ref: 3795, low: c.reverse.low, target: c.reverse.target, count: () => this.count(3795) });
     return out;
   },
   tick() {

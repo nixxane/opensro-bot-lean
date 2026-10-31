@@ -201,7 +201,7 @@ const DEFAULT_PROFILE = {
   lure: { enabled: false, points: [], taunt: { id: 0, group: 0 }, area: { id: 0, group: 0 }, holdS: 10, pauseEveryM: 10, pauseS: 4, radius: 15, returnHpPct: 50, stopAt: 0 },
   pet: { attack: { on: false, recall: true, radius: 15, timeout: 3, resend: 5 } },
   scroll: { damageInc: false, damageAbs: false },
-  mall: { on: false, budgetSilk: 0, hp: { on: false, low: 500, target: 2000 }, damageInc: { on: false, low: 5, target: 20 }, damageAbs: { on: false, low: 5, target: 20 } },
+  mall: { on: false, budgetSilk: 0, hp: { on: false, low: 500, target: 2000 }, mp: { on: false, low: 500, target: 2000 }, damageInc: { on: false, low: 5, target: 20 }, damageAbs: { on: false, low: 5, target: 20 }, reverse: { on: false, low: 10, target: 50 } },
   party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', leaveIfNotLeader: false, acceptNames: '', autoRes: false, acceptRes: false, resRadius: 300, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
     support: { enabled: false, whileStopped: false, range: 30, heal: { id: 0, group: 0, pct: 60, self: false }, group: { id: 0, group: 0, pct: 60, count: 2 }, buffs: [] } },
   wardrobe: { on: true, phantom: true, realAnim: true, hideAvatars: false,
@@ -10106,12 +10106,14 @@ const MallBuyer = {
   unpoison() { this.poison = false; this.probeRevision = null; },
   // The live offer whose package contains this item. Never a remembered address: the server stale-checks packageId.
   offerFor(ref) { return (this.state()?.offers || []).find(o => (o.itemIds || []).includes(ref) && (o.silk || 0) > 0) || null; },
-  // What may be bought right now, in priority order. HP counts the whole potion stock, mall bags included.
+  // What may be bought right now, in priority order. HP/MP count the whole potion stock, mall bags included.
   buyers() {
     const c = this.cfg(), out = [];
     if (c.hp?.on) out.push({ label: 'HP potion bag', ref: MALL_HP_REF, low: c.hp.low, target: c.hp.target, count: () => Potion.count('hp') });
+    if (c.mp?.on) out.push({ label: 'MP potion bag', ref: 5913, low: c.mp.low, target: c.mp.target, count: () => Potion.count('mp') });
     if (c.damageInc?.on) out.push({ label: '20% damage scroll pack', ref: 3767, low: c.damageInc.low, target: c.damageInc.target, count: () => this.count(3767) });
     if (c.damageAbs?.on) out.push({ label: '20% resistance scroll pack', ref: 3768, low: c.damageAbs.low, target: c.damageAbs.target, count: () => this.count(3768) });
+    if (c.reverse?.on) out.push({ label: 'Reverse Return Scroll pack', ref: 3795, low: c.reverse.low, target: c.reverse.target, count: () => this.count(3795) });
     return out;
   },
   tick() {
@@ -16348,12 +16350,18 @@ const UI = {
       this.check('Buy HP potion bags when the total HP stock is low', () => M().hp.on, v => M().hp.on = v),
       this.number('HP low stock ≤', () => M().hp.low, v => M().hp.low = v, 0, 9999),
       this.number('HP refill to', () => M().hp.target, v => M().hp.target = v, 1, 100000),
+      this.check('Buy MP potion bags when the total MP stock is low', () => M().mp.on, v => M().mp.on = v),
+      this.number('MP low stock ≤', () => M().mp.low, v => M().mp.low = v, 0, 9999),
+      this.number('MP refill to', () => M().mp.target, v => M().mp.target = v, 1, 100000),
       this.check('Buy 20% damage scrolls', () => M().damageInc.on, v => M().damageInc.on = v),
       this.number('Damage scrolls low stock ≤', () => M().damageInc.low, v => M().damageInc.low = v, 0, 999),
       this.number('Damage scrolls refill to', () => M().damageInc.target, v => M().damageInc.target = v, 1, 9999),
       this.check('Buy 20% resistance scrolls', () => M().damageAbs.on, v => M().damageAbs.on = v),
       this.number('Resistance scrolls low stock ≤', () => M().damageAbs.low, v => M().damageAbs.low = v, 0, 999),
       this.number('Resistance scrolls refill to', () => M().damageAbs.target, v => M().damageAbs.target = v, 1, 9999),
+      this.check('Buy Reverse Return Scrolls here (the merchant with gold stays cheaper)', () => M().reverse.on, v => M().reverse.on = v),
+      this.number('Reverse scrolls low stock ≤', () => M().reverse.low, v => M().reverse.low = v, 0, 999),
+      this.number('Reverse scrolls refill to', () => M().reverse.target, v => M().reverse.target = v, 1, 9999),
       el('p', 'One bag or pack is bought per order and the delivered amount is measured from the inventory, so an unknown pack size only means another order. Prices come from the live catalogue, never from remembered addresses.', 'muted')),
       this.group('Battle scrolls',
         this.check('Keep a 20% damage scroll active', () => S().damageInc, v => S().damageInc = v),

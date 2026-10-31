@@ -3283,10 +3283,12 @@ test('the mall probe is read-only: it opens the catalogue and never buys', () =>
 // ---- Item mall buyer and battle scrolls ----
 function mallFixture(change = {}) {
   const f = fixture();
-  f.Settings.profile.mall = { on: true, budgetSilk: 200, hp: { on: true, low: 500, target: 2000 }, damageInc: { on: false, low: 5, target: 20 }, damageAbs: { on: false, low: 5, target: 20 } };
+  f.Settings.profile.mall = { on: true, budgetSilk: 200, hp: { on: true, low: 500, target: 2000 }, mp: { on: false, low: 500, target: 2000 }, damageInc: { on: false, low: 5, target: 20 }, damageAbs: { on: false, low: 5, target: 20 }, reverse: { on: false, low: 10, target: 50 } };
   f.World.gp.itemMall = { tabs: [], silk: 152, giftSilk: 0, points: 0, pending: false, revision: 1, ...change.itemMall,
     offers: [
       { group: 852, shop: 2, tab: 2, slot: 6, packageId: 19981, name: 'HP SuperSet 5 bag', silk: 82, giftSilk: 0, purchaseLimit: 5, itemIds: [5912] },
+      { group: 852, shop: 2, tab: 2, slot: 7, packageId: 19982, name: 'MP SuperSet 5 bag', silk: 82, giftSilk: 0, purchaseLimit: 5, itemIds: [5913] },
+      { group: 852, shop: 2, tab: 1, slot: 5, packageId: 19974, name: 'Reverse Return Scroll', silk: 14, giftSilk: 0, purchaseLimit: 5, itemIds: [3795] },
       { group: 852, shop: 2, tab: 1, slot: 0, packageId: 19963, name: 'Damage scroll', silk: 25, giftSilk: 0, purchaseLimit: 5, itemIds: [3767] },
     ] };
   return f;
@@ -3441,6 +3443,27 @@ test('reverse return scrolls join the merchant restock list', () => {
   assert.equal(f.Restock.supplies().some(s => s.kind === 'reverse'), false, 'off by default');
   f.Settings.profile.potion.restock.reverse.on = true;
   assert.deepEqual(JSON.parse(JSON.stringify(f.Restock.supplies().find(s => s.kind === 'reverse'))), { kind: 'reverse', on: true, refObjId: 3795, low: 10, target: 50 });
+});
+test('the mall buyer also refills MP bags and reverse scrolls from the live catalogue', () => {
+  const f = mallFixture();
+  f.Settings.profile.mall.hp.on = false;
+  f.Settings.profile.mall.mp = { on: true, low: 8000, target: 9000 };
+  f.Settings.profile.mall.reverse = { on: true, low: 90, target: 95 };
+  f.Hunt.start();
+  f.MallBuyer.tick();
+  assert.deepEqual(JSON.parse(JSON.stringify(mallBuys(f).map(c => c.request.packageId))), [19982], 'MP goes first among the armed buyers');
+  f.advance(2000);
+  f.World.applyGameplay({ ...f.World.gp, inventory: [{ slot: 16, refObjId: 5913, typeFlags: 4332, quantity: 1000, name: 'MP' }], itemMall: { ...f.World.gp.itemMall, revision: 2 } });
+  f.MallBuyer.tick();
+  assert.equal(f.MallBuyer.spentSilk, 82);
+  f.Settings.profile.mall.mp.on = false;
+  f.advance(2000); f.MallBuyer.tick();
+  assert.deepEqual(JSON.parse(JSON.stringify(mallBuys(f).map(c => c.request.packageId))), [19982, 19974], 'the reverse scroll pack follows');
+  f.advance(2000);
+  f.World.applyGameplay({ ...f.World.gp, inventory: [{ slot: 16, refObjId: 5913, typeFlags: 4332, quantity: 1000, name: 'MP' }, { slot: 17, refObjId: 3795, typeFlags: 6636, quantity: 5, name: 'Reverse' }], itemMall: { ...f.World.gp.itemMall, revision: 3 } });
+  f.MallBuyer.tick();
+  assert.equal(f.MallBuyer.spentSilk, 96, '82 + 14, both measured deliveries');
+  assert.match(f.MallBuyer.message, /delivered/);
 });
 test('a rested pet is unblocked the moment its HP moves again', () => {
   const f = petPotionFixture();
