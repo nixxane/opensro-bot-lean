@@ -3,7 +3,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(__dirname + '/bot.lean.user.js', 'utf8');
 const isolated = source.slice(0, source.lastIndexOf('installWorkerHook();')) +
-  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, stopAll, toggleBot, userStop, RunIntent, Retry, boot, Ticker, Sound, LeanMap};\n})();';
+  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, boot, Ticker, Sound, LeanMap};\n})();';
 function fixture(document) {
   let time = 100000;
   const storage = new Map(), commands = [], notices = [], intervals = [], timers = [];
@@ -3166,6 +3166,98 @@ test('the maximum is learned from the observed HP, not the catalogue (live regre
   assert.equal(g.PetPotion.pets()[0].max, 300, 'a first-seen pet measures against its own current HP until a higher value shows');
   g.World.applyGameplay({ ...g.World.gp, cosRecords: [{ gid: 52, refObjId: 500, band: 3, hp: 500, status: 5, dead: false }] });
   g.Controller.tick(); assert.equal(g.PetPotion.pets()[0].max, 500, 'a later higher HP raises the learned maximum');
+});
+// ---- Attack pet assist (cos-pet-attack / cos-follow) ----
+// The player stands at (100, 100); distances below are in world units, 10 per metre (radius default 15 m = 150).
+function petAttackFixture(petX = 300) {
+  const f = fixture(); f.Settings.profile.pet.attack.on = true;
+  f.World.ents.set(50, { gid: 50, kind: 'cos', refObjId: 500, ownerGid: 1, regionId: 1, x: petX, y: 0, z: 100, movementMode: 0, appearanceState: [0, 0, 0] });
+  f.World.gp.cosRecords = [{ gid: 50, refObjId: 500, band: 3, hp: 1000, mp: 0, status: 5, dead: false, commandMode: 0 }];
+  return f;
+}
+const petOrders = f => JSON.parse(JSON.stringify(f.commands.filter(c => c.kind === 'cos-pet-attack' || c.kind === 'cos-follow')));
+const attackMob = (f, gid, x) => { const e = { gid, kind: 'monster', name: 'Mob ' + gid, regionId: 1, x, y: 0, z: 100, attackFlags: 16, appearanceState: [0] }; f.World.ents.set(gid, e); return e; };
+test('the attack pet follows every new bot target, and a near pet attacks at once', () => {
+  assert.equal(fixture().Settings.profile.pet.attack.on, false, 'off by default');
+  const f = petAttackFixture(110); // 1 m from the player: inside the call-back radius
+  f.Hunt.start(); attackMob(f, 30, 120); f.World.gp.target = 30; f.Hunt.tick();
+  assert.deepEqual(petOrders(f), [{ kind: 'cos-pet-attack', gid: 30, pet: 50 }], 'no call-back for a pet already at my side');
+  f.advance(750); f.World.ents.delete(30); attackMob(f, 31, 130); f.World.gp.target = 31; f.Hunt.tick();
+  assert.deepEqual(petOrders(f).slice(1), [{ kind: 'cos-pet-attack', gid: 31, pet: 50 }], 'each new target is handed over at once');
+  assert.match(f.PetAttack.message, /Pet attacking Mob 31/);
+});
+test('a far pet is called back first and ordered onto the target once it is home', () => {
+  const f = petAttackFixture(300); // 20 m from the player: outside the radius
+  f.Hunt.start(); attackMob(f, 30, 120); f.World.gp.target = 30; f.Hunt.tick();
+  assert.deepEqual(petOrders(f), [{ kind: 'cos-follow', gid: 50 }], 'the far pet is called home before anything else');
+
+  assert.equal(f.PetAttack.message, 'Pet returning before the next attack.');
+  f.World.ents.get(50).x = 105; // the pet arrives at my side
+  f.Hunt.tick();
+  assert.deepEqual(petOrders(f).slice(1), [{ kind: 'cos-pet-attack', gid: 30, pet: 50 }], 'from my side it sets out to the target');
+});
+test('the call-back gives up after the timeout and orders the attack anyway', () => {
+  const f = petAttackFixture(300); f.Settings.profile.pet.attack.timeout = 2;
+  f.Hunt.start(); attackMob(f, 30, 120); f.World.gp.target = 30; f.Hunt.tick();
+  assert.equal(petOrders(f)[0].kind, 'cos-follow');
+  f.advance(2100); f.Hunt.tick();
+  assert.deepEqual(petOrders(f).slice(1), [{ kind: 'cos-pet-attack', gid: 30, pet: 50 }], 'the order goes out even though the pet never came home');
+});
+test('no orders without an owned living attack pet, with the feature off, or for a target that died', () => {
+  const f = petAttackFixture(110);
+  f.World.gp.cosRecords = [{ gid: 50, refObjId: 500, band: 4, hp: 100, status: 5, dead: false }]; // pickup pet only
+  f.Hunt.start(); attackMob(f, 30, 120); f.World.gp.target = 30; f.Hunt.tick();
+  assert.equal(petOrders(f).length, 0, 'the pickup pet is never commanded by the assist');
+  f.World.ents.get(50).ownerGid = 999; f.World.gp.cosRecords = [{ gid: 50, refObjId: 500, band: 3, hp: 100, status: 5, dead: false }];
+  f.Hunt.tick(); assert.equal(petOrders(f).length, 0, 'someone else\'s pet is not ours');
+  f.World.ents.get(50).ownerGid = 1; f.World.gp.cosRecords[0].dead = true;
+  f.Hunt.tick(); assert.equal(petOrders(f).length, 0, 'a dead pet is left to the revive feature');
+  const g = petAttackFixture(110); g.Settings.profile.pet.attack.on = false;
+  g.Hunt.start(); attackMob(g, 30, 120); g.World.gp.target = 30; g.Hunt.tick();
+  assert.equal(petOrders(g).length, 0, 'the feature off sends nothing');
+  const h = petAttackFixture(300); h.Hunt.start(); attackMob(h, 30, 120); h.World.gp.target = 30; h.Hunt.tick();
+  assert.equal(petOrders(h)[0].kind, 'cos-follow');
+  h.World.ents.delete(30); h.advance(4000); h.Hunt.tick();
+  assert.equal(petOrders(h).filter(c => c.kind === 'cos-pet-attack').length, 0, 'no order for a target that died meanwhile; the pet finishes coming home');
+});
+test('the attack order repeats, the pet waits at my side between targets, and trips pause everything', () => {
+  const f = petAttackFixture(110);
+  f.Hunt.start(); attackMob(f, 30, 120); f.World.gp.target = 30; f.Hunt.tick();
+  assert.equal(petOrders(f).length, 1);
+  f.advance(4999); f.Hunt.tick(); assert.equal(petOrders(f).length, 1, 'within the repeat window nothing is resent');
+  f.advance(300); f.Hunt.tick(); assert.equal(petOrders(f).length, 2, 'the order repeats so a lost one never leaves the pet idle');
+  f.World.ents.delete(30); f.World.gp.target = 0; f.Hunt.targetGid = 0;
+  f.World.ents.get(50).x = 300; f.advance(5000); f.Hunt.tick();
+  assert.deepEqual(petOrders(f).at(-1), { kind: 'cos-follow', gid: 50 }, 'between targets the pet is called back to my side');
+  const before = petOrders(f).length;
+  f.Town.trip = { at: 1 }; f.advance(6000); f.Hunt.tick();
+  assert.equal(petOrders(f).length, before, 'no pet order while a trip owns the character');
+  f.Town.trip = null;
+});
+test('a pet summoned mid-fight adopts the target the bot is already on', () => {
+  const f = fixture(); f.Settings.profile.pet.attack.on = true; // no attack pet yet
+  f.Hunt.start(); attackMob(f, 30, 120); f.World.gp.target = 30; f.Hunt.tick();
+  assert.equal(petOrders(f).length, 0, 'no pet yet: no orders');
+  // the attack pet appears next to the player while the same monster is still being fought
+  f.World.ents.set(50, { gid: 50, kind: 'cos', refObjId: 500, ownerGid: 1, regionId: 1, x: 110, y: 0, z: 100, movementMode: 0, appearanceState: [0, 0, 0] });
+  f.World.gp.cosRecords = [{ gid: 50, refObjId: 500, band: 3, hp: 1000, mp: 0, status: 5, dead: false, commandMode: 0 }];
+  f.advance(500); f.Hunt.tick();
+  assert.deepEqual(petOrders(f), [{ kind: 'cos-pet-attack', gid: 30, pet: 50 }], 'it joins the current target at once');
+});
+test('a target the bot released while still alive is released by the pet too', () => {
+  const f = petAttackFixture(110);
+  f.Hunt.start(); attackMob(f, 30, 120); f.World.gp.target = 30; f.Hunt.tick();
+  assert.equal(petOrders(f).length, 1);
+  // the obstacle logic drops this target and the search finds nothing: the bot no longer wants it while it lives
+  f.Hunt.targetGid = 0; f.advance(60000); f.Hunt.tick();
+  assert.equal(petOrders(f).length, 1, 'no re-send for a target the bot no longer wants');
+  assert.equal(f.PetAttack.pending, 0);
+  assert.match(f.PetAttack.message, /Waiting for a target/);
+});
+test('pet attack settings are kept with the character profile', () => {
+  const f = fixture();
+  f.Settings.profile.pet.attack = { on: true, recall: false, radius: 25, timeout: 7, resend: 9 };
+  assert.deepEqual(JSON.parse(JSON.stringify(f.botProfile(JSON.parse(JSON.stringify(f.Settings.profile))).pet.attack)), { on: true, recall: false, radius: 25, timeout: 7, resend: 9 });
 });
 test('a rested pet is unblocked the moment its HP moves again', () => {
   const f = petPotionFixture();
