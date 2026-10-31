@@ -10093,16 +10093,17 @@ const MallProbe = {
 // full bag) backs that item off for a minute instead. The merchant town trips stay the primary supply: this never
 // blocks hunting, it just tops up mid-fight between targets.
 const MALL_HP_REF = 5912;   // HP SuperSet 5 bag (the X-Large stack the merchant route cannot sell)
-const MALL_BUY_GAP_MS = 2000, MALL_REFUSE_BACKOFF_MS = 60000, MALL_TIMEOUT_MS = 9500;
+const MALL_BUY_GAP_MS = 2000, MALL_REFUSE_BACKOFF_MS = 60000, MALL_TIMEOUT_MS = 9500, MALL_CALM_MS = 1500, MALL_PROBE_MS = 10000;
 const MallBuyer = {
-  pending: null, spentSilk: 0, openedAt: -Infinity, lastAt: -Infinity, poison: false, refused: new Map(), goals: new Map(), message: 'Item mall off.',
+  pending: null, spentSilk: 0, openedAt: -Infinity, lastAt: -Infinity, poison: false, refused: new Map(), goals: new Map(),
+  busyAt: -Infinity, probeAt: -Infinity, probeRevision: null, message: 'Item mall off.',
   cfg() { return Settings.profile.mall; },
   on() { return !!this.cfg().on && (Number(this.cfg().budgetSilk) || 0) > 0; },
   state() { return World.gp?.itemMall ?? null; },
   silk() { return Number(this.state()?.silk ?? 0); },
   count(ref) { return World.items().filter(i => i.refObjId === ref).reduce((n, i) => n + (i.quantity ?? 1), 0); },
   reset() { this.pending = null; this.spentSilk = 0; this.openedAt = -Infinity; this.lastAt = -Infinity; this.refused.clear(); this.goals.clear(); this.message = 'Item mall off.'; },
-  unpoison() { this.poison = false; },
+  unpoison() { this.poison = false; this.probeRevision = null; },
   // The live offer whose package contains this item. Never a remembered address: the server stale-checks packageId.
   offerFor(ref) { return (this.state()?.offers || []).find(o => (o.itemIds || []).includes(ref) && (o.silk || 0) > 0) || null; },
   // What may be bought right now, in priority order. HP counts the whole potion stock, mall bags included.
@@ -10114,9 +10115,30 @@ const MallBuyer = {
     return out;
   },
   tick() {
-    if (this.poison) { this.message = 'Item mall buying is blocked: a purchase was not confirmed. It resumes after you re-enter the game.'; return false; }
+    if (!World.inWorld() || World.isDead() || !Hunt.running || Town.trip || Restock.trip || Restock.activeShop() || World.gp?.inventoryPending || World.gp?.storage) { this.busyAt = now(); return false; }
+    if (this.poison) {
+      // An unconfirmed order may simply never have reached the server: the worker refuses gameplay mall
+      // commands while an inventory transaction is open and answers nothing. A read-only catalogue open
+      // is the safe probe — only a responsive mall moves its revision, so a change proves the session is
+      // usable again (and a genuinely poisoned client stays silent, keeping the block).
+      const s = this.state();
+      if (now() - this.probeAt >= MALL_PROBE_MS && Cmd.spaced('mall-open')) {
+        if (s && this.probeRevision == null) this.probeRevision = s.revision;
+        if (Cmd.raw({ kind: 'mall-open' }, 'Item mall: reopen the catalogue (health probe)')) this.probeAt = now();
+      }
+      if (s && this.probeRevision != null && s.revision !== this.probeRevision) {
+        this.poison = false; this.probeRevision = null; this.lastAt = now() - MALL_BUY_GAP_MS;
+        this.message = 'Item mall responsive again; buying resumes.';
+        Log.info('Item mall: ' + this.message);
+      } else {
+        this.message = 'Item mall buying is blocked after an unconfirmed order; probing the catalogue.';
+        return false;
+      }
+    }
     if (!this.on()) return false;
-    if (!World.inWorld() || World.isDead() || !Hunt.running || Town.trip || Restock.trip || Restock.activeShop() || World.gp?.inventoryPending || World.gp?.storage) return false;
+    // Let an item-use that has not published its inventory transaction yet clear first: the worker
+    // silently refuses a mall order that lands inside one (seen live: the scroll buff's use).
+    if (now() - this.busyAt < MALL_CALM_MS) return false;
     const p = this.pending;
     if (p) {
       const s = this.state(), count = p.countFn();

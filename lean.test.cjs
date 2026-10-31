@@ -3381,11 +3381,39 @@ test('an unconfirmed mall order blocks all mall buying until the world is re-ent
   assert.match(f.MallBuyer.message, /blocked/);
   f.advance(60000); f.MallBuyer.tick();
   assert.equal(mallBuys(f).length, 1);
+  assert.ok(f.commands.some(c => c.kind === 'mall-open'), 'the blocked buyer keeps probing the catalogue read-only');
   f.bus.emit('hunt', true); // a fresh bot run keeps the poison: the client state is the limit
   assert.equal(f.MallBuyer.poison, true);
   assert.equal(f.MallBuyer.spentSilk, 0, 'the budget itself resets per run');
   f.MallBuyer.unpoison(); f.MallBuyer.tick(); // re-entering the world unblocks
   assert.equal(mallBuys(f).length, 2, 'after the resync buying resumes');
+});
+test('an order never races an in-flight inventory transaction (live regression)', () => {
+  // Live: the scroll buff's item-use and the mall order went out in the same second; the worker silently
+  // refuses mall commands inside an inventory transaction and the unconfirmed order looked like a poison.
+  const f = mallFixture();
+  f.Hunt.start();
+  f.World.gp.inventoryPending = true;
+  f.MallBuyer.tick();
+  assert.equal(mallBuys(f).length, 0, 'nothing is ordered inside a transaction');
+  f.World.gp.inventoryPending = false;
+  f.MallBuyer.tick();
+  assert.equal(mallBuys(f).length, 0, 'the calm window is waited out before ordering');
+  f.advance(1600); f.MallBuyer.tick();
+  assert.equal(mallBuys(f).length, 1, 'after the calm window the order goes out');
+});
+test('a blocked buyer recovers by itself when the catalogue answers again', () => {
+  const f = mallFixture();
+  f.Hunt.start();
+  f.MallBuyer.tick(); f.advance(10000); f.MallBuyer.tick();
+  assert.equal(f.MallBuyer.poison, true);
+  f.advance(10000); f.MallBuyer.tick(); // the probe goes out
+  assert.equal(f.MallBuyer.poison, true, 'a silent catalogue keeps the block');
+  f.World.applyGameplay({ ...f.World.gp, itemMall: { ...f.World.gp.itemMall, revision: f.World.gp.itemMall.revision + 1 } });
+  f.MallBuyer.tick();
+  assert.equal(f.MallBuyer.poison, false, 'a moved revision proves the mall is responsive');
+  assert.match(f.MallBuyer.message, /responsive|ordered/, 'and the very next order goes out');
+  assert.equal(mallBuys(f).length, 2, 'buying resumes in the same tick');
 });
 test('battle scrolls are re-used only when their buff runs out', () => {
   const f = fixture();
