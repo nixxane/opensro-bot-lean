@@ -3,7 +3,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(__dirname + '/bot.lean.user.js', 'utf8');
 const isolated = source.slice(0, source.lastIndexOf('installWorkerHook();')) +
-  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, boot, Ticker, Sound, LeanMap};\n})();';
+  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, ScrollBuff, boot, Ticker, Sound, LeanMap};\n})();';
 function fixture(document) {
   let time = 100000;
   const storage = new Map(), commands = [], notices = [], intervals = [], timers = [];
@@ -3279,6 +3279,140 @@ test('the mall probe is read-only: it opens the catalogue and never buys', () =>
     assert.equal(f.MallProbe.dump('potion').shown, 1);
     assert.equal(f.MallProbe.dump('avatar').shown, 0);
   } finally { console.table = table; }
+});
+// ---- Item mall buyer and battle scrolls ----
+function mallFixture(change = {}) {
+  const f = fixture();
+  f.Settings.profile.mall = { on: true, budgetSilk: 200, hp: { on: true, low: 500, target: 2000 }, damageInc: { on: false, low: 5, target: 20 }, damageAbs: { on: false, low: 5, target: 20 } };
+  f.World.gp.itemMall = { tabs: [], silk: 152, giftSilk: 0, points: 0, pending: false, revision: 1, ...change.itemMall,
+    offers: [
+      { group: 852, shop: 2, tab: 2, slot: 6, packageId: 19981, name: 'HP SuperSet 5 bag', silk: 82, giftSilk: 0, purchaseLimit: 5, itemIds: [5912] },
+      { group: 852, shop: 2, tab: 1, slot: 0, packageId: 19963, name: 'Damage scroll', silk: 25, giftSilk: 0, purchaseLimit: 5, itemIds: [3767] },
+    ] };
+  return f;
+}
+const mallBuys = f => f.commands.filter(c => c.kind === 'mall-buy');
+test('the mall buyer tops up HP from the live catalogue, one measured order at a time', () => {
+  const f = mallFixture();
+  f.Settings.profile.mall.budgetSilk = 300; f.World.gp.itemMall.silk = 200;
+  f.Hunt.start();
+  f.MallBuyer.tick();
+  assert.deepEqual(JSON.parse(JSON.stringify(mallBuys(f))), [{ kind: 'mall-buy', request: { group: 852, shop: 2, tab: 2, slot: 6, quantity: 1, points: 0, packageId: 19981 } }], 'one bag at the live address');
+  f.MallBuyer.tick();
+  assert.equal(mallBuys(f).length, 1, 'the order owns the loop until confirmed');
+  f.advance(2000);
+  f.World.applyGameplay({ ...f.World.gp, inventory: [{ slot: 16, refObjId: 5912, typeFlags: 2284, quantity: 1000, name: 'HP Recovery potion (X-large)' }],
+    itemMall: { ...f.World.gp.itemMall, revision: 2, silk: 118 } });
+  f.MallBuyer.tick();
+  assert.equal(f.MallBuyer.spentSilk, 82, 'the delivered bag is paid from the budget');
+  assert.match(f.MallBuyer.message, /delivered/);
+  f.advance(2000); f.MallBuyer.tick();
+  assert.equal(mallBuys(f).length, 2, 'still below the refill target: the refill continues');
+  f.advance(2000);
+  f.World.applyGameplay({ ...f.World.gp, inventory: [{ slot: 16, refObjId: 5912, typeFlags: 2284, quantity: 2000, name: 'HP Recovery potion (X-large)' }],
+    itemMall: { ...f.World.gp.itemMall, revision: 3, silk: 36 } });
+  f.MallBuyer.tick();
+  assert.equal(f.MallBuyer.spentSilk, 164, 'both bags are paid');
+  f.advance(2000); f.MallBuyer.tick();
+  assert.equal(mallBuys(f).length, 2, 'the refill target is reached: no third order');
+});
+test('the mall buyer stops at the budget, an empty wallet or a full bag', () => {
+  let f = mallFixture({ itemMall: { silk: 152 } });
+  f.Settings.profile.mall.budgetSilk = 50; // below the 82 silk price
+  f.Hunt.start(); f.MallBuyer.tick();
+  assert.equal(mallBuys(f).length, 0, 'a budget below the price buys nothing');
+  assert.match(f.MallBuyer.message, /budget/);
+  f = mallFixture({ itemMall: { silk: 10 } });
+  f.Hunt.start(); f.MallBuyer.tick();
+  assert.equal(mallBuys(f).length, 0, 'an empty wallet buys nothing');
+  f = mallFixture({ itemMall: { silk: 152 } });
+  f.World.gp.inventorySlotCount = 13; // equipment slots only: no free bag slot
+  f.Hunt.start(); f.MallBuyer.tick();
+  assert.equal(mallBuys(f).length, 0, 'a full bag is not ordered into');
+  assert.match(f.MallBuyer.message, /bag slot/);
+  f.World.applyGameplay({ ...f.World.gp, inventory: [{ slot: 16, refObjId: 5912, typeFlags: 2284, quantity: 1, name: 'HP' }] });
+  f.MallBuyer.tick();
+  assert.equal(mallBuys(f).length, 1, 'an existing stack with room takes the delivery');
+  f = mallFixture(); f.Settings.profile.mall.on = false; f.Hunt.start(); f.MallBuyer.tick();
+  assert.equal(mallBuys(f).length, 0);
+  f = mallFixture(); f.Settings.profile.mall.budgetSilk = 0; f.Hunt.start(); f.MallBuyer.tick();
+  assert.equal(mallBuys(f).length, 0, 'a zero budget never buys');
+});
+test('a refused mall order backs off without poisoning the session', () => {
+  const f = mallFixture();
+  f.Hunt.start();
+  f.MallBuyer.tick(); assert.equal(mallBuys(f).length, 1);
+  f.advance(500);
+  // A real refusal bumps the revision exactly like a delivery, with the error set (game mall.ts reject()).
+  f.World.applyGameplay({ ...f.World.gp, itemMall: { ...f.World.gp.itemMall, pending: false, revision: 2, error: 'Mall purchase rejected: 128' } });
+  f.MallBuyer.tick();
+  assert.equal(f.MallBuyer.pending, null, 'the refusal is absorbed');
+  assert.equal(f.MallBuyer.spentSilk, 0, 'a refusal is never paid from the budget');
+  assert.match(f.MallBuyer.message, /refused/);
+  f.advance(10000); f.MallBuyer.tick();
+  assert.equal(mallBuys(f).length, 1, 'the refused item backs off for a minute, not re-ordered');
+  assert.equal(f.MallBuyer.poison, false, 'a refusal is not a timeout');
+});
+test('an error left over from an earlier refusal never refuses the next live order', () => {
+  const f = mallFixture();
+  f.Hunt.start();
+  f.MallBuyer.tick(); assert.equal(mallBuys(f).length, 1);
+  f.advance(500);
+  f.World.applyGameplay({ ...f.World.gp, itemMall: { ...f.World.gp.itemMall, pending: false, revision: 2, error: 'Mall purchase rejected: 128' } });
+  f.MallBuyer.tick(); // the refusal is absorbed and backed off
+  f.MallBuyer.refused.clear(); f.advance(61000); // the backoff lapses while HP is still low
+  f.MallBuyer.tick(); assert.equal(mallBuys(f).length, 2, 'a new order goes out despite the stale error');
+  f.advance(200); // the next tick still sees the pre-order snapshot: error present, revision unchanged
+  f.MallBuyer.tick();
+  assert.ok(f.MallBuyer.pending, 'a stale error does not refuse an order in flight');
+  assert.match(f.MallBuyer.message, /waiting for delivery/);
+  f.advance(2000);
+  f.World.applyGameplay({ ...f.World.gp, inventory: [{ slot: 16, refObjId: 5912, typeFlags: 2284, quantity: 1000, name: 'HP Recovery potion (X-large)' }],
+    itemMall: { ...f.World.gp.itemMall, pending: false, revision: 3, error: null } });
+  f.MallBuyer.tick();
+  assert.equal(f.MallBuyer.spentSilk, 82, 'the delivery is charged once, correctly');
+});
+test('an unconfirmed mall order blocks all mall buying until the world is re-entered', () => {
+  const f = mallFixture();
+  f.Hunt.start();
+  f.MallBuyer.tick(); assert.equal(mallBuys(f).length, 1);
+  f.advance(10000); f.MallBuyer.tick();
+  assert.equal(f.MallBuyer.poison, true, 'the 10 s client deadline poisons further orders');
+  assert.match(f.MallBuyer.message, /blocked/);
+  f.advance(60000); f.MallBuyer.tick();
+  assert.equal(mallBuys(f).length, 1);
+  f.bus.emit('hunt', true); // a fresh bot run keeps the poison: the client state is the limit
+  assert.equal(f.MallBuyer.poison, true);
+  assert.equal(f.MallBuyer.spentSilk, 0, 'the budget itself resets per run');
+  f.MallBuyer.unpoison(); f.MallBuyer.tick(); // re-entering the world unblocks
+  assert.equal(mallBuys(f).length, 2, 'after the resync buying resumes');
+});
+test('battle scrolls are re-used only when their buff runs out', () => {
+  const f = fixture();
+  f.Settings.profile.scroll.damageInc = true;
+  f.World.applyGameplay({ ...f.World.gp, inventory: [{ slot: 16, refObjId: 3767, typeFlags: 3820, quantity: 43, name: '20% damage increase scroll' }] });
+  f.Hunt.start();
+  f.ScrollBuff.tick();
+  assert.deepEqual(JSON.parse(JSON.stringify(f.commands.filter(c => c.kind === 'item-use'))), [{ kind: 'item-use', slot: 16 }], 'the scroll is used when no buff is active');
+  f.advance(500);
+  f.World.applyGameplay({ ...f.World.gp, attachedEffects: [{ gid: 1, skill: 3109 }] });
+  f.ScrollBuff.tick();
+  assert.equal(f.commands.filter(c => c.kind === 'item-use').length, 1, 'the active buff stops re-use');
+  assert.match(f.ScrollBuff.message, /active/);
+  f.ScrollBuff.reset();
+  f.World.applyGameplay({ ...f.World.gp, attachedEffects: [], inventory: [] });
+  f.ScrollBuff.tick();
+  assert.match(f.ScrollBuff.message, /No .*scroll in your bag/);
+  f.Settings.profile.scroll.damageInc = false;
+  f.ScrollBuff.tick();
+  assert.match(f.ScrollBuff.message, /off/);
+});
+test('reverse return scrolls join the merchant restock list', () => {
+  const f = fixture();
+  assert.equal(f.Restock.offerKind({ refObjId: 3795 }), 'reverse', 'the merchant offer is classified');
+  assert.equal(f.Restock.supplies().some(s => s.kind === 'reverse'), false, 'off by default');
+  f.Settings.profile.potion.restock.reverse.on = true;
+  assert.deepEqual(JSON.parse(JSON.stringify(f.Restock.supplies().find(s => s.kind === 'reverse'))), { kind: 'reverse', on: true, refObjId: 3795, low: 10, target: 50 });
 });
 test('a rested pet is unblocked the moment its HP moves again', () => {
   const f = petPotionFixture();

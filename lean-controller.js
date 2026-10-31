@@ -252,6 +252,8 @@ const Controller = {
       if (Chase.tick()) { this.mode = 'obstacle pursuit'; return; }
       if (BuffGear.tick()) { this.mode = 'buff gear'; return; }
       if (SpeedScroll.tick()) { this.mode = 'speed scroll'; return; }
+      this.guard('Battle scrolls', () => ScrollBuff.tick());
+      this.guard('Item mall', () => MallBuyer.tick());
       if (this.guard('Repair hammer', () => RepairHammer.tick())) { this.mode = 'repair hammer'; return; }
       if (Trade.tick()) { this.mode = 'trading'; return; }
       if (!WalkBack.active && !Travel.active && !Restock.trip && !Restock.recording && !Controller.resumeAfterRevive &&

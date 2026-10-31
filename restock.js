@@ -17,7 +17,7 @@ const Restock = {
     // Only single-item gold offers; package quantities have different purchase semantics.
     if (o.currency !== undefined && o.currency !== 1) return '';
     if (o.contents?.length && (o.contents.length !== 1 || o.contents[0].refObjId !== o.refObjId || o.contents[0].quantity !== 1)) return '';
-    return cat === 1 ? 'hp' : cat === 2 ? 'mp' : cat === 3 ? 'vigor' : cat === 9 ? 'hgp' : cat === 4 ? 'kit' : o.refObjId === 58 && ItemType.isCure(item?.typeFlags ?? 0) ? 'cure' : '';
+    return cat === 1 ? 'hp' : cat === 2 ? 'mp' : cat === 3 ? 'vigor' : cat === 9 ? 'hgp' : cat === 4 ? 'kit' : o.refObjId === 58 && ItemType.isCure(item?.typeFlags ?? 0) ? 'cure' : o.refObjId === 3795 ? 'reverse' : '';
   },
   activeShop() {
     const gp = World.gp;
@@ -72,7 +72,7 @@ const Restock = {
   unbuyable: new Set(),
   supplies() {
     const c = this.cfg();
-    return ['hp', 'mp', 'vigor', 'cure', 'hgp', 'kit']
+    return ['hp', 'mp', 'vigor', 'cure', 'hgp', 'kit', 'reverse']
       .filter(k => c[k].on && !this.unbuyable.has(c[k].refObjId) && ((k === 'hgp' || k === 'kit') ? c[k].refObjId > 0 : true))
       .map(k => ({ kind: k, ...c[k], ...(k === 'cure' ? { refObjId: 58 } : {}) }));
   },
@@ -181,7 +181,7 @@ const Restock = {
       }
       const offer = shop.offers.find(o => o.refObjId === s.refObjId && this.offerKind(o) === s.kind);
       // Pet supplies are a convenience here: a merchant without them must not stop the potion refill.
-      if (!offer && (s.kind === 'hgp' || s.kind === 'kit')) { t.skipped.push(s.refObjId); this.unbuyable.add(s.refObjId); this.tell('This merchant does not sell ' + (s.kind === 'hgp' ? 'HGP recovery potions' : 'pet recovery kits') + '; skipped them for this session.'); return true; }
+      if (!offer && (s.kind === 'hgp' || s.kind === 'kit' || s.kind === 'reverse')) { t.skipped.push(s.refObjId); this.unbuyable.add(s.refObjId); this.tell('This merchant does not sell ' + (s.kind === 'hgp' ? 'HGP recovery potions' : s.kind === 'kit' ? 'pet recovery kits' : 'Reverse Return Scrolls') + '; skipped them for this session.'); return true; }
       if (!offer) { this.fail(s.kind === 'cure' ? 'Special Universal Pill (small) is unavailable at this merchant.' : 'Selected potion is unavailable at this merchant.'); return true; }
       const before = this.count(s.refObjId);
       const stackRoom = World.items().filter(i => i.refObjId === s.refObjId).reduce((n, i) => n + Math.max(0, offer.maxStack - (i.quantity ?? 1)), 0);

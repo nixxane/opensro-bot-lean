@@ -200,6 +200,8 @@ const DEFAULT_PROFILE = {
   mastery: { enabled: false, ids: [], gap: 0, skills: false, scope: 'rotation', reserve: 0, order: 'masteries' },
   lure: { enabled: false, points: [], taunt: { id: 0, group: 0 }, area: { id: 0, group: 0 }, holdS: 10, pauseEveryM: 10, pauseS: 4, radius: 15, returnHpPct: 50, stopAt: 0 },
   pet: { attack: { on: false, recall: true, radius: 15, timeout: 3, resend: 5 } },
+  scroll: { damageInc: false, damageAbs: false },
+  mall: { on: false, budgetSilk: 0, hp: { on: false, low: 500, target: 2000 }, damageInc: { on: false, low: 5, target: 20 }, damageAbs: { on: false, low: 5, target: 20 } },
   party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', leaveIfNotLeader: false, acceptNames: '', autoRes: false, acceptRes: false, resRadius: 300, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
     support: { enabled: false, whileStopped: false, range: 30, heal: { id: 0, group: 0, pct: 60, self: false }, group: { id: 0, group: 0, pct: 60, count: 2 }, buffs: [] } },
   wardrobe: { on: true, phantom: true, realAnim: true, hideAvatars: false,
@@ -223,6 +225,7 @@ const DEFAULT_PROFILE = {
       mp: { on: true, refObjId: 0, low: 20, target: 300 },
       cure: { on: false, refObjId: 58, low: 10, target: 50 },
       vigor: { on: false, refObjId: 22, low: 10, target: 50 },
+      reverse: { on: false, refObjId: 3795, low: 10, target: 50 },
       hgp: { on: false, refObjId: 0, low: 5, target: 50 },
       kit: { on: false, refObjId: 0, low: 5, target: 50 },
       ammo: { arrow: { on: false, low: 200, target: 2000 }, bolt: { on: false, low: 200, target: 2000 } },
@@ -247,7 +250,7 @@ const DEFAULT_PROFILE = {
 function botProfile(input) {
   const result = deepMerge(DEFAULT_PROFILE, {});
   if (!input || typeof input !== 'object') return result;
-  for (const key of ['macro', 'potion', 'hunt', 'lure', 'pet', 'wardrobe', 'party', 'alchemy', 'mastery', 'statPoints', 'trace', 'items', 'trade', 'stall']) {
+  for (const key of ['macro', 'potion', 'hunt', 'lure', 'pet', 'scroll', 'mall', 'wardrobe', 'party', 'alchemy', 'mastery', 'statPoints', 'trace', 'items', 'trade', 'stall']) {
     if (!input[key] || typeof input[key] !== 'object') continue;
     for (const field of Object.keys(DEFAULT_PROFILE[key])) {
       if (field in input[key]) result[key][field] = deepMerge(DEFAULT_PROFILE[key][field], input[key][field]);
@@ -1443,7 +1446,7 @@ const Restock = {
     // Only single-item gold offers; package quantities have different purchase semantics.
     if (o.currency !== undefined && o.currency !== 1) return '';
     if (o.contents?.length && (o.contents.length !== 1 || o.contents[0].refObjId !== o.refObjId || o.contents[0].quantity !== 1)) return '';
-    return cat === 1 ? 'hp' : cat === 2 ? 'mp' : cat === 3 ? 'vigor' : cat === 9 ? 'hgp' : cat === 4 ? 'kit' : o.refObjId === 58 && ItemType.isCure(item?.typeFlags ?? 0) ? 'cure' : '';
+    return cat === 1 ? 'hp' : cat === 2 ? 'mp' : cat === 3 ? 'vigor' : cat === 9 ? 'hgp' : cat === 4 ? 'kit' : o.refObjId === 58 && ItemType.isCure(item?.typeFlags ?? 0) ? 'cure' : o.refObjId === 3795 ? 'reverse' : '';
   },
   activeShop() {
     const gp = World.gp;
@@ -1498,7 +1501,7 @@ const Restock = {
   unbuyable: new Set(),
   supplies() {
     const c = this.cfg();
-    return ['hp', 'mp', 'vigor', 'cure', 'hgp', 'kit']
+    return ['hp', 'mp', 'vigor', 'cure', 'hgp', 'kit', 'reverse']
       .filter(k => c[k].on && !this.unbuyable.has(c[k].refObjId) && ((k === 'hgp' || k === 'kit') ? c[k].refObjId > 0 : true))
       .map(k => ({ kind: k, ...c[k], ...(k === 'cure' ? { refObjId: 58 } : {}) }));
   },
@@ -1610,7 +1613,7 @@ const Restock = {
       }
       const offer = shop.offers.find(o => o.refObjId === s.refObjId && this.offerKind(o) === s.kind);
       // Pet supplies are a convenience here: a merchant without them must not stop the potion refill.
-      if (!offer && (s.kind === 'hgp' || s.kind === 'kit')) { t.skipped.push(s.refObjId); this.unbuyable.add(s.refObjId); this.tell('This merchant does not sell ' + (s.kind === 'hgp' ? 'HGP recovery potions' : 'pet recovery kits') + '; skipped them for this session.'); return true; }
+      if (!offer && (s.kind === 'hgp' || s.kind === 'kit' || s.kind === 'reverse')) { t.skipped.push(s.refObjId); this.unbuyable.add(s.refObjId); this.tell('This merchant does not sell ' + (s.kind === 'hgp' ? 'HGP recovery potions' : s.kind === 'kit' ? 'pet recovery kits' : 'Reverse Return Scrolls') + '; skipped them for this session.'); return true; }
       if (!offer) { this.fail(s.kind === 'cure' ? 'Special Universal Pill (small) is unavailable at this merchant.' : 'Selected potion is unavailable at this merchant.'); return true; }
       const before = this.count(s.refObjId);
       const stackRoom = World.items().filter(i => i.refObjId === s.refObjId).reduce((n, i) => n + Math.max(0, offer.maxStack - (i.quantity ?? 1)), 0);
@@ -7039,6 +7042,60 @@ const RepairHammer = {
 };
 
 
+// Keep the Item Mall's 20% battle scrolls active while the bot works: item 3767 -> skill 3109 (damage increase),
+// item 3768 -> skill 3110 (damage resistance) — both 30 minutes. Only bag stock is used here; buying more is the
+// Item Mall buyer's business. Like the speed scroll: never infer consumption from a local dispatch, one request at
+// a time, and the same blocked-while-travelling guards.
+const ScrollBuff = {
+  pending: null, attempts: 0, nextAt: 0, message: 'Battle scrolls off.',
+  kinds: {
+    damageInc: { item: 3767, skill: 3109, label: '20% damage increase' },
+    damageAbs: { item: 3768, skill: 3110, label: '20% damage resistance' },
+  },
+  reset() { this.pending = null; this.attempts = 0; this.nextAt = 0; this.message = 'Waiting for automation.'; },
+  active(k) { return World.buffRemaining(this.kinds[k].skill) > 0; },
+  enabled() { const c = Settings.profile.scroll; return Object.keys(this.kinds).filter(k => c[k]); },
+  tick() {
+    const wanted = this.enabled();
+    if (!wanted.length) { this.message = 'Battle scrolls off.'; return false; }
+    if (!World.inWorld() || World.isDead()) { this.message = 'Waiting for a living character in the world.'; return false; }
+    if (!Hunt.running) { this.message = 'Start the bot to keep the scrolls active.'; return false; }
+    const missing = wanted.filter(k => !this.active(k));
+    if (!missing.length) { this.pending = null; this.attempts = 0; this.message = 'Battle scrolls active.'; return false; }
+    if (Town.trip) { this.message = 'Waiting for town services to finish.'; return false; }
+    const blocked = World.gp.inventoryPending ? 'Waiting for the inventory transaction to finish.' :
+      World.gp.returnScroll ? 'Waiting for return-scroll travel.' :
+      World.isSitting() ? 'Waiting for the character to stand.' :
+      World.local()?.mountedOn ? 'Waiting for the character to dismount.' :
+      Restock.activeShop() || World.gp.storage ? 'Waiting for the shop or storage to close.' :
+      now() - Manual.lastAt < Hunt.cfg().manualPauseS * 1000 ? 'Waiting for the manual-control pause.' : '';
+    if (blocked) { this.message = blocked; return false; }
+    if (this.pending) {
+      // Only the kind that was sent owns this window: another scroll may still be missing.
+      if (this.active(this.pending.kind)) { this.pending = null; this.attempts = 0; }
+      else if (now() - this.pending.at < 8000) { this.message = 'Waiting for the scroll buff.'; return false; }
+      else {
+        this.pending = null; this.nextAt = now() + 30000 * this.attempts;
+        this.message = 'The scroll buff was not confirmed. Backing off before retrying.';
+        Log.warn(this.message);
+      }
+    }
+    if (this.attempts >= 3) { this.message = 'Battle scroll not confirmed after 3 attempts. Check the game and toggle the option to retry.'; return false; }
+    if (now() < this.nextAt) return false;
+    for (const k of missing) {
+      const def = this.kinds[k];
+      const item = World.items().find(i => i.refObjId === def.item && (i.quantity ?? 1) > 0);
+      if (!item) { this.message = 'No ' + def.label + ' scroll in your bag.'; continue; }
+      if (!Cmd.itemUse(item.slot)) { this.message = 'Waiting for item-use availability (potions have priority).'; return false; }
+      this.attempts++; this.pending = { kind: k, at: now() };
+      this.message = def.label + ' scroll requested; waiting for its buff.';
+      return true;
+    }
+    return false;
+  },
+};
+
+
 // Generated by gen-towns.py from the server data. Do not edit by hand.
 const TOWN_TABLE = [{"key":"EU","name":"Constantinople","arrival":{"regionId":26959,"x":950.0,"y":84.0,"z":1070.0},"services":{"storage":{"refObjId":7503,"regionId":26959,"x":1348.9,"y":80.0,"z":845.88},"vendor":{"refObjId":7497,"regionId":26959,"x":1338.79,"y":84.09,"z":1400.89},"smith":{"refObjId":7495,"regionId":26959,"x":784.69,"y":83.46,"z":1532.71},"trade":{"refObjId":7500,"regionId":26959,"x":351.01,"y":80.4,"z":228.24},"gate":{"refObjId":19074,"regionId":26959,"x":700.0,"y":80.0,"z":886.0}}},{"key":"WC","name":"Donwhang","arrival":{"regionId":26265,"x":957.0,"y":-80.0,"z":1508.0},"services":{"storage":{"refObjId":2058,"regionId":26265,"x":1260.35,"y":-105.81,"z":696.9},"vendor":{"refObjId":2053,"regionId":26265,"x":597.25,"y":-106.46,"z":1134.97},"smith":{"refObjId":2051,"regionId":26265,"x":1197.69,"y":-106.67,"z":1217.7},"trade":{"refObjId":2059,"regionId":26265,"x":393.06,"y":-106.62,"z":1560.31},"gate":{"refObjId":2095,"regionId":26521,"x":962.0,"y":-105.81,"z":8.0}}},{"key":"KT","name":"Hotan","arrival":{"regionId":23687,"x":1138.0,"y":250.0,"z":153.0},"services":{"storage":{"refObjId":2083,"regionId":23687,"x":1134.28,"y":243.75,"z":610.79},"vendor":{"refObjId":2074,"regionId":23687,"x":832.16,"y":243.86,"z":1093.64},"smith":{"refObjId":2072,"regionId":23687,"x":501.58,"y":243.58,"z":766.27},"trade":{"refObjId":2077,"regionId":23687,"x":1515.55,"y":243.99,"z":904.55},"gate":{"refObjId":2096,"regionId":23687,"x":1131.0,"y":243.75,"z":488.0}}},{"key":"CH","name":"Jangan","arrival":{"regionId":25000,"x":969.0,"y":0.0,"z":1369.0},"services":{"storage":{"refObjId":2014,"regionId":25000,"x":980.35,"y":-32.52,"z":989.19},"vendor":{"refObjId":2005,"regionId":25000,"x":1584.08,"y":0.0,"z":1407.29},"smith":{"refObjId":2003,"regionId":25000,"x":332.73,"y":0.0,"z":1406.7},"trade":{"refObjId":2010,"regionId":25000,"x":1760.32,"y":11.0,"z":480.22},"gate":{"refObjId":2094,"regionId":25000,"x":1254.0,"y":-32.52,"z":1374.0}}},{"key":"CA","name":"Samarkand","arrival":{"regionId":27244,"x":270.0,"y":180.0,"z":1421.0},"services":{"storage":{"refObjId":7537,"regionId":27244,"x":563.43,"y":180.0,"z":1131.66},"vendor":{"refObjId":7532,"regionId":27243,"x":1426.07,"y":180.0,"z":1851.0},"smith":{"refObjId":7530,"regionId":27499,"x":1762.61,"y":180.0,"z":809.78},"trade":{"refObjId":7535,"regionId":27244,"x":837.14,"y":180.0,"z":1823.25},"gate":{"refObjId":19075,"regionId":27499,"x":1917.0,"y":180.0,"z":108.0}}}];
 
@@ -7798,7 +7855,7 @@ const Town = {
     if (!offer || !(offer.maxStack > 0)) {
       // Pet supplies are a convenience here: a merchant without them must not stop the town trip, and must
       // not re-trigger one either: the supply is remembered as unbuyable until the merchant is re-recorded.
-      if (s.kind === 'hgp' || s.kind === 'kit') { t.buySkipped.push(s.refObjId); Restock.unbuyable.add(s.refObjId); this.message = 'This merchant does not sell ' + (s.kind === 'hgp' ? 'HGP recovery potions' : 'pet recovery kits') + '; skipped them for this session.'; UI.toast(this.message, 'warn', 6000); return; }
+      if (s.kind === 'hgp' || s.kind === 'kit' || s.kind === 'reverse') { t.buySkipped.push(s.refObjId); Restock.unbuyable.add(s.refObjId); this.message = 'This merchant does not sell ' + (s.kind === 'hgp' ? 'HGP recovery potions' : s.kind === 'kit' ? 'pet recovery kits' : 'Reverse Return Scrolls') + '; skipped them for this session.'; UI.toast(this.message, 'warn', 6000); return; }
       return this.fail(s.kind === 'scroll' ? 'Selected scroll is unavailable here.' : s.kind === 'cure' ? 'Special Universal Pill (small) is unavailable here.' : s.kind === 'vigor' ? 'The selected vigor potion size is unavailable here; choose another size in Supplies.' : 'X-Large ' + s.kind.toUpperCase() + ' potion is unavailable here.');
     }
     const before = Restock.count(s.refObjId), room = World.items().filter(i => i.refObjId === s.refObjId).reduce((n, i) => n + Math.max(0, offer.maxStack - (i.quantity ?? 1)), 0);
@@ -9863,6 +9920,8 @@ const Controller = {
       if (Chase.tick()) { this.mode = 'obstacle pursuit'; return; }
       if (BuffGear.tick()) { this.mode = 'buff gear'; return; }
       if (SpeedScroll.tick()) { this.mode = 'speed scroll'; return; }
+      this.guard('Battle scrolls', () => ScrollBuff.tick());
+      this.guard('Item mall', () => MallBuyer.tick());
       if (this.guard('Repair hammer', () => RepairHammer.tick())) { this.mode = 'repair hammer'; return; }
       if (Trade.tick()) { this.mode = 'trading'; return; }
       if (!WalkBack.active && !Travel.active && !Restock.trip && !Restock.recording && !Controller.resumeAfterRevive &&
@@ -10002,7 +10061,7 @@ for (const event of ['reset', 'profile', 'character']) bus.on(event, () => PetAt
 // Read-only Item Mall probe. Opens the mall catalogue with the game's own mall-open command — nothing is bought —
 // and prints the account balance and every offer with its live address and packageId, so real prices and item ids
 // can be captured before anything automated is built on top of them. mall-buy is deliberately absent from this
-// module, and nothing runs by itself: both functions are called by hand from the console.
+// object, and nothing runs by itself: both functions are called by hand from the console.
 const MallProbe = {
   open() {
     if (!World.inWorld()) return 'Enter the game first.';
@@ -10010,7 +10069,7 @@ const MallProbe = {
     return Cmd.raw({ kind: 'mall-open' }, 'Item mall: open catalogue (read-only)')
       ? 'Catalogue requested; read it with SROLean.mall.dump() a few seconds later.' : 'The command was not sent.';
   },
-  state() { return World.gp.itemMall ?? null; },
+  state() { return World.gp?.itemMall ?? null; },
   // dump('potion') lists only offers whose name contains the text (case-insensitive); dump() lists everything.
   // Returns the balances and prints one console row per offer: name, price, purchase limit, address, package, items.
   dump(filter = '') {
@@ -10026,6 +10085,114 @@ const MallProbe = {
       pending: s.pending, revision: s.revision, error: s.error ?? null };
   },
 };
+// The Item Mall buyer. The mall wallet is account-wide and burn-only, so every purchase is bounded by a per-bot-run
+// silk budget (mall.on + budgetSilk > 0), one order is in flight at a time, and one unit is bought per order: the
+// delivered amount is measured from the inventory, so an unknown package size just means another order next tick.
+// The game client poisons its mall state when a purchase is not confirmed within 10 s ("reconnect to resynchronize"),
+// so an unconfirmed order blocks all mall buying until the world is left — never resend. A refused order (balance,
+// full bag) backs that item off for a minute instead. The merchant town trips stay the primary supply: this never
+// blocks hunting, it just tops up mid-fight between targets.
+const MALL_HP_REF = 5912;   // HP SuperSet 5 bag (the X-Large stack the merchant route cannot sell)
+const MALL_BUY_GAP_MS = 2000, MALL_REFUSE_BACKOFF_MS = 60000, MALL_TIMEOUT_MS = 9500;
+const MallBuyer = {
+  pending: null, spentSilk: 0, openedAt: -Infinity, lastAt: -Infinity, poison: false, refused: new Map(), goals: new Map(), message: 'Item mall off.',
+  cfg() { return Settings.profile.mall; },
+  on() { return !!this.cfg().on && (Number(this.cfg().budgetSilk) || 0) > 0; },
+  state() { return World.gp?.itemMall ?? null; },
+  silk() { return Number(this.state()?.silk ?? 0); },
+  count(ref) { return World.items().filter(i => i.refObjId === ref).reduce((n, i) => n + (i.quantity ?? 1), 0); },
+  reset() { this.pending = null; this.spentSilk = 0; this.openedAt = -Infinity; this.lastAt = -Infinity; this.refused.clear(); this.goals.clear(); this.message = 'Item mall off.'; },
+  unpoison() { this.poison = false; },
+  // The live offer whose package contains this item. Never a remembered address: the server stale-checks packageId.
+  offerFor(ref) { return (this.state()?.offers || []).find(o => (o.itemIds || []).includes(ref) && (o.silk || 0) > 0) || null; },
+  // What may be bought right now, in priority order. HP counts the whole potion stock, mall bags included.
+  buyers() {
+    const c = this.cfg(), out = [];
+    if (c.hp?.on) out.push({ label: 'HP potion bag', ref: MALL_HP_REF, low: c.hp.low, target: c.hp.target, count: () => Potion.count('hp') });
+    if (c.damageInc?.on) out.push({ label: '20% damage scroll pack', ref: 3767, low: c.damageInc.low, target: c.damageInc.target, count: () => this.count(3767) });
+    if (c.damageAbs?.on) out.push({ label: '20% resistance scroll pack', ref: 3768, low: c.damageAbs.low, target: c.damageAbs.target, count: () => this.count(3768) });
+    return out;
+  },
+  tick() {
+    if (this.poison) { this.message = 'Item mall buying is blocked: a purchase was not confirmed. It resumes after you re-enter the game.'; return false; }
+    if (!this.on()) return false;
+    if (!World.inWorld() || World.isDead() || !Hunt.running || Town.trip || Restock.trip || Restock.activeShop() || World.gp?.inventoryPending || World.gp?.storage) return false;
+    const p = this.pending;
+    if (p) {
+      const s = this.state(), count = p.countFn();
+      // A refusal bumps the revision exactly like a delivery does, with the error set — so the error decides
+      // which one it was. An error left over from an earlier refusal does not: its revision is already behind.
+      if (s && !s.pending && s.revision > p.revision) {
+        if (s.error) {
+          this.refused.set(p.ref, now() + MALL_REFUSE_BACKOFF_MS);
+          this.pending = null;
+          this.message = 'Item mall refused ' + p.label + ' (' + s.error + ').';
+          UI.toast(this.message, 'warn', 6000);
+          return false;
+        }
+        this.spentSilk += p.silk;
+        this.pending = null;
+        this.message = p.label + ' delivered; ' + Math.max(0, count - p.before) + ' received.';
+        Log.info('Item mall: ' + this.message);
+        return false;
+      }
+      if (count > p.before) { this.spentSilk += p.silk; this.pending = null; this.message = p.label + ' delivered.'; return false; }
+      if (now() - p.at > MALL_TIMEOUT_MS) {
+        this.pending = null; this.poison = true;
+        this.message = 'Item mall purchase unconfirmed; mall buying blocked until you re-enter the game.';
+        Log.warn('Item mall: ' + this.message);
+        UI.toast(this.message, 'warn', 8000);
+        return false;
+      }
+      this.message = p.label + ' ordered; waiting for delivery.';
+      return false;
+    }
+    if (!this.state()) {
+      if (now() - this.openedAt < 3000) return false;
+      if (Cmd.spaced('mall-open') && Cmd.raw({ kind: 'mall-open' }, 'Item mall: open catalogue')) {
+        this.openedAt = now();
+        this.message = 'Item mall catalogue requested.';
+      }
+      return false;
+    }
+    if (this.state().pending) return false; // the game's own basket has an order out; leave it alone
+    if (now() - this.lastAt < MALL_BUY_GAP_MS) return false;
+    for (const b of this.buyers()) {
+      if ((this.refused.get(b.ref) ?? 0) > now()) continue;
+      const count = b.count();
+      // Crossing the low mark arms a refill all the way to the target, like the merchant restock's low/target pair.
+      if (count < b.low) this.goals.set(b.ref, b.target);
+      if (count >= (this.goals.get(b.ref) ?? 0)) continue;
+      const offer = this.offerFor(b.ref);
+      if (!offer) { this.message = 'No Item mall offer for ' + b.label + ' right now.'; continue; }
+      const price = Number(offer.silk) || 0;
+      if (price <= 0) continue;
+      // The client refuses to even send an order the wallet cannot honour in its other currencies, and the
+      // game would read that as an unconfirmed purchase: skip such offers here.
+      if ((Number(offer.giftSilk) || 0) > (Number(this.state()?.giftSilk) || 0)) { this.message = 'Not enough gift silk for ' + b.label + '.'; continue; }
+      const budget = Number(this.cfg().budgetSilk) || 0;
+      if (this.spentSilk + price > budget || price > this.silk()) {
+        this.message = 'The silk budget or balance stops ' + b.label + '.';
+        continue;
+      }
+      // Delivery lands in the bag: a free slot is needed unless the same stack has room.
+      const stack = World.items().find(i => i.refObjId === b.ref);
+      if (!stack && World.freeBagSlots() < 1) { this.message = 'No free bag slot for ' + b.label + '.'; continue; }
+      const request = { group: offer.group, shop: offer.shop, tab: offer.tab, slot: offer.slot, quantity: 1, points: 0, packageId: offer.packageId };
+      if (Cmd.spaced('mall-buy') && Cmd.raw({ kind: 'mall-buy', request }, 'Item mall: ' + b.label)) {
+        this.pending = { label: b.label, ref: b.ref, silk: price, before: count, countFn: b.count, revision: this.state().revision, at: now() };
+        this.lastAt = now();
+        this.message = b.label + ' ordered; waiting for delivery.';
+        return true;
+      }
+    }
+    return false;
+  },
+};
+
+// The silk budget is per bot run: a restart gives a fresh one, but a poisoned mall state survives it (the game
+// client itself refuses mall commands until the world is re-entered).
+bus.on('hunt', running => { if (running) { const poison = MallBuyer.poison; MallBuyer.reset(); MallBuyer.poison = poison; } });
 
 
 // Anti-stuck watchdog. While hunting it watches for confirmed progress (kills, XP, gold,
@@ -15827,7 +15994,7 @@ const UI = {
     } else if (this.current === 'Loot') {
       this.sections('lootCollection', 'lootWho', 'lootBalance');
     } else if (this.current === 'Supplies') {
-      this.sections('suppliesPotions', 'suppliesRestock');
+      this.sections('suppliesPotions', 'suppliesRestock', 'suppliesMall');
       this.pane.append(el('p', 'Town trips, what starts them, and arrows and bolts are on the Town page.', 'muted'));
     } else if (this.current === 'Town') {
       this.sections('townTrip', 'townWhen', 'townCycle', 'townAmmo');
@@ -15860,7 +16027,7 @@ const UI = {
   classicTabs() {
     return [
       { name: 'Settings', icon: 'action\\icon_cha_helper', pages: ['Supplies', 'Loot', 'Town', 'Combat', 'Settings'], sections: [
-        ['suppliesPotions', 'Autopotion settings'], ['suppliesRestock', 'Buy settings'], ['townWhen', 'Back town settings'],
+        ['suppliesPotions', 'Autopotion settings'], ['suppliesRestock', 'Buy settings'], ['suppliesMall', 'Item mall settings'], ['townWhen', 'Back town settings'],
         ['lootCollection', 'Pick settings'], ['lootWho', 'Who picks up what'], ['lootBalance'], ['combatMonsters', 'Attack preferences'],
         ['combatBerserk', 'Berserk settings'], ['settingsBehaviour', 'Attack behaviour / Protection'], ['settingsObstacles'], ['settingsAntiStuck']] },
       { name: 'Skills', icon: 'action\\icon_cha_auto_attack', pages: ['Combat'], sections: [
@@ -16141,9 +16308,35 @@ const UI = {
         this.select('Recovery kit', () => [[0, 'Choose the merchant\'s pet kits'], ...C().offers.filter(o => o.kind === 'kit').map(o => [o.refObjId, o.name])], () => C().kit.refObjId, v => C().kit.refObjId = Number(v)),
         this.number('Kits low stock ≤', () => C().kit.low, v => C().kit.low = v, 0, 9999),
         this.number('Kits refill to', () => C().kit.target, v => C().kit.target = v, 1, 10000),
-        el('p', 'Pet recovery kits for the attack and pickup pets, bought on the same refill trips as the pet food; a merchant without them skips them with a notice. Using them is set under Automatic potion use.', 'muted'));
+        el('p', 'Pet recovery kits for the attack and pickup pets, bought on the same refill trips as the pet food; a merchant without them skips them with a notice. Using them is set under Automatic potion use.', 'muted'),
+        this.check('Buy Reverse Return Scrolls', () => C().reverse.on, v => C().reverse.on = v),
+        this.number('Reverse scrolls low stock ≤', () => C().reverse.low, v => C().reverse.low = v, 0, 999),
+        this.number('Reverse scrolls refill to', () => C().reverse.target, v => C().reverse.target = v, 1, 9999),
+        el('p', 'Refills Reverse Return Scrolls at the recorded merchant with gold; a merchant without them skips it with a notice (the trip can still walk back).', 'muted'));
       shop.append(el('p', 'Refill targets are total potion counts, including what is already in your bag. Used for low-supply, full-bag and revival trips, and walking-route restock when the town cycle is off. Set MP refill to 1000 for 1,000 MP potions. Changes apply to the next trip.', 'muted'));
       host.append(shop);
+  },
+  section_suppliesMall(host) {
+    const M = () => Settings.profile.mall, S = () => Settings.profile.scroll;
+    host.append(this.group('Item mall',
+      this.check('Buy from the Item mall', () => M().on, v => M().on = v),
+      this.number('Silk budget per bot run (0 = never buy)', () => M().budgetSilk, v => M().budgetSilk = v, 0, 100000),
+      this.mallNote = el('p', '', 'muted'),
+      el('p', 'The mall wallet is shared by every character on the account and nothing refills it in the game, so every purchase is bounded by the budget above and one order is in flight at a time. Orders land straight in the bag while hunting; they never interrupt combat or a town trip, and the merchant stays the primary supply. An unconfirmed order blocks mall buying until you re-enter the game (the game itself demands that resync).', 'muted'),
+      this.check('Buy HP potion bags when the total HP stock is low', () => M().hp.on, v => M().hp.on = v),
+      this.number('HP low stock ≤', () => M().hp.low, v => M().hp.low = v, 0, 9999),
+      this.number('HP refill to', () => M().hp.target, v => M().hp.target = v, 1, 100000),
+      this.check('Buy 20% damage scrolls', () => M().damageInc.on, v => M().damageInc.on = v),
+      this.number('Damage scrolls low stock ≤', () => M().damageInc.low, v => M().damageInc.low = v, 0, 999),
+      this.number('Damage scrolls refill to', () => M().damageInc.target, v => M().damageInc.target = v, 1, 9999),
+      this.check('Buy 20% resistance scrolls', () => M().damageAbs.on, v => M().damageAbs.on = v),
+      this.number('Resistance scrolls low stock ≤', () => M().damageAbs.low, v => M().damageAbs.low = v, 0, 999),
+      this.number('Resistance scrolls refill to', () => M().damageAbs.target, v => M().damageAbs.target = v, 1, 9999),
+      el('p', 'One bag or pack is bought per order and the delivered amount is measured from the inventory, so an unknown pack size only means another order. Prices come from the live catalogue, never from remembered addresses.', 'muted')),
+      this.group('Battle scrolls',
+        this.check('Keep a 20% damage scroll active', () => S().damageInc, v => S().damageInc = v),
+        this.check('Keep a 20% resistance scroll active', () => S().damageAbs, v => S().damageAbs = v),
+        el('p', 'While the bot hunts, a scroll from your bag is used whenever its 30-minute buff runs out. Buying more is set above.', 'muted')));
   },
   section_townTrip(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
@@ -16571,6 +16764,12 @@ const UI = {
     if (!this.status) return;
     if (this.is('Supplies') && this.petPotionNote) { this.petPotionNote.textContent = this.petPotionNote.title = PetPotion.message; }
     if (this.is('Combat') && this.petAttackNote) { this.petAttackNote.textContent = this.petAttackNote.title = PetAttack.status(); }
+    if (this.is('Supplies') && this.mallNote) {
+      const m = () => MallBuyer.on()
+        ? MallBuyer.message + ' Spent ' + MallBuyer.spentSilk + ' silk this run; wallet ' + (World.gp?.itemMall?.silk ?? '—') + ' silk.'
+        : 'Item mall buying off.';
+      this.mallNote.textContent = this.mallNote.title = m();
+    }
     if (this.is('Supplies') && this.speedNote) this.speedNote.textContent = SpeedScroll.message;
     if (this.is('Supplies') && this.hammerNote) this.hammerNote.textContent = RepairHammer.message;
     if (this.is('Loot') && this.petNote) { const text = Loot.petStatus(); this.petNote.style.visibility = Loot.petMode() ? '' : 'hidden'; this.petNote.textContent = text; this.petNote.title = text; }
@@ -17446,12 +17645,15 @@ function boot() {
     const key = name ? 'profile:' + name : 'profile:default';
     if (key !== Settings.profileKey) { Town.lastScrollPoint = null; Town.deathPoint = null; stopAll(); Settings.useCharacter(name); }
   });
-  bus.on('profile', () => { PetPotion.reset(); AutoMastery.reset(); StatPoints.reset(); Trace.reset(); BuffGear.reset(); Town.lastScrollPoint = null; Town.deathPoint = null; SpeedScroll.reset(); RepairHammer.reset(); Party.reset(); Resurrect.reset(); stopAll(); Restock.cancelRecording(); Restock.unbuyable.clear(); Loot.reset(); Wardrobe.applyNow(); UI.draw(); });
+  bus.on('profile', () => { PetPotion.reset(); AutoMastery.reset(); StatPoints.reset(); Trace.reset(); BuffGear.reset(); Town.lastScrollPoint = null; Town.deathPoint = null; SpeedScroll.reset(); ScrollBuff.reset(); MallBuyer.reset(); MallBuyer.unpoison(); RepairHammer.reset(); Party.reset(); Resurrect.reset(); stopAll(); Restock.cancelRecording(); Restock.unbuyable.clear(); Loot.reset(); Wardrobe.applyNow(); UI.draw(); });
   bus.on('phase', phase => {
     if (phase !== 'world') {
       BuffGear.interrupt('World transition interrupted buff swaps.', true);
       Party.reset();
       SpeedScroll.reset();
+      ScrollBuff.reset();
+      MallBuyer.reset();
+      MallBuyer.unpoison();
       RepairHammer.reset();
       Resurrect.reset();
       if (Town.phase(phase) || Travel.phase(phase)) { Loot.reset(); return; }
@@ -17467,7 +17669,7 @@ function boot() {
       if (['recall-wait', 'reverse-wait'].includes(Town.trip.phase)) Town.trip.transition = true;
       else Town.fail('Unexpected world reset during town service.');
     }
-    SpeedScroll.reset(); RepairHammer.reset(); Party.reset(); Resurrect.reset(); Loot.reset(); Navigation.scene = null; Wardrobe.inv = Wardrobe.baseInv = Wardrobe.av = Wardrobe.baseAv = null; Wardrobe.body = '';
+    SpeedScroll.reset(); ScrollBuff.reset(); MallBuyer.reset(); RepairHammer.reset(); Party.reset(); Resurrect.reset(); Loot.reset(); Navigation.scene = null; Wardrobe.inv = Wardrobe.baseInv = Wardrobe.av = Wardrobe.baseAv = null; Wardrobe.body = '';
   });
   bus.on('attached', ({ late }) => { if (late) UI.toast('Attached after the game started. Reload for complete character data.', 'warn'); });
   bus.on('potion-empty', kind => UI.toast('Out of ' + kind.toUpperCase() + ' potions.', 'warn'));
@@ -17487,7 +17689,7 @@ function boot() {
   Ticker.start(() => Controller.tick(), 100);
   setInterval(() => { Wardrobe.tick(); UI.update(); }, 500);
   W.SROLean = { version: VERSION, stats: Stats, updates: Updates, diagnostics: Diagnostics, reports: Reports, alchemy: Alchemy, buffGear: BuffGear, world: World, settings: Settings, hunt: Hunt, loot: Loot, speedScroll: SpeedScroll, repairHammer: RepairHammer, resurrect: Resurrect, stall: Stall,
-    restock: Restock, town: Town, walkBack: WalkBack, travel: Travel, antiStuck: AntiStuck, chase: Chase, trap: Trap, autoMastery: AutoMastery, statPoints: StatPoints, share: ProfileShare, trace: Trace, setup: Setup, reconnect: Reconnect, petPotion: PetPotion, petAttack: PetAttack, mall: MallProbe, navigation: Navigation, route: Route, wardrobe: Wardrobe, wardrobeData: WdData, learned: Learned, controller: Controller, ui: UI, activity: Activity, map: LeanMap, render: RenderControl, support: Support, items: ItemRules, stop: stopAll, log: Log };
+    restock: Restock, town: Town, walkBack: WalkBack, travel: Travel, antiStuck: AntiStuck, chase: Chase, trap: Trap, autoMastery: AutoMastery, statPoints: StatPoints, share: ProfileShare, trace: Trace, setup: Setup, reconnect: Reconnect, petPotion: PetPotion, petAttack: PetAttack, mall: MallProbe, mallBuyer: MallBuyer, scrolls: ScrollBuff, navigation: Navigation, route: Route, wardrobe: Wardrobe, wardrobeData: WdData, learned: Learned, controller: Controller, ui: UI, activity: Activity, map: LeanMap, render: RenderControl, support: Support, items: ItemRules, stop: stopAll, log: Log };
   Log.info('NIX ready. F8 starts/stops; F7 folds; F6 or the × minimises and restores; Shift+F7 hides/shows the window.');
 }
 
