@@ -9975,6 +9975,9 @@ const PetAttack = {
   },
 };
 // engage() re-runs every tick with the same target, so only a real change hands the pet a new job.
+// The pet order gets the same per-kind gap as the mount's cos-attack; MIN_GAP lives in vendor/bot.js,
+// which is never edited, so the entry is set here at load time (the lean-pet-potion.js Cmd pattern).
+MIN_GAP['cos-pet-attack'] = 700;
 const petAttackEngage = Hunt.engage;
 Hunt.engage = function (target) {
   const before = this.targetGid;

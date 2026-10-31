@@ -3182,7 +3182,7 @@ test('the attack pet follows every new bot target, and a near pet attacks at onc
   const f = petAttackFixture(110); // 1 m from the player: inside the call-back radius
   f.Hunt.start(); attackMob(f, 30, 120); f.World.gp.target = 30; f.Hunt.tick();
   assert.deepEqual(petOrders(f), [{ kind: 'cos-pet-attack', gid: 30, pet: 50 }], 'no call-back for a pet already at my side');
-  f.advance(500); f.World.ents.delete(30); attackMob(f, 31, 130); f.World.gp.target = 31; f.Hunt.tick();
+  f.advance(750); f.World.ents.delete(30); attackMob(f, 31, 130); f.World.gp.target = 31; f.Hunt.tick();
   assert.deepEqual(petOrders(f).slice(1), [{ kind: 'cos-pet-attack', gid: 31, pet: 50 }], 'each new target is handed over at once');
   assert.match(f.PetAttack.message, /Pet attacking Mob 31/);
 });
