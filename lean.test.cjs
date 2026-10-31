@@ -3,7 +3,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(__dirname + '/bot.lean.user.js', 'utf8');
 const isolated = source.slice(0, source.lastIndexOf('installWorkerHook();')) +
-  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, boot, Ticker, Sound, LeanMap};\n})();';
+  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, boot, Ticker, Sound, LeanMap};\n})();';
 function fixture(document) {
   let time = 100000;
   const storage = new Map(), commands = [], notices = [], intervals = [], timers = [];
@@ -3258,6 +3258,27 @@ test('pet attack settings are kept with the character profile', () => {
   const f = fixture();
   f.Settings.profile.pet.attack = { on: true, recall: false, radius: 25, timeout: 7, resend: 9 };
   assert.deepEqual(JSON.parse(JSON.stringify(f.botProfile(JSON.parse(JSON.stringify(f.Settings.profile))).pet.attack)), { on: true, recall: false, radius: 25, timeout: 7, resend: 9 });
+});
+test('the mall probe is read-only: it opens the catalogue and never buys', () => {
+  const f = fixture();
+  assert.equal(f.MallProbe.state(), null);
+  assert.equal(f.MallProbe.dump(), 'No catalogue yet: call SROLean.mall.open() first, then dump() a few seconds later.');
+  f.World.gp.inventoryPending = true;
+  assert.equal(f.MallProbe.open(), 'An inventory transaction is pending; try again in a moment.');
+  f.World.gp.inventoryPending = false;
+  assert.equal(f.MallProbe.open(), 'Catalogue requested; read it with SROLean.mall.dump() a few seconds later.');
+  assert.deepEqual(f.commands.map(c => c.kind), ['mall-open'], 'mall-open is the only command the probe can ever send');
+  f.World.applyGameplay({ ...f.World.gp, itemMall: { tabs: [], offers: [
+    { group: 852, shop: 2, tab: 3, slot: 4, packageId: 100, name: 'HP potion pack', silk: 30, giftSilk: 0, purchaseLimit: 5, itemIds: [3, 4] },
+    { group: 852, shop: 2, tab: 3, slot: 5, packageId: 101, name: 'Premium blessing', silk: 120, giftSilk: 2, purchaseLimit: 1, itemIds: [9] },
+  ], silk: 500, giftSilk: 10, points: 0, pending: false, revision: 2 } });
+  const table = console.table; console.table = () => {};
+  try {
+    const all = JSON.parse(JSON.stringify(f.MallProbe.dump()));
+    assert.deepEqual(all, { silk: 500, giftSilk: 10, points: 0, offers: 2, shown: 2, pending: false, revision: 2, error: null });
+    assert.equal(f.MallProbe.dump('potion').shown, 1);
+    assert.equal(f.MallProbe.dump('avatar').shown, 0);
+  } finally { console.table = table; }
 });
 test('a rested pet is unblocked the moment its HP moves again', () => {
   const f = petPotionFixture();
