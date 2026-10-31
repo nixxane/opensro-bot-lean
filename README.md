@@ -2,7 +2,7 @@
 
 OpenSRO bot: hunting, potions, pet loot and automatic town trips. Developed by 100.
 
-**[Install](https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.user.js)** with Tampermonkey (disable any other OpenSRO bot), then reload the game. It checks for updates itself.
+**[Install](https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.user.js)** with Violentmonkey (disable any other OpenSRO bot), then reload the game. It checks for updates itself.
 
 ## Start
 
