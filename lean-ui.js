@@ -549,7 +549,7 @@ const UI = {
         tab.setAttribute('aria-selected', String(name === this.combatTab)); subtabs.append(tab);
       }
       this.pane.append(subtabs);
-      if (this.combatTab === 'Hunt area') this.sections('combatHuntArea', 'combatMonsters', 'combatLure');
+      if (this.combatTab === 'Hunt area') this.sections('combatHuntArea', 'combatMonsters', 'combatLure', 'combatPet');
       if (this.combatTab === 'Skills') this.sections('combatRotation', 'combatOptions', 'combatBerserk');
       if (this.combatTab === 'Buffs & imbue') this.sections('combatGear', 'combatBuffs', 'combatImbue');
     } else if (this.current === 'Loot') {
@@ -595,7 +595,7 @@ const UI = {
         ['combatRotation'], ['combatOptions'], ['combatGear'], ['combatBuffs'], ['combatImbue']] },
       { name: 'Items/Storage', icon: 'action\\cos_cmd_inventory', pages: ['Items', 'Town'], draw() {
         this.drawItems(); this.sections('townTrip', 'townCycle', 'townAmmo'); } },
-      { name: 'Training place', icon: 'action\\icon_cha_camp', pages: ['Combat', 'Party'], sections: [['combatHuntArea', 'Training place'], ['partyTrace'], ['combatLure']] },
+      { name: 'Training place', icon: 'action\\icon_cha_camp', pages: ['Combat', 'Party'], sections: [['combatHuntArea', 'Training place'], ['partyTrace'], ['combatLure'], ['combatPet']] },
       { name: 'Party/Autores', icon: 'action\\icon_cha_party', pages: ['Party'], sections: [
         ['partyMembers', 'Current party'], ['partyParty', 'Party settings'], ['partyHeal']] },
       { name: 'Player buffing', icon: 'action\\icon_cha_party', pages: ['Party'], sections: [['partyBuffs', 'Player buffing']] },
@@ -1053,6 +1053,17 @@ const UI = {
         el('p', 'Works during hunting and while stopped. Walks into skill range for visible dead members within the maximum radius, casts Rebirth, then returns. During hunting the radius is measured from the saved hunt spot; while stopped it uses your starting position. Collision data is required for walking. Travel stops after 30 seconds or 12 seconds without progress per leg. The member must accept the revival. Travel, shopping and manual control take priority.', 'muted')));
   },
   section_combatLure(host) { Lure.draw(host); },
+  section_combatPet(host) {
+    const P = () => Settings.profile.pet.attack;
+    host.append(this.group('Attack pet',
+      this.check('Attack pet assists my targets', () => P().on, v => { P().on = v; PetAttack.reset(); }),
+      el('p', 'Every monster the bot engages is also given to the attack pet, with the same order the game\'s pet bar sends. With the call-back on, a pet farther than the radius is first called back to you and sets out from your side, so what chases it comes along — a walking lure. Between targets it stays at your side. The pickup pet is not touched.', 'muted'),
+      this.check('Call the pet back before a new target', () => P().recall, v => P().recall = v),
+      this.number('Call-back radius (m)', () => P().radius, v => P().radius = v, 3, 50),
+      this.number('Wait for the pet for at most (s)', () => P().timeout, v => P().timeout = v, 1, 15),
+      this.number('Repeat the attack order every (s)', () => P().resend, v => P().resend = v, 3, 30),
+      this.petAttackNote = el('p', PetAttack.status(), 'muted')));
+  },
   section_partyTrace(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
       Trace.draw(host);
@@ -1287,6 +1298,7 @@ const UI = {
     }
     if (!this.status) return;
     if (this.is('Supplies') && this.petPotionNote) { this.petPotionNote.textContent = this.petPotionNote.title = PetPotion.message; }
+    if (this.is('Combat') && this.petAttackNote) { this.petAttackNote.textContent = this.petAttackNote.title = PetAttack.status(); }
     if (this.is('Supplies') && this.speedNote) this.speedNote.textContent = SpeedScroll.message;
     if (this.is('Supplies') && this.hammerNote) this.hammerNote.textContent = RepairHammer.message;
     if (this.is('Loot') && this.petNote) { const text = Loot.petStatus(); this.petNote.style.visibility = Loot.petMode() ? '' : 'hidden'; this.petNote.textContent = text; this.petNote.title = text; }
