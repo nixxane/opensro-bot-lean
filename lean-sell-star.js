@@ -55,12 +55,14 @@ const SellStar = {
   walk(role) {
     const r = this.run, dest = Town.cfg()[role], pose = World.pose(), what = Town.role('walk-' + role);
     const radius = Math.max(0, Math.min(60, 190 - dist2D(dest, dest.npc || dest)));
-    if (dist2D(pose, dest) <= Math.max(12, radius) && dist2D(pose, dest.npc || dest) <= 200) return true;
+    // Close enough to the NPC itself is enough; the exact saved standing spot is not needed.
+    if (dist2D(pose, Town.npc(role) || dest.npc || dest) <= 190) return true;
     if (!Number.isFinite(dist2D(pose, dest))) { this.stop('Sell Star stopped: the ' + what + ' is in another world.'); return false; }
     if (!r.lastPose || dist2D(r.lastPose, pose) > 3) { r.lastPose = { ...pose }; r.progressAt = now(); }
     if (now() < r.retryAt) return false;
-    if (now() - r.progressAt > 20000) { this.stop('Sell Star stopped: no way through to the ' + what + ' (no progress for 20 s).'); return false; }
-    if (!World.isSitting() && Navigation.watch(r, pose, r.movedAt, r.travel?.route[r.travel.index] || dest) === 'giveup') { this.stop('Sell Star stopped: blocked on the way to the ' + what + '.'); return false; }
+    // No way through: try opening from here anyway; the game refuses when too far and the open step says so.
+    if (now() - r.progressAt > 20000) { Log.warn('Sell Star: no progress walking to the ' + what + '; trying from here.'); return true; }
+    if (!World.isSitting() && Navigation.watch(r, pose, r.movedAt, r.travel?.route[r.travel.index] || dest) === 'giveup') { Log.warn('Sell Star: blocked on the way to the ' + what + '; trying from here.'); return true; }
     const step = Navigation.next(r, dest, false, radius);
     if (step.waiting || step.error) { r.travel = null; r.retryAt = now() + 3000; this.message = 'Walking to the ' + what + ': waiting for a route.'; return false; }
     this.message = 'Walking to the ' + what + '.';
@@ -112,9 +114,13 @@ const SellStar = {
         if (!st || st.phase !== 'open' || st.guild) { this.stop('Sell Star stopped: the warehouse closed. Gear already withdrawn stays in your bag.'); break; }
         const p = r.pending;
         if (p) {
-          if (gp.inventoryPending && now() - p.at < SELL_STAR_ITEM_MS) break;
-          if (!this.bag(p.dest, p.ref)) { this.stop('Sell Star stopped: a withdrawal did not reach the bag.'); break; }
-          r.mine.push({ slot: p.dest, ref: p.ref }); r.pending = null; r.at = now();
+          // The item may land in another slot than asked, and shows a moment after the busy flag clears.
+          const landed = World.items().find(i => i.refObjId === p.ref && i.slot >= (gp.equipmentSlotCount || 13) && !p.before.has(i.slot));
+          if (!landed) {
+            if (now() - p.at > SELL_STAR_ITEM_MS) this.stop('Sell Star stopped: a withdrawal did not reach the bag.');
+            break;
+          }
+          r.mine.push({ slot: landed.slot, ref: p.ref }); r.pending = null; r.at = now();
         }
         if (gp.inventoryPending) break;
         const item = this.inStorage()[0];
@@ -122,7 +128,7 @@ const SellStar = {
         const dest = Town.free(gp.inventory, gp.equipmentSlotCount || 13, gp.inventorySlotCount);
         if (dest === null) { r.more = true; this.enter('close-storage'); break; }
         if (Cmd.raw({ kind: 'storage-move', move: { type: 3, source: item.slot, destination: dest, quantity: 0, gold: 0 } }, 'Sell Star: withdraw ' + (item.name || item.refObjId)))
-          r.pending = { dest, ref: item.refObjId, at: now() };
+          r.pending = { dest, ref: item.refObjId, at: now(), before: new Set(World.items().map(i => i.slot)) };
         break;
       }
       case 'close-storage': this.close(r.mine.length ? 'walk-smith' : 'done'); break;

@@ -8041,7 +8041,7 @@ function sellStarRun(f, storageItems, bagCount = 0, x = 150, bagStars = []) {
       else if (c.kind === 'storage-move') {
         assert.equal(c.move.type, 3);
         const i = gp.storage.items.find(i => i.slot === c.move.source);
-        gp.storage.items = gp.storageItems = gp.storage.items.filter(x => x !== i); gp.inventory.push({ ...i, slot: c.move.destination }); moved.push(i.name);
+        gp.storage.items = gp.storageItems = gp.storage.items.filter(x => x !== i); gp.inventory.push({ ...i, slot: c.move.destination + (f.landShift || 0) * (moved.length + 1) }); moved.push(i.name);
       } else if (c.kind === 'shop-open') { gp.shop = { npc: c.gid, offers: [] }; gp.shopCompletionRevision++; }
       else if (c.kind === 'shop-sell') { const i = gp.inventory.find(i => i.slot === c.slot); sold.push(i.name); gp.inventory = gp.inventory.filter(x => x !== i); }
       else if (c.kind === 'npc-close') { gp.target = 0; gp.shop = null; gp.storage = null; }
@@ -8083,4 +8083,11 @@ test('Sell Star also sells Star gear already in the bag, with a full bag and an 
   const r = sellStarRun(f, [], 0, 150, [starItem(13, 'Left over one'), starItem(14, 'Left over two'), { ...starItem(15, 'Moon left', 'ITEM_EU_M_HEAVY_B_RARE') }]);
   assert.deepEqual(r.sold, ['Left over one', 'Left over two'], f.SellStar.message);
   assert.deepEqual(r.gp.inventory.map(i => i.name), ['Moon left']);
+});
+
+test('Sell Star finds a withdrawn item that lands in another bag slot and does not walk when already near the NPC', () => {
+  const f = townFixture(); f.landShift = 3;
+  const r = sellStarRun(f, [starItem(0, 'Star one'), starItem(1, 'Star two')], 0, 120);
+  assert.deepEqual(r.sold, ['Star one', 'Star two'], f.SellStar.message);
+  assert.equal(f.commands.some(c => c.kind === 'move'), false, 'near the NPCs: no walking');
 });
