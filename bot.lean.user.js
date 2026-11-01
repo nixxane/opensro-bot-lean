@@ -8066,7 +8066,7 @@ function questToken(symbol) {
 }
 
 const Quest = {
-  trip: null, message: '', progressSeq: 0, kills: [], rewardSent: null, abandonSent: null,
+  trip: null, resuming: false, noPoseAt: -Infinity, message: '', progressSeq: 0, kills: [], rewardSent: null, abandonSent: null,
   refused: new Map(),      // refId -> { count, at }: refused quest-reward commands
   visitFail: new Map(),    // refId -> at: a failed NPC visit waits this quest out
   rows: new Map(),         // dialogue row symbol -> skip-until timestamp
@@ -8136,6 +8136,7 @@ const Quest = {
   // away, and v1 leaves cross-region quest routes to a later travel plan.
   npcRoute(marker) {
     const pose = marker && questMarkerPose(marker), here = World.pose();
+    if (marker && !pose && now() - this.noPoseAt > 60000) { this.noPoseAt = now(); Log.warn('Quest: the marker of quest #' + marker.refId + ' has no position; it cannot be routed.'); }
     if (!pose || !here || pose.regionId !== here.regionId) return null;
     return { gid: marker.flags & 2 ? marker.optional : 0, pose };
   },
@@ -8281,7 +8282,7 @@ const Quest = {
       // a walk whose WalkBack was silently replaced by another start.
       if (WalkBack.active) WalkBack.tick();
       else if (now() - t.at > 3000) this.fail('the walk to the quest NPC was replaced');
-      else if (now() - t.at > QUEST_WALK_MS) this.fail('the walk to the quest NPC took too long');
+      if (now() - t.at > QUEST_WALK_MS) this.fail('the walk to the quest NPC took too long');
       return;
     }
     if (gp.inventoryPending) return;
@@ -8343,7 +8344,7 @@ const Quest = {
     }
     if (t.phase === 'close') {
       if (!t.closed && Cmd.raw({ kind: 'npc-close' }, 'Quest: close the dialogue')) t.closed = true;
-      if (t.closed || now() - t.at > 3000) { this.trip = null; if (t.wasHunting && this.on() && World.inWorld()) Hunt.start(); }
+      if (t.closed || now() - t.at > 3000) { this.trip = null; if (t.wasHunting && this.on() && World.inWorld()) this.resumeHunt(); }
       return;
     }
   },
@@ -8383,8 +8384,10 @@ const Quest = {
     this.message = 'Quest stopped: ' + reason + '.';
     Log.warn(this.message); UI.toast(this.message, 'warn', 6000);
     // Hunting restarts even dead: the controller's death lane then runs the configured revive.
-    if (t.wasHunting && this.on() && reason !== 'manual control' && World.inWorld()) Hunt.start();
+    if (t.wasHunting && this.on() && reason !== 'manual control' && World.inWorld()) this.resumeHunt();
   },
+  // Restarting the hunt after a visit is the same bot run: the mall silk budget must survive it.
+  resumeHunt() { this.resuming = true; try { Hunt.start(); } finally { this.resuming = false; } },
   cancel() { this.trip = null; this.rewardSent = null; this.abandonSent = null; },
   reset() { this.cancel(); this.kills = []; this.refused.clear(); this.visitFail.clear(); this.rows.clear(); this.progressSeq = 0; this.message = ''; },
   status() { return this.trip ? this.message : ''; },
@@ -10525,7 +10528,10 @@ const MallBuyer = {
   state() { return World.gp?.itemMall ?? null; },
   silk() { return Number(this.state()?.silk ?? 0); },
   count(ref) { return World.items().filter(i => i.refObjId === ref).reduce((n, i) => n + (i.quantity ?? 1), 0); },
-  reset() { this.pending = null; this.spentSilk = 0; this.openedAt = -Infinity; this.lastAt = -Infinity; this.refused.clear(); this.goals.clear(); this.message = 'Item mall off.'; },
+  // The budget is per bot run, so a world transition or profile change keeps what was spent; only newRun() clears it.
+  // An order still in flight counts as spent: it may well have been delivered.
+  reset() { if (this.pending) this.spentSilk += this.pending.silk; this.pending = null; this.openedAt = -Infinity; this.lastAt = -Infinity; this.refused.clear(); this.goals.clear(); this.message = 'Item mall off.'; },
+  newRun() { this.spentSilk = 0; },
   unpoison() { this.poison = false; this.probeRevision = null; },
   // The live offer whose package contains this item. Never a remembered address: the server stale-checks packageId.
   offerFor(ref) { return (this.state()?.offers || []).find(o => (o.itemIds || []).includes(ref) && (o.silk || 0) > 0) || null; },
@@ -10585,7 +10591,7 @@ const MallBuyer = {
       }
       if (count > p.before) { this.spentSilk += p.silk; this.pending = null; this.message = p.label + ' delivered.'; return false; }
       if (now() - p.at > MALL_TIMEOUT_MS) {
-        this.pending = null; this.poison = true;
+        this.spentSilk += p.silk; this.pending = null; this.poison = true; // unconfirmed is not unpaid
         this.message = 'Item mall purchase unconfirmed; mall buying blocked until you re-enter the game.';
         Log.warn('Item mall: ' + this.message);
         UI.toast(this.message, 'warn', 8000);
@@ -10639,7 +10645,7 @@ const MallBuyer = {
 
 // The silk budget is per bot run: a restart gives a fresh one, but a poisoned mall state survives it (the game
 // client itself refuses mall commands until the world is re-entered).
-bus.on('hunt', running => { if (running) { const poison = MallBuyer.poison; MallBuyer.reset(); MallBuyer.poison = poison; } });
+bus.on('hunt', running => { if (running) { const poison = MallBuyer.poison; MallBuyer.reset(); if (!Quest.resuming) MallBuyer.newRun(); MallBuyer.poison = poison; } });
 
 
 // Anti-stuck watchdog. While hunting it watches for confirmed progress (kills, XP, gold,

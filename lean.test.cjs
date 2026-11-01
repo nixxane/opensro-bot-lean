@@ -3390,6 +3390,35 @@ test('an unconfirmed mall order blocks all mall buying until the world is re-ent
   f.MallBuyer.unpoison(); f.MallBuyer.tick(); // re-entering the world unblocks
   assert.equal(mallBuys(f).length, 2, 'after the resync buying resumes');
 });
+test('the mall silk budget survives world transitions and counts an unconfirmed order; only a fresh run clears it', () => {
+  const f = mallFixture();
+  f.Settings.profile.mall.budgetSilk = 300; f.World.gp.itemMall.silk = 200;
+  f.Hunt.start();
+  f.MallBuyer.tick(); assert.equal(mallBuys(f).length, 1);
+  f.advance(2000);
+  f.World.applyGameplay({ ...f.World.gp, inventory: [{ slot: 16, refObjId: 5912, typeFlags: 2284, quantity: 1000, name: 'HP Recovery potion (X-large)' }],
+    itemMall: { ...f.World.gp.itemMall, revision: 2, silk: 118 } });
+  f.MallBuyer.tick();
+  assert.equal(f.MallBuyer.spentSilk, 82);
+  f.bus.emit('phase', 'loading'); // a recall / reverse scroll / town trip leaves the world
+  assert.equal(f.MallBuyer.spentSilk, 82, 'a world transition keeps what was spent');
+  f.bus.emit('hunt', true);
+  assert.equal(f.MallBuyer.spentSilk, 0, 'a fresh bot run gets a fresh budget');
+  const g = mallFixture();
+  g.Hunt.start(); g.MallBuyer.tick(); assert.equal(mallBuys(g).length, 1);
+  g.advance(10000); g.MallBuyer.tick();
+  assert.equal(g.MallBuyer.poison, true);
+  assert.equal(g.MallBuyer.spentSilk, 82, 'an unconfirmed order may have been delivered: it counts against the budget');
+});
+test('a quest visit restarting the hunt keeps the mall silk budget; a user start clears it', () => {
+  const f = mallFixture();
+  f.Hunt.start(); f.MallBuyer.spentSilk = 82;
+  f.Hunt.stop('visiting a quest NPC'); f.Quest.resumeHunt();
+  assert.ok(f.Hunt.running, 'the visit resumes hunting');
+  assert.equal(f.MallBuyer.spentSilk, 82, 'the same bot run keeps what it spent');
+  f.Hunt.stop(); f.Hunt.start();
+  assert.equal(f.MallBuyer.spentSilk, 0, 'a user-started run gets a fresh budget');
+});
 test('an order never races an in-flight inventory transaction (live regression)', () => {
   // Live: the scroll buff's item-use and the mall order went out in the same second; the worker silently
   // refuses mall commands inside an inventory transaction and the unconfirmed order looked like a poison.
