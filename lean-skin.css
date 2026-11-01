@@ -1,6 +1,11 @@
-:host{position:fixed;right:18px;top:90px;width:450px;z-index:2147483646;font:12px/1.3 Arial,Helvetica,sans-serif;color:#efdaa4;color-scheme:dark;text-shadow:1px 1px #000}
+:host{position:fixed;right:18px;top:90px;width:450px;max-height:calc(100vh - 98px);display:flex;flex-direction:column;z-index:2147483646;font:12px/1.3 Arial,Helvetica,sans-serif;color:#efdaa4;color-scheme:dark;text-shadow:1px 1px #000}
 *{box-sizing:border-box} [hidden]{display:none!important}
 .panel{position:relative;padding-bottom:19px;background:rgba(15,19,17,.96);box-shadow:0 8px 28px #000a}
+/* The window is capped to the screen (fitPanel refines the cap when it is moved): the scrolling pane gives
+   way first, so the bottom rows (feedback, activity log) are never cut off. If the room left is smaller than
+   the fixed rows need, the surplus is clipped inside the frame instead of painting over the game.
+   Dialogs keep their own sizing. */
+.panel:not(.dialog){display:flex;flex-direction:column;flex:0 1 auto;min-height:0;overflow:hidden}
 .panel:before{content:'';position:absolute;inset:36px 14px 16px;background-image:var(--s-tile_a);opacity:.55;pointer-events:none}
 .frame{position:absolute;pointer-events:none;background-repeat:no-repeat}
 .frame.lu{left:0;top:0;width:40px;height:68px;background-image:var(--s-f_lu)}
@@ -21,7 +26,9 @@ header strong{font-weight:normal;overflow:hidden;text-overflow:ellipsis;white-sp
 header button.version{display:inline;height:auto;min-width:0;padding:0;border:0;background:none;color:inherit;font:inherit;line-height:inherit;text-decoration:underline dotted;text-underline-offset:3px}header button.version:hover{color:#f0d98c}
 header button.fold{position:absolute;right:10px;top:10px;width:16px;min-width:16px;height:16px;padding:0;border:0;background:var(--s-close);color:transparent;font-size:0}
 header button.fold:hover{background-image:var(--s-close_f)}
-.body{position:relative;z-index:1;margin:0 15px}
+.body{position:relative;z-index:1;margin:0 15px;flex:0 1 auto;min-height:0}
+.panel:not(.dialog)>.body{display:flex;flex-direction:column}
+.menubar,.update-note,.status,.waiting,.controls,nav,.feedback,.logbox{flex:none}
 button,input,select{font:12px Arial,Helvetica,sans-serif;color:inherit;text-shadow:inherit;border-radius:0}
 button{display:inline-flex;align-items:center;justify-content:center;min-width:52px;height:24px;padding:0 6px;cursor:pointer;white-space:nowrap;background:transparent;color:#fefbd8;border-style:solid;border-width:5px;border-image-source:var(--s-btn);border-image-slice:6 fill;border-image-width:5px;border-image-repeat:stretch;line-height:14px}
 button:hover{border-image-source:var(--s-btn_f);color:#fff}button:active{border-image-source:var(--s-btn_p)}button:disabled{border-image-source:var(--s-btn_d);color:#7c786c;cursor:default}
@@ -33,7 +40,8 @@ nav button[aria-selected=true],.subtabs button[aria-selected=true]{color:#fff;bo
 .subtabs button{font-size:11px;min-width:48px;border-image-source:var(--s-stab_off)}
 .subtabs button[aria-selected=true]{border-image-source:var(--s-stab_on)}
 .class-tabs{display:flex;gap:3px;flex-wrap:wrap;margin-bottom:7px}.class-tabs button{font-size:11px;gap:4px;text-transform:capitalize;flex:1;min-width:80px}.class-tabs button[aria-selected=true]{color:#ffe08a}.class-tabs i{display:inline-block;width:16px;height:16px;flex:0 0 16px;background-size:16px 16px}
-.pane,.dialog-body{padding-top:9px;max-height:clamp(220px,calc(100vh - 300px),720px);overflow:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-gutter:stable;scrollbar-color:#796a48 #171711}
+.pane,.dialog-body{padding-top:9px;overflow:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-gutter:stable;scrollbar-color:#796a48 #171711}
+.pane{flex:1 1 auto;min-height:150px}
 .pane::-webkit-scrollbar,.dialog-body::-webkit-scrollbar{width:16px}.pane::-webkit-scrollbar-track,.dialog-body::-webkit-scrollbar-track{background-image:var(--s-scr_bar)}.pane::-webkit-scrollbar-thumb,.dialog-body::-webkit-scrollbar-thumb{background:var(--s-scr_btn) center/16px 100% no-repeat;min-height:16px}.pane::-webkit-scrollbar-thumb:hover,.dialog-body::-webkit-scrollbar-thumb:hover{background-image:var(--s-scr_btn_f)}
 fieldset{position:relative;min-width:0;border:0;margin:0 0 9px;padding:25px 10px 9px;background-color:#282728;background-image:var(--s-ib_lu),var(--s-ib_ru),var(--s-ib_ld),var(--s-ib_rd),var(--s-ib_mu),var(--s-ib_md),var(--s-ib_ls),var(--s-ib_rs);background-position:left top,right top,left bottom,right bottom,left top,left bottom,left top,right top;background-repeat:no-repeat,no-repeat,no-repeat,no-repeat,repeat-x,repeat-x,repeat-y,repeat-y}
 legend{position:absolute;left:9px;right:9px;top:3px;padding:0;height:13px;line-height:13px;color:#ffd65a;font-weight:bold}
@@ -67,7 +75,7 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;max-height:130px;
 .wardrobe-item{min-width:0;height:48px;padding:4px;justify-content:flex-start;gap:6px;text-align:left;font-size:10px;white-space:normal;line-height:12px}
 .wardrobe-item>.slot{flex:0 0 34px}.wardrobe-item>span:last-child{overflow:hidden;max-height:36px;overflow-wrap:anywhere}
 .wardrobe-item[aria-pressed=true]{color:#ffe08a;outline:1px solid #ffe08a;outline-offset:-2px}
-@media(max-width:500px){:host{right:4px;top:70px;width:calc(100vw - 8px)}.body{margin:0 13px}.pane{max-height:clamp(200px,calc(100vh - 280px),720px)}.field input[type=text]{width:150px}.skill-row{gap:4px}.controls{gap:2px}}
+@media(max-width:500px){:host{right:4px;top:70px;width:calc(100vw - 8px)}.body{margin:0 13px}.field input[type=text]{width:150px}.skill-row{gap:4px}.controls{gap:2px}}
 
 .waiting{white-space:pre-line;color:#c8d9ae;margin:4px 0;height:4lh;overflow-y:auto;overflow-wrap:anywhere;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#796a48 #171711}
 textarea{width:100%;color:inherit;background:#151916;font:11px monospace}
@@ -95,7 +103,7 @@ textarea{width:100%;color:inherit;background:#151916;font:11px monospace}
 @media(min-width:900px){
 header button.layout{display:inline-flex;height:22px;min-width:0;margin-left:8px;font-size:11px}
 :host(.wide){width:min(1000px,calc(100vw - 8px))}
-:host(.wide) .body{display:grid;grid-template-columns:128px minmax(0,1fr) 196px;grid-template-areas:"note note note" "strip strip ctl" "nav wait side" "nav pane side" "nav fb side" "log log log";grid-template-rows:auto auto auto auto minmax(0,1fr) auto;column-gap:8px;align-items:start}
+:host(.wide) .body{display:grid;grid-template-columns:128px minmax(0,1fr) 196px;grid-template-areas:"note note note" "strip strip ctl" "nav wait side" "nav pane side" "nav fb side" "log log log";grid-template-rows:auto auto auto minmax(150px,1fr) auto auto;column-gap:8px;align-items:start;min-height:0}
 :host(.wide) .wide-only{display:block}
 :host(.wide) .status{display:none}
 :host(.wide) .update-note{grid-area:note}
@@ -117,7 +125,7 @@ header button.layout{display:inline-flex;height:22px;min-width:0;margin-left:8px
 :host(.wide) nav button:hover{color:#fff;box-shadow:inset 0 0 0 1px #8f7a45}
 :host(.wide) nav button[aria-selected=true]{color:#fff;background:linear-gradient(#2a5b74,#183447);box-shadow:inset 0 0 0 1px #5fb6d9,0 0 6px #2d7fa588}
 :host(.wide) nav button>img{display:block;flex:none;width:24px;height:24px;border:1px solid #5d5034;background:#000}
-:host(.wide) .pane{grid-area:pane;padding-top:0;height:clamp(240px,calc(100vh - 470px),600px);max-height:none;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:8px;align-content:start;align-items:start}
+:host(.wide) .pane{grid-area:pane;padding-top:0;height:auto;min-height:150px;align-self:stretch;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:8px;align-content:start;align-items:start}
 :host(.wide) .pane>:not(fieldset){grid-column:1/-1}
 /* A page with one long box (Loot) spreads its rows over both columns. */
 :host(.wide) .pane>fieldset:only-of-type{grid-column:1/-1;columns:2;column-gap:28px}:host(.wide) .pane>fieldset:only-of-type>*{break-inside:avoid}:host(.wide) .pane>fieldset:only-of-type>p.muted{column-span:all}
@@ -127,6 +135,12 @@ header button.layout{display:inline-flex;height:22px;min-width:0;margin-left:8px
 :host(.wide) .logbox{grid-area:log;margin-top:4px;padding:7px 12px 8px;background:#0b0a07cc;border:1px solid #4a4130}:host(.wide) .logbox>strong{color:#ffd65a}
 :host(.wide) .log{list-style:none;margin:4px 0 0;padding:0;height:78px;overflow:auto;overscroll-behavior:contain;font-size:11px;scrollbar-color:#796a48 #171711}
 :host(.wide) .log li{display:flex;gap:8px;padding:1px 0}:host(.wide) .log time{color:#7f7458;font-variant-numeric:tabular-nums;flex:none}:host(.wide) .log li.warn span,:host(.wide) .log li.error span{color:#ffc67a}
+}
+/* Short screens (1080p with browser bars): trim the wide window's fixed rows so the pane keeps its room.
+   The activity-history rule needs the extra class: the plain .log selector loses to the taller base rule. */
+@media(min-width:900px) and (max-height:1000px){
+:host(.wide) .logbox .activity-history.log{height:44px}
+:host(.wide) .strip{margin:2px 0 4px;padding:6px 12px}
 }
 /* Map page */
 .map-stage{position:relative;border:1px solid #6b5a36;box-shadow:0 0 0 2px #0b0a07,0 0 0 3px #4a4130;margin:2px 0 6px}
@@ -206,7 +220,8 @@ fieldset>input[type=search]{width:100%;margin:2px 0 6px}
 :host(.classic) header button.version{background:none;border:0;padding:0;margin:0 0 0 4px;text-decoration:underline dotted}
 :host(.classic) header button.fold{background:none;border:0;width:16px;height:16px;top:7px;right:10px;color:#000;font-size:0;background-image:var(--s-close)}
 :host(.classic) .panel:not(.dialog)>.body{margin:0;padding:0 0 6px;display:grid;grid-template-columns:106px minmax(0,1fr) 140px;column-gap:6px;align-items:start;
-  grid-template-areas:"menu menu menu" "note note note" "strip strip strip" "ctl ctl ctl" "nav wait side" "nav pane side" "nav fb side";grid-template-rows:auto auto auto auto auto auto minmax(0,1fr)}
+  grid-template-areas:"menu menu menu" "note note note" "strip strip strip" "ctl ctl ctl" "nav wait side" "nav pane side" "nav fb side";
+  grid-template-rows:auto auto auto auto auto minmax(220px,1fr) auto;min-height:0}
 :host(.classic) .menubar{grid-area:menu;display:flex;gap:2px;position:relative;padding:3px 6px;background:#fff;color:#000;margin-bottom:4px}
 :host(.classic) .menubar button.menu-title{height:20px;min-width:0;padding:0 8px;border:0;border-image:none;background:none;color:#000;font-size:12px}
 :host(.classic) .menubar button.menu-title:hover{background:#d9e8ff}
@@ -246,7 +261,7 @@ fieldset>input[type=search]{width:100%;margin:2px 0 6px}
 :host(.classic) nav button:hover{background:#17173a;box-shadow:none}
 :host(.classic) nav button[aria-selected=true]{background:var(--c-chip);color:#fff;box-shadow:none}
 :host(.classic) .waiting{grid-area:wait;margin:0 0 4px;color:var(--c-dim)}
-:host(.classic) .pane{grid-area:pane;display:block;height:min(470px,calc(100vh - 360px));min-height:240px;max-height:none;padding:6px 10px 6px 6px;background:#000;border:1px solid #2a2a33;
+:host(.classic) .pane{grid-area:pane;display:block;height:auto;min-height:220px;align-self:stretch;padding:6px 10px 6px 6px;background:#000;border:1px solid #2a2a33;
   overflow-y:scroll;overflow-x:hidden;scrollbar-color:#6a6a78 #101014}
 :host(.classic) .pane::-webkit-scrollbar{width:14px}
 :host(.classic) .pane::-webkit-scrollbar-track{background:#101014;background-image:none}
