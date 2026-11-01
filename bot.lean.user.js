@@ -5995,6 +5995,9 @@ const WalkBack = {
     if (!a) return;
     if (!World.inWorld() || World.isDead()) return this.cancel('Walk back interrupted.', false);
     if (Manual.lastAt !== a.manualAt) return this.cancel('Manual control: walk back cancelled.', false);
+    // Self buffs marked "Hunting and walk-back" are kept up while travelling; the walk owns the tick, so no
+    // hunting cast happens at the same time and a refused skill only backs itself off.
+    Controller.guard('walkBuffs', () => Combat.buffs(false));
     if (a.source === 'planning') {
       if (now() - a.plan.at <= (a.plan.limit || WALK_PLAN_MS)) return;
       if (!this.useLegs()) return;
@@ -10368,6 +10371,16 @@ Combat.fight = function (target) {
   if (target && M.imbueBeforeAttack && World.isCasting() && World.gp.target === target.gid && !World.gp.targetPending &&
     now() - this.lastCastAt >= (M.castGapMs ?? 250) && this.imbue()) return;
   return fightBetweenCasts.call(this, target);
+};
+// A buff can also be kept up while walking back (speed or stealth skills). The buff loop only knows "hunt", and an
+// entry saved before the choice existed has no mode, so the walk-back call sees exactly the entries that opted in
+// and the hunting call is untouched.
+const combatBuffs = Combat.buffs;
+Combat.buffs = function (hunting) {
+  if (hunting) return combatBuffs.call(this, hunting);
+  const M = Settings.profile.macro, all = M.buffs;
+  M.buffs = all.filter(b => b.enabled && b.mode === 'walk');
+  try { return combatBuffs.call(this, false); } finally { M.buffs = all; }
 };
 // Berserk fires when the gauge is full and the target's class is ticked in Combat options.
 // A party Giant has its own switch; other party monsters share the Party monsters one.
@@ -16601,6 +16614,9 @@ const UI = {
       up.className = down.className = remove.className = 'mini';
       up.setAttribute('aria-label', 'Move up ' + World.skillName(id)); down.setAttribute('aria-label', 'Move down ' + World.skillName(id)); remove.setAttribute('aria-label', 'Delete ' + World.skillName(id));
       row.append(this.skillSlot(id, () => {}, World.skillName(id)), info, up, down, remove); parent.append(row);
+      if (buff) parent.append(this.select('Keep ' + World.skillName(id) + ' up',
+        () => [['hunt', 'While hunting'], ['walk', 'Hunting and walk-back']],
+        () => entry.mode || 'hunt', value => entry.mode = value));
       if (buff) parent.append(this.select('Gear for ' + World.skillName(id),
         () => [[0, BuffGear.auto() ? 'Automatic: the weapon the skill needs' : 'Current combat gear'], ['primary', 'Primary weapon'], ['secondary', 'Secondary weapon'],
           ['shield', 'Shield (with a one-handed weapon)'], ...Settings.profile.macro.buffSets.map(s => [s.id, s.name])],

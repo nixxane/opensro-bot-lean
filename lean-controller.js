@@ -180,6 +180,16 @@ Combat.fight = function (target) {
     now() - this.lastCastAt >= (M.castGapMs ?? 250) && this.imbue()) return;
   return fightBetweenCasts.call(this, target);
 };
+// A buff can also be kept up while walking back (speed or stealth skills). The buff loop only knows "hunt", and an
+// entry saved before the choice existed has no mode, so the walk-back call sees exactly the entries that opted in
+// and the hunting call is untouched.
+const combatBuffs = Combat.buffs;
+Combat.buffs = function (hunting) {
+  if (hunting) return combatBuffs.call(this, hunting);
+  const M = Settings.profile.macro, all = M.buffs;
+  M.buffs = all.filter(b => b.enabled && b.mode === 'walk');
+  try { return combatBuffs.call(this, false); } finally { M.buffs = all; }
+};
 // Berserk fires when the gauge is full and the target's class is ticked in Combat options.
 // A party Giant has its own switch; other party monsters share the Party monsters one.
 Combat.berserk = function (cls) {
