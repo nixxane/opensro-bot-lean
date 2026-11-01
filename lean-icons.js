@@ -5,6 +5,7 @@ const Icons = {
   iconPath(ddj) {
     if (!ddj) return '';
     let path = String(ddj).replace(/\\/g, '/').toLowerCase().replace(/^\/+/, '').replace(/^icon\//, '').replace(/\.ddj$/, '.png');
+    if (!/\.[a-z0-9]+$/.test(path)) path += '.png'; // setup rows name icons without an extension
     if (!path.endsWith('.png') || path.split('/').includes('..') || !/^[a-z0-9_./ -]+$/.test(path)) return '';
     return '/assets/images/Media_extracted/icon/' + path;
   },

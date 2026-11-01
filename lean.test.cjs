@@ -3444,6 +3444,14 @@ test('the hunting spot follows the character level and walks to the new spot', (
   f.advance(4000);
   assert.equal(f.LevelSpot.tick(), false, 'only while hunting');
 });
+test('icon paths accept names with or without the .ddj extension (setup checklist icons were blank)', () => {
+  const f = fixture(), base = '/assets/images/Media_extracted/icon/';
+  assert.equal(f.Icons.iconPath('action\\icon_cha_helper.ddj'), base + 'action/icon_cha_helper.png');
+  assert.equal(f.Icons.iconPath('action\\icon_cha_helper'), base + 'action/icon_cha_helper.png', 'no extension');
+  assert.equal(f.Icons.iconPath('item\\etc\\mall_return_scroll'), base + 'item/etc/mall_return_scroll.png');
+  assert.equal(f.Icons.iconPath('action/a.png'), base + 'action/a.png', 'png is left alone');
+  assert.equal(f.Icons.iconPath('../x'), '', 'traversal is still refused');
+});
 test('an order never races an in-flight inventory transaction (live regression)', () => {
   // Live: the scroll buff's item-use and the mall order went out in the same second; the worker silently
   // refuses mall commands inside an inventory transaction and the unconfirmed order looked like a poison.

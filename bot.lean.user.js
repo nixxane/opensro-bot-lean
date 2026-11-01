@@ -13174,6 +13174,7 @@ const Icons = {
   iconPath(ddj) {
     if (!ddj) return '';
     let path = String(ddj).replace(/\\/g, '/').toLowerCase().replace(/^\/+/, '').replace(/^icon\//, '').replace(/\.ddj$/, '.png');
+    if (!/\.[a-z0-9]+$/.test(path)) path += '.png'; // setup rows name icons without an extension
     if (!path.endsWith('.png') || path.split('/').includes('..') || !/^[a-z0-9_./ -]+$/.test(path)) return '';
     return '/assets/images/Media_extracted/icon/' + path;
   },
@@ -16601,7 +16602,7 @@ const UI = {
   buildNav() {
     this.nav.replaceChildren();
     const icons = { Items: 'action\\cos_cmd_inventory', Party: 'action\\icon_cha_party', Combat: 'action\\icon_cha_auto_attack', Loot: 'action\\icon_cha_autoget', Supplies: 'action\\icon_cha_recovery', Town: 'item\\etc\\mall_return_scroll', Quest: 'action\\icon_cha_camp',
-      Alchemy: 'action\\icon_cha_alchemy', Trade: 'action\\icon_cha_shop', Wardrobe: 'action\\icon_cha_shop', Settings: 'action\\icon_cha_helper', Setup: 'action\\icon_cha_camp' };
+      Alchemy: 'action\\icon_cha_alchemy', Trade: 'action\\icon_cha_shop', Wardrobe: 'action\\icon_cha_shop', Stall: 'action\\icon_cha_shop', Settings: 'action\\icon_cha_helper', Setup: 'action\\icon_cha_camp' };
     const entries = this.classic ? this.classicTabs().map(t => ({ name: t.name, icon: t.icon, open: () => { this.ctab = t.name; this.draw(); } }))
       : ['Setup', 'Map', 'Combat', 'Party', 'Loot', 'Items', 'Supplies', 'Town', 'Quest', 'Stall', 'Alchemy', 'Trade', 'Wardrobe', 'Settings'].map(name => ({ name, icon: icons[name], open: () => { this.current = name; this.draw(); } }));
     // Page icons are the game's own action-bar icons; they show only in the wide and classic windows' page lists.
