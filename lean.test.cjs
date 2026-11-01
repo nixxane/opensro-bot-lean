@@ -3,7 +3,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(__dirname + '/bot.lean.user.js', 'utf8');
 const isolated = source.slice(0, source.lastIndexOf('installWorkerHook();')) +
-  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap};\n})();';
+  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap};\n})();';
 function fixture(document) {
   let time = 100000;
   const storage = new Map(), commands = [], notices = [], intervals = [], timers = [];
@@ -8020,4 +8020,50 @@ test('Only join and accept parties while the bot is running holds party automati
   assert.equal(f.commands.filter(c => c.kind === 'party-match-answer').length, 1, 'running: accepted');
   f = joinMainFixture({ rows: [{ id: 7, name: 'mainchar', members: 1, type: 1, min: 1, max: 90 }] }); f.Hunt.running = false; f.Party.tick();
   assert.equal(f.commands.length, 1, 'default: still joins while stopped');
+});
+
+function sellStarRun(f, storageItems, bagCount = 0) {
+  f.Hunt.running = false;
+  const gp = f.World.gp, sold = [], moved = [];
+  gp.pose = { regionId: 1, x: 150, y: 0, z: 100 };
+  gp.inventory = Array.from({ length: bagCount }, (_, n) => ({ slot: 13 + n, refObjId: 5000 + n, typeFlags: 4332, quantity: 1, name: 'Filler' }));
+  gp.storageItems = storageItems;
+  let handled = 0;
+  f.SellStar.start();
+  for (let n = 0; n < 400 && f.SellStar.run; n++) {
+    f.SellStar.tick();
+    while (handled < f.commands.length) {
+      const c = f.commands[handled++];
+      if (c.kind === 'select') { gp.target = c.gid; gp.targetCapabilities = { 60: 4, 62: 9 }[c.gid]; }
+      else if (c.kind === 'storage-open') gp.storage = { npc: c.gid, phase: 'open', capacity: 30, items: gp.storageItems };
+      else if (c.kind === 'storage-move') {
+        assert.equal(c.move.type, 3);
+        const i = gp.storage.items.find(i => i.slot === c.move.source);
+        gp.storage.items = gp.storageItems = gp.storage.items.filter(x => x !== i); gp.inventory.push({ ...i, slot: c.move.destination }); moved.push(i.name);
+      } else if (c.kind === 'shop-open') { gp.shop = { npc: c.gid, offers: [] }; gp.shopCompletionRevision++; }
+      else if (c.kind === 'shop-sell') { const i = gp.inventory.find(i => i.slot === c.slot); sold.push(i.name); gp.inventory = gp.inventory.filter(x => x !== i); }
+      else if (c.kind === 'npc-close') { gp.target = 0; gp.shop = null; gp.storage = null; }
+    }
+    f.advance(600);
+  }
+  return { sold, moved, gp };
+}
+const starItem = (slot, name, code = 'ITEM_EU_M_HEAVY_A_RARE') => ({ slot, refObjId: 7000 + slot, typeFlags: 44 | (6 << 7), name, codename: code, quantity: 1, tooltip: { fields: { rarity: 2, itemClass: /_A_/.test(code) ? 1 : /_B_/.test(code) ? 2 : 3 } } });
+test('Sell Star takes only Star gear out of the warehouse and sells it', () => {
+  const f = townFixture();
+  const r = sellStarRun(f, [starItem(0, 'Star one'), starItem(1, 'Moon one', 'ITEM_EU_M_HEAVY_B_RARE'), starItem(2, 'Star two'), starItem(3, 'Sun one', 'ITEM_EU_M_HEAVY_C_RARE'), starItem(4, 'Favorite star')]);
+  assert.deepEqual(r.sold, ['Star one', 'Star two'], f.SellStar.message); assert.deepEqual(r.moved, r.sold);
+  assert.deepEqual(r.gp.inventory.filter(i => i.slot >= 13).map(i => i.name), [], 'nothing left in the bag');
+  assert.equal(f.SellStar.run, null); assert.match(f.SellStar.message, /Sold 2 Star items/);
+  assert.equal(f.commands.filter(c => c.kind === 'storage-move' && c.move.type !== 3).length, 0, 'never deposits');
+});
+test('Sell Star works in batches when the bag is nearly full and refuses to start unsafe', () => {
+  const f = townFixture();
+  const stars = Array.from({ length: 6 }, (_, n) => starItem(n, 'Star ' + n));
+  const r = sellStarRun(f, stars, 14);
+  assert.equal(r.sold.length, 6, f.SellStar.message); assert.equal(r.gp.inventory.length, 14, 'the filler is untouched');
+  assert.equal(f.commands.filter(c => c.kind === 'storage-open').length > 1, true, 'came back for the next batch');
+  const g = townFixture(); g.Hunt.running = true; g.SellStar.start();
+  assert.equal(g.SellStar.run, null); assert.match(g.SellStar.message, /Stop hunting/);
+  const h = townFixture(); h.Town.cfg().smith = null; h.SellStar.start(); assert.equal(h.SellStar.run, null); assert.match(h.SellStar.message, /Save the warehouse/);
 });

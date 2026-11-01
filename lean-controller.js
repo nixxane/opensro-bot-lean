@@ -5,6 +5,7 @@ Hunt.start = function (...args) {
   if (Alchemy.run || Alchemy.pending) return UI.toast('Stop alchemy and wait for its result before hunting.', 'warn');
   if (Trade.run) return UI.toast('Stop auto trade before hunting.', 'warn');
   if (Stall.run) return UI.toast('Stop the stall session before hunting.', 'warn');
+  if (SellStar.run) return UI.toast('Wait for Sell Star to finish (or stop the bot).', 'warn');
   if (Quest.trip) return UI.toast('Wait for the quest visit to finish (or stop the bot).', 'warn');
   if (World.gp?.stall?.phase && World.gp.stall.phase !== 'none') return UI.toast('Close the stall before hunting.', 'warn');
   Lure.reset();
@@ -137,6 +138,7 @@ function stopAll() {
   Alchemy.stop();
   Trade.cancel();
   Stall.stop();
+  SellStar.stop('Sell Star stopped.');
   BuffGear.cancel();
   Quest.cancel();
   const townActive = !!Town.trip;
@@ -259,6 +261,7 @@ const Controller = {
       }
       if (Alchemy.run || Alchemy.pending) { this.mode = 'alchemy'; return; }
       if (Stall.run) { if (World.inWorld()) Potion.tick(); Stall.tick(); this.mode = 'stall'; return; }
+      if (SellStar.run) { SellStar.tick(); this.mode = 'sell star'; return; }
       if (World.inWorld() && World.isDead() && Hunt.running) {
         Town.cancel(); Resurrect.cancelTrip(); Resurrect.holdUntil = 0;
         Hunt.tick(); this.mode = Hunt.state; return;

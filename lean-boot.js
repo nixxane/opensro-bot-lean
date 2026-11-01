@@ -1,6 +1,6 @@
 // The player's Start / stop (F8 and the buttons). What they choose is remembered for auto-start.
 function toggleBot() {
-  if (Alchemy.run || Alchemy.pending || Stall.run || Hunt.running || Town.trip || Quest.trip || WalkBack.active || Travel.active || Restock.trip || Resurrect.trip || Controller.resumeAfterRevive) userStop();
+  if (Alchemy.run || Alchemy.pending || Stall.run || SellStar.run || Hunt.running || Town.trip || Quest.trip || WalkBack.active || Travel.active || Restock.trip || Resurrect.trip || Controller.resumeAfterRevive) userStop();
   else if (Restock.recording) UI.toast('Finish or cancel route recording before starting the bot.', 'warn');
   else { Hunt.start(); if (Hunt.running) RunIntent.set(true); }
 }
