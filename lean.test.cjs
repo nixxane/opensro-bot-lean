@@ -3,7 +3,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(__dirname + '/bot.lean.user.js', 'utf8');
 const isolated = source.slice(0, source.lastIndexOf('installWorkerHook();')) +
-  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap};\n})();';
+  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap};\n})();';
 function fixture(document) {
   let time = 100000;
   const storage = new Map(), commands = [], notices = [], intervals = [], timers = [];
@@ -4945,6 +4945,95 @@ test('town keeps sealed equipment and unknown rarity while allowing plus and blu
     assert.equal(f.Town.sellable(item), false, JSON.stringify(item));
     assert.equal(f.Town.eligible(item), false);
   }
+});
+
+test('the town trip wears carried armour with better real stats and stores the replaced piece', () => {
+  const f = townFixture(), gp = f.World.gp;
+  f.pet.inventory = [];
+  f.Settings.profile.items.autoEquip = true;
+  gp.progression = { ...(gp.progression || {}), level: 30, experience: '100' };
+  const fields = (pdHi, mdHi) => ({ canRepair: 1, canSell: 1, reqLevelType1: 1, requiredLevel: 30,
+    varianceFloatMin1c8: 10, varianceFloatMax1cc: pdHi, varianceFloatPerPlus1d0: 0,
+    varianceFloatMin1f4: 8, varianceFloatMax1f8: mdHi, varianceFloatPerPlus1fc: 0 });
+  const rolls = String((31n << 15n) | (31n << 20n)); // perfect defence rolls (stat indexes 3 and 4)
+  const piece = (slot, ref, pd, md) => ({ slot, refObjId: ref, typeFlags: 44 | (2 << 7), quantity: 1, plus: 0, magic: [], variance: rolls, tooltip: { fields: fields(pd, md) } });
+  gp.inventory.push(piece(2, 800, 20, 16), piece(16, 801, 30, 24), piece(17, 802, 12, 10));
+  f.Town.begin(); f.Town.enter('store'); gp.storage = { npc: 60, phase: 'open', capacity: 30, items: [] }; gp.target = 60;
+  const stored = [];
+  for (let n = 0; n < 12 && f.Town.trip?.phase === 'store'; n++) {
+    f.advance(1000); f.Town.store();
+    const c = f.commands.at(-1);
+    if (c?.kind === 'inventory-move' && c.source === 16) {
+      const candidate = gp.inventory.find(i => i.slot === 16), worn = gp.inventory.find(i => i.slot === 2);
+      candidate.slot = 2; worn.slot = 16; // the game swaps the two slots
+    } else if (c?.kind === 'storage-move' && f.Town.trip?.pending?.kind === 'store') {
+      const i = gp.inventory.find(x => x.slot === c.move.source);
+      stored.push(i.refObjId); gp.storage.items.push({ ...i, slot: c.move.destination });
+      gp.inventory = gp.inventory.filter(x => x.slot !== c.move.source);
+    }
+    f.advance(600); f.Town.store();
+  }
+  assert.equal(f.commands.filter(c => c.kind === 'inventory-move').length, 1, 'only the clearly better piece is worn');
+  assert.equal(gp.inventory.find(i => i.slot === 2)?.refObjId, 801, 'the better piece is worn');
+  assert.deepEqual(stored, [800], 'the replaced piece is deposited');
+  assert.ok(gp.inventory.some(i => i.refObjId === 802), 'the worse piece stays in the bag');
+  assert.equal(f.Equip.replaced({ ...gp.storage.items[0] }), true, 'the replaced piece is marked never-sell');
+  assert.equal(f.Town.sellable({ ...gp.storage.items[0], tooltip: { fields: { canSell: 1 } } }), false, 'not even with bag selling on');
+  assert.equal(f.Town.trip.phase, 'close-storage');
+  const off = townFixture(); off.Settings.profile.items.autoEquip = false; off.pet.inventory = [];
+  off.World.gp.inventory.push(piece(16, 801, 30, 24));
+  off.Town.begin(); off.Town.enter('store'); off.World.gp.storage = { npc: 60, phase: 'open', capacity: 30, items: [] }; off.World.gp.target = 60;
+  off.Town.store();
+  assert.equal(off.commands.some(c => c.kind === 'inventory-move'), false, 'off by default nothing is worn');
+});
+
+test('weapon swaps follow the worn weapon\'s dominant attack and respect the chosen weapons', () => {
+  const weaponFields = (paHi, maHi) => ({ canRepair: 1, reqLevelType1: 1, requiredLevel: 30,
+    varianceIntMin240: 10, varianceIntMax244: paHi, varianceIntMin248: 12, varianceIntMax24c: paHi + 4, varianceFloatPerPlus250: 0,
+    varianceIntMin254: 5, varianceIntMax258: maHi, varianceIntMin25c: 5, varianceIntMax260: maHi + 2, varianceFloatPerPlus264: 0 });
+  const rolls = String((31n << 20n) | (31n << 25n)); // perfect attack rolls (stat indexes 4 and 5)
+  const weapon = (slot, ref, pa, ma) => ({ slot, refObjId: ref, typeFlags: 44 | (6 << 7), quantity: 1, plus: 0, magic: [], variance: rolls, tooltip: { fields: weaponFields(pa, ma) } });
+  const drive = fixtureIn => {
+    const f = fixtureIn, gp = f.World.gp;
+    f.pet.inventory = [];
+    f.Settings.profile.items.autoEquip = true;
+    gp.progression = { ...(gp.progression || {}), level: 30, experience: '100' };
+    f.Town.begin(); f.Town.enter('store'); gp.storage = { npc: 60, phase: 'open', capacity: 30, items: [] }; gp.target = 60;
+    for (let n = 0; n < 6 && f.Town.trip?.phase === 'store'; n++) {
+      f.advance(1000); f.Town.store();
+      const c = f.commands.at(-1);
+      if (c?.kind === 'inventory-move') {
+        const candidate = gp.inventory.find(i => i.slot === c.source), worn = gp.inventory.find(i => i.slot === c.destination);
+        candidate.slot = c.destination; worn.slot = c.source;
+      }
+      f.advance(600); f.Town.store();
+    }
+    return f;
+  };
+  // A physical worn weapon: a magical blade with far better MA but worse PA never swaps in.
+  let f = townFixture();
+  const gp0 = f.World.gp;
+  gp0.inventory = gp0.inventory.filter(i => i.slot !== 6);
+  gp0.inventory.push(weapon(6, 900, 20, 8), weapon(16, 901, 12, 40));
+  f = drive(f);
+  assert.equal(f.commands.some(c => c.kind === 'inventory-move'), false, 'a physical build keeps the physical weapon');
+  // A strictly better physical blade does swap in — while the worn one is not the chosen primary weapon.
+  f = drive(townFixture());
+  const gp1 = f.World.gp;
+  gp1.inventory = gp1.inventory.filter(i => i.slot !== 6);
+  const worn1 = weapon(6, 900, 20, 8); gp1.inventory.push(worn1, weapon(16, 902, 30, 10));
+  f = drive(f);
+  assert.deepEqual(f.commands.filter(c => c.kind === 'inventory-move').map(c => c.source), [16], 'the better physical weapon is worn');
+  assert.equal(f.World.gp.inventory.find(i => i.slot === 6)?.refObjId, 902);
+  // The chosen primary weapon is protected: nothing swaps.
+  f = drive(townFixture());
+  const gp2 = f.World.gp;
+  gp2.inventory = gp2.inventory.filter(i => i.slot !== 6);
+  const worn2 = weapon(6, 900, 20, 8);
+  gp2.inventory.push(worn2, weapon(16, 902, 30, 10));
+  f.Settings.profile.items.gear.primaryWeapon = f.BuffGear.key(worn2);
+  f = drive(f);
+  assert.equal(f.commands.some(c => c.kind === 'inventory-move'), false, 'the chosen primary weapon is never replaced');
 });
 
 test('town deposits Star, Moon and Sun gear from the character bag and the pet, and nothing else', () => {

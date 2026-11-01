@@ -47,6 +47,15 @@ The **Items** page lists every item in the game with sBot-style filters under **
 
 While hunting, the primary weapon is the combat weapon. When something else is worn (after a reconnect or a manual change), the bot puts it back on, with the chosen shield when it is one-handed; a bow wears arrows and a crossbow bolts: the worn stack when it fits, otherwise the biggest stack in your bag, and the next one when a stack runs out. A secondary bow or crossbow gets its ammunition the same way. Under each buff, **Keep <skill> up** chooses **While hunting** (the default) or **Hunting and walk-back**: a walk-back buff is also kept up while the bot walks back to the hunting spot or between towns — speed or stealth skills stay on for the whole trip. Under each buff, **Gear for <skill>** can be **Primary weapon**, **Secondary weapon** or **Shield (with a one-handed weapon)**: the bot wears it, casts the buff, then goes back to the primary weapon. Automatic buff swaps try the secondary weapon first, then the primary. A primary weapon or shield the game will not equip is not tried again until you pick it again, and the gear worn before goes back on; any other refused move waits five minutes. Hunting goes on either way. Without a primary weapon chosen, whatever is worn stays the combat gear.
 
+## Wearing better gear
+
+**Loot → Bag and pet space → Wear better gear**: with **On town trips, wear carried gear with better stats; store the replaced piece** on (off by default), the town trip — while the warehouse is open — wears a carried equipment piece whose real stats beat the worn one in the same slot, and deposits the piece it replaces in the warehouse (it is never sold, even if bag selling is on).
+
+- Real stats means what the tooltip shows: each stat rolls inside its own min~max range (the roll quality, the "+x %"), plus adds its share, and known blues (build stats, hit ratio, HP) add a bounded nudge — so a well-rolled ordinary piece can beat a low-rolled Seal one.
+- Weapons are compared on the dominant attack of the worn weapon, so a physical build never swaps to a magical blade. Armour and shields compare physical + magical defence; accessories compare their reinforcement. A swap needs a 2 % edge, so near-ties never churn.
+- Rings and earrings have two slots: a better piece replaces the weaker of the two worn ones.
+- Never touched: the chosen primary/secondary weapon and shield, buff-set gear, the alchemy item, items with a Keep rule, pieces whose tooltip is incomplete or whose level requirement is unknown or unmet, and zero-durability pieces. A swap the game refuses is skipped for the session; nothing here can stop the town trip.
+
 ## Vigor and pet potions
 
 Under **Supplies → Automatic potion use**:
