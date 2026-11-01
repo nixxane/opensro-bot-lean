@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         nixxane bot
 // @namespace    https://opensro.online/
-// @version      1.2.196
+// @version      1.2.197
 // @updateURL    https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.meta.js
 // @downloadURL  https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -22,7 +22,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[NIX] Another SRO assistant is active. Disable it and reload to use NIX.');
   return;
 }
-const VERSION = '1.2.196';
+const VERSION = '1.2.197';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -8525,6 +8525,7 @@ const Stall = {
     }
     if (gp.inventoryPending || now() - p.at < 500) return false;
     const stall = gp.stall;
+    if (['create', 'open'].includes(p.kind) && stall && !(p.kind === 'open' && stall.open)) this.answerPrompt(p);
     if (p.kind === 'name') { if (stall?.phase === 'naming') { this.pending = null; return true; } return false; }
     if (p.kind === 'create') {
       if (stall?.phase === 'owner' && stall.owner === gp.localGid) { this.pending = null; return true; }
@@ -8541,6 +8542,22 @@ const Stall = {
     if (p.kind === 'open') { if (stall?.open) { this.pending = null; return true; } return false; }
     if (p.kind === 'close') { if (!stall) { this.pending = null; return true; } return false; }
     return false;
+  },
+  // The game raises its own OK box for the stall title and for opening the stall; Enter is its OK button
+  // (the client answers an open stall prompt on Enter and ignores the key otherwise).
+  pressOk() {
+    try {
+      for (const type of ['keydown', 'keyup'])
+        window.dispatchEvent(new KeyboardEvent(type, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+      return true;
+    } catch (e) { return false; }
+  },
+  // While a step waits for its state change, answer the game's prompt now and then.
+  answerPrompt(p) {
+    const age = now() - p.at;
+    if (age < 1200 || now() - (p.okAt || 0) < 1500) return;
+    p.okAt = now();
+    if (this.pressOk()) Log.info('Stall: confirmed the game prompt (' + p.kind + ').');
   },
   send(kind, command, label, extra = {}) {
     if (!Cmd.spaced(command.kind) || !Cmd.raw(command, 'Stall: ' + label)) return false;
@@ -14901,7 +14918,7 @@ const Alchemy = {
 };
 
 
-const RELEASE_NOTES = [{"version": "1.2.196", "title": "Shorter page list in the wide window", "items": ["In the wide window, the page list now shows one row per page: a small icon with the name beside it, like the Classic window's sidebar.", "The wide window is about 190 px shorter, and the page list column is a little wider to fit the names."], "note": "Tested in simulation only, not in a live game. The layout was checked on a screenshot replica, not in a real browser."}, {"version": "1.2.195", "title": "Shorter page list in the wide window", "items": ["In the wide window, the page list now shows one row per page: a small icon with the name beside it, like the Classic window's sidebar.", "The wide window is about 190 px shorter, and the page list column is a little wider to fit the names."], "note": "Tested in simulation only, not in a live game. The layout was checked on a screenshot replica, not in a real browser."}, {"version": "1.2.194", "title": "Fixed the gap above the page content", "items": ["In the wide and classic windows, the page content started too low, leaving a big empty gap at the top. It now starts right under the top bar.", "The extra height from the tab list now goes to the feedback area at the bottom instead."], "note": "Tested in simulation only, not in a live game. The layout was checked on a small replica, not in a real browser."}, {"version": "1.2.193", "title": "Fixed the gap above the page content", "items": ["In the wide and classic windows, the page content started far too low, leaving a big empty gap at the top. It now starts right under the top bar.", "The extra height from the tab list now goes to the feedback area at the bottom instead."], "note": "Tested in simulation only, not in a live game. The layout was checked on a small replica, not in a real browser."}, {"version": "1.2.192", "title": "Fixed blank Setup icons and Stall tab icon", "items": ["The icons in the Setup checklist were showing as blank. They now show the game's own icons.", "The Stall tab now has an icon in the page list, like the other pages."], "note": "Tested in simulation only, not in a live game. The icon paths were not checked against the live game assets."}, {"version": "1.2.191", "title": "Fixed blank Setup icons and Stall tab icon", "items": ["The icons in the Setup checklist were showing as black squares. They now show the game's own icons.", "The Stall tab now has an icon in the page list, like the other pages."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.190", "title": "Hunting spot changes with your level", "items": ["New \"Spot by level\" group on the Map page. It is off by default. Turn on \"Switch the hunting spot by level\".", "Set a hunting spot, type the level it is for under \"From level\", and press \"Save current spot\". Saved spots are listed below with a Remove button, and are kept per character.", "The highest saved level at or below yours is your hunting spot. When you level into a new one, the bot switches to it and walks there. Below your lowest saved level, your current spot is left alone.", "It only switches while the bot is hunting. Nothing changes during town trips, restocks, travel, quest visits or resurrection. Hunt radius and filters stay as they are."], "note": "Tested in simulation only, not in a live game. The walk to a far-away new spot was not covered by the tests."}, {"version": "1.2.189", "title": "Auto Quest: quests done for you", "items": ["New Quest page with \"Do quests automatically\" (Auto quests group). The bot follows the quest markers the game shows, walks to the quest NPC, accepts the quest, hunts the monsters that count, and turns it in.", "\"Accept quests their NPC offers\", \"Only quests named\" and \"Never quests named\" let you limit which quests it takes. Which dialogue answer belongs to which quest, and which monsters count, are learned while you play.", "Quests that can be closed from the reward window are rewarded without walking. If the reward is refused, the bot waits a minute before trying again, then goes to the NPC. A quest it cannot identify is never answered by guessing.", "The quest journal on the same page shows each quest's count, with Skip/Unskip and Abandon (click twice to confirm). It also tells you when the targets are not around.", "Your hunt area is not moved for you. Gathering, capture traps and travelling to a quest's monster spawn are not automated."], "note": "Contributed by duan78 (#75). Tested in simulation only, not in a live game. The NPC talk and reward commands were not checked against the live server."}];
+const RELEASE_NOTES = [{"version": "1.2.197", "title": "Quest Start button and stall prompts", "items": ["Auto quest now has Start quests and Stop quests buttons.", "Auto stall now answers the game's own OK prompt when opening the stall, so it no longer hangs waiting for you to click it."], "note": "Only tested in simulation; the OK prompt press was not checked on the live server."}, {"version": "1.2.196", "title": "Shorter page list in the wide window", "items": ["In the wide window, the page list now shows one row per page: a small icon with the name beside it, like the Classic window's sidebar.", "The wide window is about 190 px shorter, and the page list column is a little wider to fit the names."], "note": "Tested in simulation only, not in a live game. The layout was checked on a screenshot replica, not in a real browser."}, {"version": "1.2.195", "title": "Shorter page list in the wide window", "items": ["In the wide window, the page list now shows one row per page: a small icon with the name beside it, like the Classic window's sidebar.", "The wide window is about 190 px shorter, and the page list column is a little wider to fit the names."], "note": "Tested in simulation only, not in a live game. The layout was checked on a screenshot replica, not in a real browser."}, {"version": "1.2.194", "title": "Fixed the gap above the page content", "items": ["In the wide and classic windows, the page content started too low, leaving a big empty gap at the top. It now starts right under the top bar.", "The extra height from the tab list now goes to the feedback area at the bottom instead."], "note": "Tested in simulation only, not in a live game. The layout was checked on a small replica, not in a real browser."}, {"version": "1.2.193", "title": "Fixed the gap above the page content", "items": ["In the wide and classic windows, the page content started far too low, leaving a big empty gap at the top. It now starts right under the top bar.", "The extra height from the tab list now goes to the feedback area at the bottom instead."], "note": "Tested in simulation only, not in a live game. The layout was checked on a small replica, not in a real browser."}, {"version": "1.2.192", "title": "Fixed blank Setup icons and Stall tab icon", "items": ["The icons in the Setup checklist were showing as blank. They now show the game's own icons.", "The Stall tab now has an icon in the page list, like the other pages."], "note": "Tested in simulation only, not in a live game. The icon paths were not checked against the live game assets."}, {"version": "1.2.191", "title": "Fixed blank Setup icons and Stall tab icon", "items": ["The icons in the Setup checklist were showing as black squares. They now show the game's own icons.", "The Stall tab now has an icon in the page list, like the other pages."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.190", "title": "Hunting spot changes with your level", "items": ["New \"Spot by level\" group on the Map page. It is off by default. Turn on \"Switch the hunting spot by level\".", "Set a hunting spot, type the level it is for under \"From level\", and press \"Save current spot\". Saved spots are listed below with a Remove button, and are kept per character.", "The highest saved level at or below yours is your hunting spot. When you level into a new one, the bot switches to it and walks there. Below your lowest saved level, your current spot is left alone.", "It only switches while the bot is hunting. Nothing changes during town trips, restocks, travel, quest visits or resurrection. Hunt radius and filters stay as they are."], "note": "Tested in simulation only, not in a live game. The walk to a far-away new spot was not covered by the tests."}];
 
 // Check trusted repository metadata; never execute downloaded update code.
 const Updates = {
@@ -16940,7 +16957,9 @@ const UI = {
   section_questAuto(host) {
     const Q = () => Settings.profile.quest;
     host.append(this.group('Auto quests',
-      this.check('Do quests automatically', () => Q().on, v => Q().on = v),
+      this.row(this.button('Start quests', () => { Q().on = true; Settings.saveProfile(); this.toast('Auto quests started.', 'info', 3000); this.draw(); }),
+        this.button('Stop quests', () => { Q().on = false; Settings.saveProfile(); this.toast('Auto quests stopped.', 'info', 3000); this.draw(); })),
+      el('p', Q().on ? 'Auto quests are running.' : 'Auto quests are stopped. Press Start quests.', 'muted'),
       this.check('Accept quests their NPC offers', () => Q().accept, v => Q().accept = v),
       this.text('Only quests named', () => Q().include, v => Q().include = v, 'comma-separated QNO_ codenames'),
       this.text('Never quests named', () => Q().exclude, v => Q().exclude = v, 'comma-separated QNO_ codenames'),

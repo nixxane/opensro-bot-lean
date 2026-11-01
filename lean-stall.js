@@ -104,6 +104,7 @@ const Stall = {
     }
     if (gp.inventoryPending || now() - p.at < 500) return false;
     const stall = gp.stall;
+    if (['create', 'open'].includes(p.kind) && stall && !(p.kind === 'open' && stall.open)) this.answerPrompt(p);
     if (p.kind === 'name') { if (stall?.phase === 'naming') { this.pending = null; return true; } return false; }
     if (p.kind === 'create') {
       if (stall?.phase === 'owner' && stall.owner === gp.localGid) { this.pending = null; return true; }
@@ -120,6 +121,22 @@ const Stall = {
     if (p.kind === 'open') { if (stall?.open) { this.pending = null; return true; } return false; }
     if (p.kind === 'close') { if (!stall) { this.pending = null; return true; } return false; }
     return false;
+  },
+  // The game raises its own OK box for the stall title and for opening the stall; Enter is its OK button
+  // (the client answers an open stall prompt on Enter and ignores the key otherwise).
+  pressOk() {
+    try {
+      for (const type of ['keydown', 'keyup'])
+        window.dispatchEvent(new KeyboardEvent(type, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+      return true;
+    } catch (e) { return false; }
+  },
+  // While a step waits for its state change, answer the game's prompt now and then.
+  answerPrompt(p) {
+    const age = now() - p.at;
+    if (age < 1200 || now() - (p.okAt || 0) < 1500) return;
+    p.okAt = now();
+    if (this.pressOk()) Log.info('Stall: confirmed the game prompt (' + p.kind + ').');
   },
   send(kind, command, label, extra = {}) {
     if (!Cmd.spaced(command.kind) || !Cmd.raw(command, 'Stall: ' + label)) return false;
