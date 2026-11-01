@@ -985,10 +985,13 @@ const UI = {
   },
   section_questAuto(host) {
     const Q = () => Settings.profile.quest;
+    const state = el('p', null, 'muted');
+    const show = () => { state.textContent = Q().on ? 'Auto quests are on. ' + (Quest.status() || 'Looking for a quest.') : 'Auto quests are stopped. Press Start quests.'; };
+    show(); this.refreshers.push(show);
     host.append(this.group('Auto quests',
       this.row(this.button('Start quests', () => { Q().on = true; Settings.saveProfile(); this.toast('Auto quests started.', 'info', 3000); this.draw(); }),
         this.button('Stop quests', () => { Q().on = false; Settings.saveProfile(); this.toast('Auto quests stopped.', 'info', 3000); this.draw(); })),
-      el('p', Q().on ? 'Auto quests are running.' : 'Auto quests are stopped. Press Start quests.', 'muted'),
+      state,
       this.check('Accept quests their NPC offers', () => Q().accept, v => Q().accept = v),
       this.text('Only quests named', () => Q().include, v => Q().include = v, 'comma-separated QNO_ codenames'),
       this.text('Never quests named', () => Q().exclude, v => Q().exclude = v, 'comma-separated QNO_ codenames'),

@@ -7535,6 +7535,20 @@ const qDialog = (f, dialogue, gid = 901) => {
 const qMenu = f => { f.World.gp = { ...f.World.gp, npcConversation: { phase: 'menu', gid: 901, dialogueRevision: 0 } }; };
 const qSent = (f, kind) => f.commands.filter(c => c.kind === kind);
 
+test('a quest bot with nothing to do says why instead of staying silent', () => {
+  let f = questFixture();
+  f.Quest.observe();
+  assert.match(f.Quest.status(), /no quest markers/);
+  f = questFixture({ markers: [qMarker(7, 2)] });
+  f.Quest.observe();
+  assert.match(f.Quest.status(), /none open/);
+  f = questFixture({ markers: [qMarker(7, 1, 9)] });
+  f.Quest.observe();
+  assert.match(f.Quest.status(), /another region/);
+  f.Settings.profile.quest.on = false;
+  f.Quest.observe();
+  assert.equal(f.Quest.status(), '', 'off means no status');
+});
 test('a ready kind-2 quest is rewarded with the quest window command, once', () => {
   const f = questFixture({ quests: [qRecord(512, { contents: [{ tag: 1, kind: 0, description: 'SN_CON_Q', objectiveSentinel: false, objectiveValues: [20] }] })] });
   f.Quest.observe();

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         nixxane bot
 // @namespace    https://opensro.online/
-// @version      1.2.197
+// @version      1.2.198
 // @updateURL    https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.meta.js
 // @downloadURL  https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -22,7 +22,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[NIX] Another SRO assistant is active. Disable it and reload to use NIX.');
   return;
 }
-const VERSION = '1.2.197';
+const VERSION = '1.2.198';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -8067,7 +8067,7 @@ function questToken(symbol) {
 }
 
 const Quest = {
-  trip: null, resuming: false, noPoseAt: -Infinity, message: '', progressSeq: 0, kills: [], rewardSent: null, abandonSent: null,
+  trip: null, resuming: false, idle: '', noPoseAt: -Infinity, message: '', progressSeq: 0, kills: [], rewardSent: null, abandonSent: null,
   refused: new Map(),      // refId -> { count, at }: refused quest-reward commands
   visitFail: new Map(),    // refId -> at: a failed NPC visit waits this quest out
   rows: new Map(),         // dialogue row symbol -> skip-until timestamp
@@ -8111,6 +8111,7 @@ const Quest = {
   // Report an active quest before accepting a new one, and the quest window's own reward command
   // before a walk. Delivery and talk quests report at their NPC even without a counter.
   plan() {
+    this.why = '';
     const skip = this.cfg().skip || [];
     const cooled = refId => { const at = this.visitFail.get(refId); return at === undefined || now() - at >= QUEST_VISIT_BACKOFF_MS; };
     for (const r of this.journal()) {
@@ -8122,15 +8123,25 @@ const Quest = {
       const npc = cooled(r.refId) ? this.npcRoute(marker) : null;
       if (npc) return { intent: 'report', refId: r.refId, marker, npc };
     }
-    if (!this.cfg().accept) return null;
+    const open = this.journal().filter(r => !skip.includes(r.refId) && !this.completed(r.refId)).length;
+    if (!this.cfg().accept) { this.why = open ? open + ' quest(s) in progress; hunting for kills.' : 'Nothing to do: accepting new quests is off.'; return null; }
+    let offered = 0, filtered = 0, unrouted = 0;
     for (const m of this.markers()) {
       // A repeatable quest offers again after completion (the server's marker is the authority on
       // what can be accepted now), so only an active journal row or your lists keep a quest out.
       if (m.valueA !== 1 || this.record(m.refId) || skip.includes(m.refId)) continue;
-      if (!this.wanted(m.refId) || !cooled(m.refId)) continue;
+      offered++;
+      if (!this.wanted(m.refId) || !cooled(m.refId)) { filtered++; continue; }
       const npc = this.npcRoute(m);
       if (npc) return { intent: 'accept', refId: m.refId, marker: m, npc };
+      unrouted++;
     }
+    const n = this.markers().length;
+    this.why = open ? open + ' quest(s) in progress; hunting for kills.' :
+      !n ? 'The game shows no quest markers (no quest NPC known yet).' :
+      !offered ? 'No NPC offers a quest right now (' + n + ' marker' + (n === 1 ? '' : 's') + ', none open).' :
+      unrouted ? unrouted + ' offered quest(s) have an NPC in another region or no position; only the current region is walked to.' :
+      filtered + ' offered quest(s) are excluded by your lists or waiting after a failed visit.';
     return null;
   },
   // Same-region NPCs only: an adjacent region's marker position is a world-grid planar distance
@@ -8152,7 +8163,9 @@ const Quest = {
     Log.info('Quest: abandoning ' + this.label({ refId }) + '.');
   },
   observe() {
-    if (!this.on() || this.trip || !World.inWorld() || World.isDead()) return;
+    if (!this.on()) { this.idle = ''; return; }
+    if (this.trip) return;
+    if (!World.inWorld() || World.isDead()) { this.idle = 'Waiting for the game world.'; return; }
     if (this.abandonSent && now() - this.abandonSent.at > 10000) this.abandonSent = null;
     // A reward whose answer never came counts as a refusal: after two the NPC route takes over,
     // so a wedged transaction (the worker's single quest slot never clearing) cannot stall the
@@ -8165,9 +8178,10 @@ const Quest = {
         ((this.refused.get(refId)?.count || 0) >= QUEST_REWARD_TRIES ? 'waiting for its NPC instead.' : 'trying again in a minute.'));
     }
     const p = this.plan();
-    if (!p) return;
-    if (p.intent === 'reward') { this.sendReward(p); return; }
-    if (this.blocked()) return;
+    if (!p) { this.note(this.why); return; }
+    if (p.intent === 'reward') { this.note('Claiming the reward of ' + this.label(p) + '.'); this.sendReward(p); return; }
+    const busy = this.blocked();
+    if (busy) { this.note('Waiting to visit ' + this.label(p) + ': ' + busy + '.'); return; }
     this.begin(p);
   },
   // The quest window's own reward command needs no NPC: one send, then the journal answers. Only
@@ -8390,8 +8404,10 @@ const Quest = {
   // Restarting the hunt after a visit is the same bot run: the mall silk budget must survive it.
   resumeHunt() { this.resuming = true; try { Hunt.start(); } finally { this.resuming = false; } },
   cancel() { this.trip = null; this.rewardSent = null; this.abandonSent = null; },
-  reset() { this.cancel(); this.kills = []; this.refused.clear(); this.visitFail.clear(); this.rows.clear(); this.progressSeq = 0; this.message = ''; },
-  status() { return this.trip ? this.message : ''; },
+  reset() { this.cancel(); this.kills = []; this.refused.clear(); this.visitFail.clear(); this.rows.clear(); this.progressSeq = 0; this.message = ''; this.idle = ''; },
+  // What the bot is waiting for while no visit runs; logged when it changes so a silent Start can be read.
+  note(text) { if (text !== this.idle) { this.idle = text; if (text) Log.info('Quest: ' + text); } },
+  status() { return this.trip ? this.message : this.on() ? this.idle : ''; },
   // The live journal for the panel: what is active, at which count, and what the bot is doing.
   listing() {
     return this.journal().filter(r => !this.completed(r.refId)).map(r => {
@@ -14918,7 +14934,7 @@ const Alchemy = {
 };
 
 
-const RELEASE_NOTES = [{"version": "1.2.197", "title": "Quest Start button and stall prompts", "items": ["Auto quest now has Start quests and Stop quests buttons.", "Auto stall now answers the game's own OK prompt when opening the stall, so it no longer hangs waiting for you to click it."], "note": "Only tested in simulation; the OK prompt press was not checked on the live server."}, {"version": "1.2.196", "title": "Shorter page list in the wide window", "items": ["In the wide window, the page list now shows one row per page: a small icon with the name beside it, like the Classic window's sidebar.", "The wide window is about 190 px shorter, and the page list column is a little wider to fit the names."], "note": "Tested in simulation only, not in a live game. The layout was checked on a screenshot replica, not in a real browser."}, {"version": "1.2.195", "title": "Shorter page list in the wide window", "items": ["In the wide window, the page list now shows one row per page: a small icon with the name beside it, like the Classic window's sidebar.", "The wide window is about 190 px shorter, and the page list column is a little wider to fit the names."], "note": "Tested in simulation only, not in a live game. The layout was checked on a screenshot replica, not in a real browser."}, {"version": "1.2.194", "title": "Fixed the gap above the page content", "items": ["In the wide and classic windows, the page content started too low, leaving a big empty gap at the top. It now starts right under the top bar.", "The extra height from the tab list now goes to the feedback area at the bottom instead."], "note": "Tested in simulation only, not in a live game. The layout was checked on a small replica, not in a real browser."}, {"version": "1.2.193", "title": "Fixed the gap above the page content", "items": ["In the wide and classic windows, the page content started far too low, leaving a big empty gap at the top. It now starts right under the top bar.", "The extra height from the tab list now goes to the feedback area at the bottom instead."], "note": "Tested in simulation only, not in a live game. The layout was checked on a small replica, not in a real browser."}, {"version": "1.2.192", "title": "Fixed blank Setup icons and Stall tab icon", "items": ["The icons in the Setup checklist were showing as blank. They now show the game's own icons.", "The Stall tab now has an icon in the page list, like the other pages."], "note": "Tested in simulation only, not in a live game. The icon paths were not checked against the live game assets."}, {"version": "1.2.191", "title": "Fixed blank Setup icons and Stall tab icon", "items": ["The icons in the Setup checklist were showing as black squares. They now show the game's own icons.", "The Stall tab now has an icon in the page list, like the other pages."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.190", "title": "Hunting spot changes with your level", "items": ["New \"Spot by level\" group on the Map page. It is off by default. Turn on \"Switch the hunting spot by level\".", "Set a hunting spot, type the level it is for under \"From level\", and press \"Save current spot\". Saved spots are listed below with a Remove button, and are kept per character.", "The highest saved level at or below yours is your hunting spot. When you level into a new one, the bot switches to it and walks there. Below your lowest saved level, your current spot is left alone.", "It only switches while the bot is hunting. Nothing changes during town trips, restocks, travel, quest visits or resurrection. Hunt radius and filters stay as they are."], "note": "Tested in simulation only, not in a live game. The walk to a far-away new spot was not covered by the tests."}];
+const RELEASE_NOTES = [{"version": "1.2.198", "title": "Auto quest says what it is waiting for", "items": ["When Start quests is on but nothing happens, the Quest page now says why: no quest markers, no NPC offering a quest, an NPC in another region, quests excluded by your lists, or what it is waiting on.", "The same reason is written to the log when it changes."], "note": "Only tested in simulation. This explains the idle state; it does not yet walk to NPCs in other regions."}, {"version": "1.2.197", "title": "Quest Start button and stall prompts", "items": ["Auto quest now has Start quests and Stop quests buttons.", "Auto stall now answers the game's own OK prompt when opening the stall, so it no longer hangs waiting for you to click it."], "note": "Only tested in simulation; the OK prompt press was not checked on the live server."}, {"version": "1.2.196", "title": "Shorter page list in the wide window", "items": ["In the wide window, the page list now shows one row per page: a small icon with the name beside it, like the Classic window's sidebar.", "The wide window is about 190 px shorter, and the page list column is a little wider to fit the names."], "note": "Tested in simulation only, not in a live game. The layout was checked on a screenshot replica, not in a real browser."}, {"version": "1.2.195", "title": "Shorter page list in the wide window", "items": ["In the wide window, the page list now shows one row per page: a small icon with the name beside it, like the Classic window's sidebar.", "The wide window is about 190 px shorter, and the page list column is a little wider to fit the names."], "note": "Tested in simulation only, not in a live game. The layout was checked on a screenshot replica, not in a real browser."}, {"version": "1.2.194", "title": "Fixed the gap above the page content", "items": ["In the wide and classic windows, the page content started too low, leaving a big empty gap at the top. It now starts right under the top bar.", "The extra height from the tab list now goes to the feedback area at the bottom instead."], "note": "Tested in simulation only, not in a live game. The layout was checked on a small replica, not in a real browser."}, {"version": "1.2.193", "title": "Fixed the gap above the page content", "items": ["In the wide and classic windows, the page content started far too low, leaving a big empty gap at the top. It now starts right under the top bar.", "The extra height from the tab list now goes to the feedback area at the bottom instead."], "note": "Tested in simulation only, not in a live game. The layout was checked on a small replica, not in a real browser."}, {"version": "1.2.192", "title": "Fixed blank Setup icons and Stall tab icon", "items": ["The icons in the Setup checklist were showing as blank. They now show the game's own icons.", "The Stall tab now has an icon in the page list, like the other pages."], "note": "Tested in simulation only, not in a live game. The icon paths were not checked against the live game assets."}, {"version": "1.2.191", "title": "Fixed blank Setup icons and Stall tab icon", "items": ["The icons in the Setup checklist were showing as black squares. They now show the game's own icons.", "The Stall tab now has an icon in the page list, like the other pages."], "note": "Tested in simulation only, not in a live game."}];
 
 // Check trusted repository metadata; never execute downloaded update code.
 const Updates = {
@@ -16956,10 +16972,13 @@ const UI = {
   },
   section_questAuto(host) {
     const Q = () => Settings.profile.quest;
+    const state = el('p', null, 'muted');
+    const show = () => { state.textContent = Q().on ? 'Auto quests are on. ' + (Quest.status() || 'Looking for a quest.') : 'Auto quests are stopped. Press Start quests.'; };
+    show(); this.refreshers.push(show);
     host.append(this.group('Auto quests',
       this.row(this.button('Start quests', () => { Q().on = true; Settings.saveProfile(); this.toast('Auto quests started.', 'info', 3000); this.draw(); }),
         this.button('Stop quests', () => { Q().on = false; Settings.saveProfile(); this.toast('Auto quests stopped.', 'info', 3000); this.draw(); })),
-      el('p', Q().on ? 'Auto quests are running.' : 'Auto quests are stopped. Press Start quests.', 'muted'),
+      state,
       this.check('Accept quests their NPC offers', () => Q().accept, v => Q().accept = v),
       this.text('Only quests named', () => Q().include, v => Q().include = v, 'comma-separated QNO_ codenames'),
       this.text('Never quests named', () => Q().exclude, v => Q().exclude = v, 'comma-separated QNO_ codenames'),

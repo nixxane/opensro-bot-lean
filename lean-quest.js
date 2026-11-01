@@ -38,7 +38,7 @@ function questToken(symbol) {
 }
 
 const Quest = {
-  trip: null, resuming: false, noPoseAt: -Infinity, message: '', progressSeq: 0, kills: [], rewardSent: null, abandonSent: null,
+  trip: null, resuming: false, idle: '', noPoseAt: -Infinity, message: '', progressSeq: 0, kills: [], rewardSent: null, abandonSent: null,
   refused: new Map(),      // refId -> { count, at }: refused quest-reward commands
   visitFail: new Map(),    // refId -> at: a failed NPC visit waits this quest out
   rows: new Map(),         // dialogue row symbol -> skip-until timestamp
@@ -82,6 +82,7 @@ const Quest = {
   // Report an active quest before accepting a new one, and the quest window's own reward command
   // before a walk. Delivery and talk quests report at their NPC even without a counter.
   plan() {
+    this.why = '';
     const skip = this.cfg().skip || [];
     const cooled = refId => { const at = this.visitFail.get(refId); return at === undefined || now() - at >= QUEST_VISIT_BACKOFF_MS; };
     for (const r of this.journal()) {
@@ -93,15 +94,25 @@ const Quest = {
       const npc = cooled(r.refId) ? this.npcRoute(marker) : null;
       if (npc) return { intent: 'report', refId: r.refId, marker, npc };
     }
-    if (!this.cfg().accept) return null;
+    const open = this.journal().filter(r => !skip.includes(r.refId) && !this.completed(r.refId)).length;
+    if (!this.cfg().accept) { this.why = open ? open + ' quest(s) in progress; hunting for kills.' : 'Nothing to do: accepting new quests is off.'; return null; }
+    let offered = 0, filtered = 0, unrouted = 0;
     for (const m of this.markers()) {
       // A repeatable quest offers again after completion (the server's marker is the authority on
       // what can be accepted now), so only an active journal row or your lists keep a quest out.
       if (m.valueA !== 1 || this.record(m.refId) || skip.includes(m.refId)) continue;
-      if (!this.wanted(m.refId) || !cooled(m.refId)) continue;
+      offered++;
+      if (!this.wanted(m.refId) || !cooled(m.refId)) { filtered++; continue; }
       const npc = this.npcRoute(m);
       if (npc) return { intent: 'accept', refId: m.refId, marker: m, npc };
+      unrouted++;
     }
+    const n = this.markers().length;
+    this.why = open ? open + ' quest(s) in progress; hunting for kills.' :
+      !n ? 'The game shows no quest markers (no quest NPC known yet).' :
+      !offered ? 'No NPC offers a quest right now (' + n + ' marker' + (n === 1 ? '' : 's') + ', none open).' :
+      unrouted ? unrouted + ' offered quest(s) have an NPC in another region or no position; only the current region is walked to.' :
+      filtered + ' offered quest(s) are excluded by your lists or waiting after a failed visit.';
     return null;
   },
   // Same-region NPCs only: an adjacent region's marker position is a world-grid planar distance
@@ -123,7 +134,9 @@ const Quest = {
     Log.info('Quest: abandoning ' + this.label({ refId }) + '.');
   },
   observe() {
-    if (!this.on() || this.trip || !World.inWorld() || World.isDead()) return;
+    if (!this.on()) { this.idle = ''; return; }
+    if (this.trip) return;
+    if (!World.inWorld() || World.isDead()) { this.idle = 'Waiting for the game world.'; return; }
     if (this.abandonSent && now() - this.abandonSent.at > 10000) this.abandonSent = null;
     // A reward whose answer never came counts as a refusal: after two the NPC route takes over,
     // so a wedged transaction (the worker's single quest slot never clearing) cannot stall the
@@ -136,9 +149,10 @@ const Quest = {
         ((this.refused.get(refId)?.count || 0) >= QUEST_REWARD_TRIES ? 'waiting for its NPC instead.' : 'trying again in a minute.'));
     }
     const p = this.plan();
-    if (!p) return;
-    if (p.intent === 'reward') { this.sendReward(p); return; }
-    if (this.blocked()) return;
+    if (!p) { this.note(this.why); return; }
+    if (p.intent === 'reward') { this.note('Claiming the reward of ' + this.label(p) + '.'); this.sendReward(p); return; }
+    const busy = this.blocked();
+    if (busy) { this.note('Waiting to visit ' + this.label(p) + ': ' + busy + '.'); return; }
     this.begin(p);
   },
   // The quest window's own reward command needs no NPC: one send, then the journal answers. Only
@@ -361,8 +375,10 @@ const Quest = {
   // Restarting the hunt after a visit is the same bot run: the mall silk budget must survive it.
   resumeHunt() { this.resuming = true; try { Hunt.start(); } finally { this.resuming = false; } },
   cancel() { this.trip = null; this.rewardSent = null; this.abandonSent = null; },
-  reset() { this.cancel(); this.kills = []; this.refused.clear(); this.visitFail.clear(); this.rows.clear(); this.progressSeq = 0; this.message = ''; },
-  status() { return this.trip ? this.message : ''; },
+  reset() { this.cancel(); this.kills = []; this.refused.clear(); this.visitFail.clear(); this.rows.clear(); this.progressSeq = 0; this.message = ''; this.idle = ''; },
+  // What the bot is waiting for while no visit runs; logged when it changes so a silent Start can be read.
+  note(text) { if (text !== this.idle) { this.idle = text; if (text) Log.info('Quest: ' + text); } },
+  status() { return this.trip ? this.message : this.on() ? this.idle : ''; },
   // The live journal for the panel: what is active, at which count, and what the bot is doing.
   listing() {
     return this.journal().filter(r => !this.completed(r.refId)).map(r => {
