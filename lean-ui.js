@@ -555,7 +555,7 @@ const UI = {
     } else if (this.current === 'Loot') {
       this.sections('lootCollection', 'lootWho', 'lootBalance');
     } else if (this.current === 'Supplies') {
-      this.sections('suppliesPotions', 'suppliesRestock');
+      this.sections('suppliesPotions', 'suppliesRestock', 'suppliesMall');
       this.pane.append(el('p', 'Town trips, what starts them, and arrows and bolts are on the Town page.', 'muted'));
     } else if (this.current === 'Town') {
       this.sections('townTrip', 'townWhen', 'townCycle', 'townAmmo');
@@ -588,7 +588,7 @@ const UI = {
   classicTabs() {
     return [
       { name: 'Settings', icon: 'action\\icon_cha_helper', pages: ['Supplies', 'Loot', 'Town', 'Combat', 'Settings'], sections: [
-        ['suppliesPotions', 'Autopotion settings'], ['suppliesRestock', 'Buy settings'], ['townWhen', 'Back town settings'],
+        ['suppliesPotions', 'Autopotion settings'], ['suppliesRestock', 'Buy settings'], ['suppliesMall', 'Item mall settings'], ['townWhen', 'Back town settings'],
         ['lootCollection', 'Pick settings'], ['lootWho', 'Who picks up what'], ['lootBalance'], ['combatMonsters', 'Attack preferences'],
         ['combatBerserk', 'Berserk settings'], ['settingsBehaviour', 'Attack behaviour / Protection'], ['settingsObstacles'], ['settingsAntiStuck']] },
       { name: 'Skills', icon: 'action\\icon_cha_auto_attack', pages: ['Combat'], sections: [
@@ -820,6 +820,9 @@ const UI = {
       this.speedNote = el('p', '', 'muted');
       pots.append(this.check('Use beginner +100% speed scroll automatically', () => P().speedScroll, v => { P().speedScroll = v; SpeedScroll.reset(); }),
         el('p', 'Uses only the beginner scroll during hunting or travel when no movement-speed buff is active. Works during combat casts; potions have priority. Waits for buff confirmation and stops retrying after three unconfirmed attempts.', 'muted'), this.speedNote);
+      pots.append(this.check('Keep a 20% damage scroll active', () => Settings.profile.scroll.damageInc, v => { Settings.profile.scroll.damageInc = v; ScrollBuff.reset(); }),
+        this.check('Keep a 20% resistance scroll active', () => Settings.profile.scroll.damageAbs, v => { Settings.profile.scroll.damageAbs = v; ScrollBuff.reset(); }),
+        el('p', 'While hunting, uses a 20% damage increase and/or resistance scroll from your bag whenever its 30-minute buff runs out, like the speed scroll above: potions have priority, each use waits for its buff, and it stops retrying after three unconfirmed attempts. Buying more scrolls is set under Item mall below.', 'muted'));
       const R = () => P().repairHammer;
       this.hammerNote = el('p', '', 'muted');
       pots.append(this.check('Use a repair hammer when gear is worn', () => R().on, v => { R().on = v; RepairHammer.reset(); }),
@@ -869,9 +872,38 @@ const UI = {
         this.select('Recovery kit', () => [[0, 'Choose the merchant\'s pet kits'], ...C().offers.filter(o => o.kind === 'kit').map(o => [o.refObjId, o.name])], () => C().kit.refObjId, v => C().kit.refObjId = Number(v)),
         this.number('Kits low stock ≤', () => C().kit.low, v => C().kit.low = v, 0, 9999),
         this.number('Kits refill to', () => C().kit.target, v => C().kit.target = v, 1, 10000),
-        el('p', 'Pet recovery kits for the attack and pickup pets, bought on the same refill trips as the pet food; a merchant without them skips them with a notice. Using them is set under Automatic potion use.', 'muted'));
+        el('p', 'Pet recovery kits for the attack and pickup pets, bought on the same refill trips as the pet food; a merchant without them skips them with a notice. Using them is set under Automatic potion use.', 'muted'),
+        this.check('Buy Reverse Return Scrolls', () => C().reverse.on, v => C().reverse.on = v),
+        this.number('Reverse scrolls low stock ≤', () => C().reverse.low, v => C().reverse.low = v, 0, 999),
+        this.number('Reverse scrolls refill to', () => C().reverse.target, v => C().reverse.target = v, 1, 9999),
+        el('p', 'Refills Reverse Return Scrolls at the recorded merchant with gold; a merchant without them skips it with a notice (the trip can still walk back).', 'muted'));
       shop.append(el('p', 'Refill targets are total potion counts, including what is already in your bag. Used for low-supply, full-bag and revival trips, and walking-route restock when the town cycle is off. Set MP refill to 1000 for 1,000 MP potions. Changes apply to the next trip.', 'muted'));
       host.append(shop);
+  },
+  section_suppliesMall(host) {
+    const M = () => Settings.profile.mall;
+    host.append(this.group('Item mall',
+      this.check('Buy from the Item mall', () => M().on, v => M().on = v),
+      this.number('Silk budget per bot run (0 = never buy)', () => M().budgetSilk, v => M().budgetSilk = v, 0, 100000),
+      this.mallNote = el('p', '', 'muted'),
+      el('p', 'The mall wallet is shared by every character on the account and nothing refills it in the game, so every purchase is bounded by the budget above and one order is in flight at a time. Orders land straight in the bag while hunting; they never interrupt combat or a town trip, and the merchant stays the primary supply. An unconfirmed order blocks mall buying until you re-enter the game (the game itself demands that resync).', 'muted'),
+      this.check('Buy HP potion bags when the total HP stock is low', () => M().hp.on, v => M().hp.on = v),
+      this.number('HP low stock ≤', () => M().hp.low, v => M().hp.low = v, 0, 9999),
+      this.number('HP refill to', () => M().hp.target, v => M().hp.target = v, 1, 100000),
+      this.check('Buy MP potion bags when the total MP stock is low', () => M().mp.on, v => M().mp.on = v),
+      this.number('MP low stock ≤', () => M().mp.low, v => M().mp.low = v, 0, 9999),
+      this.number('MP refill to', () => M().mp.target, v => M().mp.target = v, 1, 100000),
+      this.check('Buy 20% damage scrolls', () => M().damageInc.on, v => M().damageInc.on = v),
+      this.number('Damage scrolls low stock ≤', () => M().damageInc.low, v => M().damageInc.low = v, 0, 999),
+      this.number('Damage scrolls refill to', () => M().damageInc.target, v => M().damageInc.target = v, 1, 9999),
+      this.check('Buy 20% resistance scrolls', () => M().damageAbs.on, v => M().damageAbs.on = v),
+      this.number('Resistance scrolls low stock ≤', () => M().damageAbs.low, v => M().damageAbs.low = v, 0, 999),
+      this.number('Resistance scrolls refill to', () => M().damageAbs.target, v => M().damageAbs.target = v, 1, 9999),
+      this.check('Buy Reverse Return Scrolls here (the merchant with gold stays cheaper)', () => M().reverse.on, v => M().reverse.on = v),
+      this.number('Reverse scrolls low stock ≤', () => M().reverse.low, v => M().reverse.low = v, 0, 999),
+      this.number('Reverse scrolls refill to', () => M().reverse.target, v => M().reverse.target = v, 1, 9999),
+      el('p', 'Merchant first, mall second: keep these low marks BELOW the potion restock marks above and the merchant refills with gold while the mall only steps in when that was not enough. Raise a mark above the merchant one and the mall spends silk first instead — for wallets that can afford it. One bag or pack is bought per order and the delivered amount is measured from the inventory, so an unknown pack size only means another order. Prices come from the live catalogue, never from remembered addresses.', 'muted')),
+      el('p', 'Keeping the scrolls active is set under Automatic potion use above; the switches here only refill the stock.', 'muted'));
   },
   section_townTrip(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
@@ -1299,6 +1331,12 @@ const UI = {
     if (!this.status) return;
     if (this.is('Supplies') && this.petPotionNote) { this.petPotionNote.textContent = this.petPotionNote.title = PetPotion.message; }
     if (this.is('Combat') && this.petAttackNote) { this.petAttackNote.textContent = this.petAttackNote.title = PetAttack.status(); }
+    if (this.is('Supplies') && this.mallNote) {
+      const m = () => MallBuyer.on()
+        ? MallBuyer.message + ' Spent ' + MallBuyer.spentSilk + ' silk this run; wallet ' + (World.gp?.itemMall?.silk ?? '—') + ' silk.'
+        : 'Item mall buying off.';
+      this.mallNote.textContent = this.mallNote.title = m();
+    }
     if (this.is('Supplies') && this.speedNote) this.speedNote.textContent = SpeedScroll.message;
     if (this.is('Supplies') && this.hammerNote) this.hammerNote.textContent = RepairHammer.message;
     if (this.is('Loot') && this.petNote) { const text = Loot.petStatus(); this.petNote.style.visibility = Loot.petMode() ? '' : 'hidden'; this.petNote.textContent = text; this.petNote.title = text; }
