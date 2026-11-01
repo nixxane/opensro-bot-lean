@@ -10102,7 +10102,10 @@ const MallBuyer = {
   state() { return World.gp?.itemMall ?? null; },
   silk() { return Number(this.state()?.silk ?? 0); },
   count(ref) { return World.items().filter(i => i.refObjId === ref).reduce((n, i) => n + (i.quantity ?? 1), 0); },
-  reset() { this.pending = null; this.spentSilk = 0; this.openedAt = -Infinity; this.lastAt = -Infinity; this.refused.clear(); this.goals.clear(); this.message = 'Item mall off.'; },
+  // The budget is per bot run, so a world transition or profile change keeps what was spent; only newRun() clears it.
+  // An order still in flight counts as spent: it may well have been delivered.
+  reset() { if (this.pending) this.spentSilk += this.pending.silk; this.pending = null; this.openedAt = -Infinity; this.lastAt = -Infinity; this.refused.clear(); this.goals.clear(); this.message = 'Item mall off.'; },
+  newRun() { this.spentSilk = 0; },
   unpoison() { this.poison = false; this.probeRevision = null; },
   // The live offer whose package contains this item. Never a remembered address: the server stale-checks packageId.
   offerFor(ref) { return (this.state()?.offers || []).find(o => (o.itemIds || []).includes(ref) && (o.silk || 0) > 0) || null; },
@@ -10162,7 +10165,7 @@ const MallBuyer = {
       }
       if (count > p.before) { this.spentSilk += p.silk; this.pending = null; this.message = p.label + ' delivered.'; return false; }
       if (now() - p.at > MALL_TIMEOUT_MS) {
-        this.pending = null; this.poison = true;
+        this.spentSilk += p.silk; this.pending = null; this.poison = true; // unconfirmed is not unpaid
         this.message = 'Item mall purchase unconfirmed; mall buying blocked until you re-enter the game.';
         Log.warn('Item mall: ' + this.message);
         UI.toast(this.message, 'warn', 8000);
@@ -10216,7 +10219,7 @@ const MallBuyer = {
 
 // The silk budget is per bot run: a restart gives a fresh one, but a poisoned mall state survives it (the game
 // client itself refuses mall commands until the world is re-entered).
-bus.on('hunt', running => { if (running) { const poison = MallBuyer.poison; MallBuyer.reset(); MallBuyer.poison = poison; } });
+bus.on('hunt', running => { if (running) { const poison = MallBuyer.poison; MallBuyer.reset(); MallBuyer.newRun(); MallBuyer.poison = poison; } });
 
 
 // Anti-stuck watchdog. While hunting it watches for confirmed progress (kills, XP, gold,
