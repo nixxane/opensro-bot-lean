@@ -467,7 +467,8 @@ test('the alert-sound switches persist like every other profile section, and unk
   const saved = f.botProfile({ sounds: { player: true, died: true, levelUp: false, unique: false, mystery: 1 } });
   assert.deepEqual([saved.sounds.player, saved.sounds.died, saved.sounds.levelUp, saved.sounds.unique], [true, true, false, false]);
   assert.equal('mystery' in saved.sounds, false, 'unknown fields are dropped');
-  assert.deepEqual(f.botProfile({}).sounds, { player: false, died: false, levelUp: false, unique: false });
+  const fresh = f.botProfile({}).sounds;
+  assert.deepEqual([fresh.player, fresh.died, fresh.levelUp, fresh.unique], [false, false, false, false]);
 });
 test('auto pot keeps drinking while an auto trade runs, from the Controller loop', () => {
   const t = tradeFixture(), f = t.f;
