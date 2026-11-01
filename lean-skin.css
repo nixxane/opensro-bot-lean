@@ -95,7 +95,7 @@ textarea{width:100%;color:inherit;background:#151916;font:11px monospace}
 @media(min-width:900px){
 header button.layout{display:inline-flex;height:22px;min-width:0;margin-left:8px;font-size:11px}
 :host(.wide){width:min(1000px,calc(100vw - 8px))}
-:host(.wide) .body{display:grid;grid-template-columns:104px minmax(0,1fr) 196px;grid-template-areas:"note note note" "strip strip ctl" "nav wait side" "nav pane side" "nav fb side" "log log log";grid-template-rows:auto auto auto auto minmax(0,1fr) auto;column-gap:8px;align-items:start}
+:host(.wide) .body{display:grid;grid-template-columns:128px minmax(0,1fr) 196px;grid-template-areas:"note note note" "strip strip ctl" "nav wait side" "nav pane side" "nav fb side" "log log log";grid-template-rows:auto auto auto auto minmax(0,1fr) auto;column-gap:8px;align-items:start}
 :host(.wide) .wide-only{display:block}
 :host(.wide) .status{display:none}
 :host(.wide) .update-note{grid-area:note}
@@ -113,10 +113,10 @@ header button.layout{display:inline-flex;height:22px;min-width:0;margin-left:8px
 :host(.wide) .controls{grid-area:ctl;display:grid;grid-template-columns:1fr 1fr;gap:3px;padding:4px 0 8px;align-self:center}:host(.wide) .controls button:first-child{grid-column:1/-1;height:28px;font-weight:bold;color:#fff}
 :host(.wide) .waiting{grid-area:wait}
 :host(.wide) nav{grid-area:nav;flex-direction:column;align-items:stretch;flex-wrap:nowrap;gap:3px;padding-top:0}
-:host(.wide) nav button{flex:none;flex-direction:column;gap:3px;height:58px;padding:0;font-size:11px;border:0;border-image:none;background:linear-gradient(#262420,#16150f);box-shadow:inset 0 0 0 1px #4a4130}
+:host(.wide) nav button{flex:none;flex-direction:row;justify-content:flex-start;gap:7px;height:32px;padding:0 6px;font-size:12px;text-align:left;border:0;border-image:none;background:linear-gradient(#262420,#16150f);box-shadow:inset 0 0 0 1px #4a4130}
 :host(.wide) nav button:hover{color:#fff;box-shadow:inset 0 0 0 1px #8f7a45}
 :host(.wide) nav button[aria-selected=true]{color:#fff;background:linear-gradient(#2a5b74,#183447);box-shadow:inset 0 0 0 1px #5fb6d9,0 0 6px #2d7fa588}
-:host(.wide) nav button>img{display:block;width:28px;height:28px;border:1px solid #5d5034;background:#000}
+:host(.wide) nav button>img{display:block;flex:none;width:24px;height:24px;border:1px solid #5d5034;background:#000}
 :host(.wide) .pane{grid-area:pane;padding-top:0;height:clamp(240px,calc(100vh - 470px),600px);max-height:none;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:8px;align-content:start;align-items:start}
 :host(.wide) .pane>:not(fieldset){grid-column:1/-1}
 /* A page with one long box (Loot) spreads its rows over both columns. */
