@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         nixxane bot
 // @namespace    https://opensro.online/
-// @version      1.2.201
+// @version      1.2.202
 // @updateURL    https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.meta.js
 // @downloadURL  https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -22,7 +22,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[NIX] Another SRO assistant is active. Disable it and reload to use NIX.');
   return;
 }
-const VERSION = '1.2.201';
+const VERSION = '1.2.202';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -15026,7 +15026,7 @@ const Alchemy = {
 };
 
 
-const RELEASE_NOTES = [{"version": "1.2.201", "title": "Panel bottom rows stay on screen", "items": ["On screens like 1920×1080 with browser bars, the bottom of the bot window (the feedback line and the wide window's activity log) was cut off. It now always stays on screen.", "The scrolling part of the window shrinks to fit instead, and the window re-fits when you move it, resize the page, restore it or show it again (Shift+F7).", "On short screens the wide window uses a smaller activity log and status strip to leave room."], "note": "Contributed by duan78 (#81). Tested in simulation, and in a local browser test page at several window sizes. Not tested in a live game."}, {"version": "1.2.200", "title": "Seal gear is picked up first", "items": ["When several drops are on the ground, Star, Moon and Sun gear is now collected before everything else, whatever the distance. Sun goes before Moon, and Moon before Star.", "This applies to both your character and your pickup pet. Among drops of the same kind, the nearest still goes first.", "Without the item list loaded, the nearest drop still goes first. Ownership, exclusions and bag space still apply as before. There is a short note about this on the loot options in the panel."], "note": "Contributed by duan78 (#80). Tested in simulation only, not in a live game. The Sun, Moon, Star order was tested for Sun before Star only."}, {"version": "1.2.199", "title": "Auto quest: pick quests from a list", "items": ["The Quest page now has a list of quests to tick, like phBot. Each shows its level and name. The list comes from the game's own quest data (about 140 quests whose NPC the data names).", "Ticked quests are done lowest level first: the bot walks to the quest NPC from the game's NPC table (it can cross regions, outdoors), takes the quest, hunts what the quest counts and turns it in. Quests above your level wait.", "Quest codenames now come from the data, so the right dialogue row is picked without learning it first. The journal's own target list is hunted first.", "With nothing ticked it still follows the quest markers the game shows. The status line says what it is waiting for."], "note": "Only tested in simulation and against the game data files. Monster spawns are not in the client, so the bot hunts where your hunting area already is. Not checked on the live server."}, {"version": "1.2.198", "title": "Auto quest says what it is waiting for", "items": ["When Start quests is on but nothing happens, the Quest page now says why: no quest markers, no NPC offering a quest, an NPC in another region, quests excluded by your lists, or what it is waiting on.", "The same reason is written to the log when it changes."], "note": "Only tested in simulation. This explains the idle state; it does not yet walk to NPCs in other regions."}, {"version": "1.2.197", "title": "Quest Start button and stall prompts", "items": ["Auto quest now has Start quests and Stop quests buttons.", "Auto stall now answers the game's own OK prompt when opening the stall, so it no longer hangs waiting for you to click it."], "note": "Only tested in simulation; the OK prompt press was not checked on the live server."}, {"version": "1.2.196", "title": "Shorter page list in the wide window", "items": ["In the wide window, the page list now shows one row per page: a small icon with the name beside it, like the Classic window's sidebar.", "The wide window is about 190 px shorter, and the page list column is a little wider to fit the names."], "note": "Tested in simulation only, not in a live game. The layout was checked on a screenshot replica, not in a real browser."}, {"version": "1.2.195", "title": "Shorter page list in the wide window", "items": ["In the wide window, the page list now shows one row per page: a small icon with the name beside it, like the Classic window's sidebar.", "The wide window is about 190 px shorter, and the page list column is a little wider to fit the names."], "note": "Tested in simulation only, not in a live game. The layout was checked on a screenshot replica, not in a real browser."}, {"version": "1.2.194", "title": "Fixed the gap above the page content", "items": ["In the wide and classic windows, the page content started too low, leaving a big empty gap at the top. It now starts right under the top bar.", "The extra height from the tab list now goes to the feedback area at the bottom instead."], "note": "Tested in simulation only, not in a live game. The layout was checked on a small replica, not in a real browser."}];
+const RELEASE_NOTES = [{"version": "1.2.202", "title": "Bug reports say why the bot stopped", "items": ["A bug report now lists the last reasons the bot stopped by itself (for example a town trip that timed out), how long ago, and whether you stopped it last.", "Before, a stopped bot only said \"Bot stopped.\", so reports of the bot doing nothing after a town trip could not say what ended the run.", "This only adds information to reports. Nothing about how the bot hunts or travels changes."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.201", "title": "Panel bottom rows stay on screen", "items": ["On screens like 1920×1080 with browser bars, the bottom of the bot window (the feedback line and the wide window's activity log) was cut off. It now always stays on screen.", "The scrolling part of the window shrinks to fit instead, and the window re-fits when you move it, resize the page, restore it or show it again (Shift+F7).", "On short screens the wide window uses a smaller activity log and status strip to leave room."], "note": "Contributed by duan78 (#81). Tested in simulation, and in a local browser test page at several window sizes. Not tested in a live game."}, {"version": "1.2.200", "title": "Seal gear is picked up first", "items": ["When several drops are on the ground, Star, Moon and Sun gear is now collected before everything else, whatever the distance. Sun goes before Moon, and Moon before Star.", "This applies to both your character and your pickup pet. Among drops of the same kind, the nearest still goes first.", "Without the item list loaded, the nearest drop still goes first. Ownership, exclusions and bag space still apply as before. There is a short note about this on the loot options in the panel."], "note": "Contributed by duan78 (#80). Tested in simulation only, not in a live game. The Sun, Moon, Star order was tested for Sun before Star only."}, {"version": "1.2.199", "title": "Auto quest: pick quests from a list", "items": ["The Quest page now has a list of quests to tick, like phBot. Each shows its level and name. The list comes from the game's own quest data (about 140 quests whose NPC the data names).", "Ticked quests are done lowest level first: the bot walks to the quest NPC from the game's NPC table (it can cross regions, outdoors), takes the quest, hunts what the quest counts and turns it in. Quests above your level wait.", "Quest codenames now come from the data, so the right dialogue row is picked without learning it first. The journal's own target list is hunted first.", "With nothing ticked it still follows the quest markers the game shows. The status line says what it is waiting for."], "note": "Only tested in simulation and against the game data files. Monster spawns are not in the client, so the bot hunts where your hunting area already is. Not checked on the live server."}, {"version": "1.2.198", "title": "Auto quest says what it is waiting for", "items": ["When Start quests is on but nothing happens, the Quest page now says why: no quest markers, no NPC offering a quest, an NPC in another region, quests excluded by your lists, or what it is waiting on.", "The same reason is written to the log when it changes."], "note": "Only tested in simulation. This explains the idle state; it does not yet walk to NPCs in other regions."}, {"version": "1.2.197", "title": "Quest Start button and stall prompts", "items": ["Auto quest now has Start quests and Stop quests buttons.", "Auto stall now answers the game's own OK prompt when opening the stall, so it no longer hangs waiting for you to click it."], "note": "Only tested in simulation; the OK prompt press was not checked on the live server."}, {"version": "1.2.196", "title": "Shorter page list in the wide window", "items": ["In the wide window, the page list now shows one row per page: a small icon with the name beside it, like the Classic window's sidebar.", "The wide window is about 190 px shorter, and the page list column is a little wider to fit the names."], "note": "Tested in simulation only, not in a live game. The layout was checked on a screenshot replica, not in a real browser."}, {"version": "1.2.195", "title": "Shorter page list in the wide window", "items": ["In the wide window, the page list now shows one row per page: a small icon with the name beside it, like the Classic window's sidebar.", "The wide window is about 190 px shorter, and the page list column is a little wider to fit the names."], "note": "Tested in simulation only, not in a live game. The layout was checked on a screenshot replica, not in a real browser."}];
 
 // Check trusted repository metadata; never execute downloaded update code.
 const Updates = {
@@ -15124,7 +15124,7 @@ const Updates = {
 
 // Explicit report fields only: never export raw logs, profiles or game snapshots.
 const Diagnostics = {
-  history: [], errors: [], last: '', started: false,
+  history: [], errors: [], stops: [], last: '', started: false,
   number(value) { return Number.isFinite(value) ? value : null; },
   errorCode(message) {
     const text = String(message || '');
@@ -15139,6 +15139,13 @@ const Diagnostics = {
       [/scroll|return|travel/i, 'travel-error'],
     ]) if (pattern.test(text)) return code;
     return 'unclassified-error';
+  },
+  // Why the bot stopped by itself, in the bot's own fixed wording (no names or places), newest last. A stopped bot shows only
+  // "Bot stopped.", so without this a report cannot say what ended the run.
+  noteStop(source, reason) {
+    const text = String(reason || '').slice(0, 160);
+    this.stops.push({ at: now(), source, reason: text || 'no reason given' });
+    if (this.stops.length > 8) this.stops.shift();
   },
   start() {
     if (this.started) return;
@@ -15346,7 +15353,7 @@ const Diagnostics = {
     const current = this.sample(), relative = entries => entries.map(({ at, ...entry }) => ({ secondsAgo: Math.max(0, Math.round((now() - at) / 1000)), ...entry }));
     return JSON.stringify({ app: 'nixxane bot', version: VERSION,
       privacy: 'Names, chat, account details, locations and raw logs are omitted. Error categories replace original messages.',
-      current, recentStates: relative(this.history), recentErrors: relative(this.errors) }, null, 2);
+      playerStopped: RunIntent.stopped(), current, recentStates: relative(this.history), recentErrors: relative(this.errors), recentStops: relative(this.stops) }, null, 2);
   },
   async copy() {
     const text = this.report();
@@ -15356,6 +15363,13 @@ const Diagnostics = {
     } catch { UI.showDiagnostics(text); }
   },
 };
+// Every stop the bot makes by itself passes Retry.note (hunting, walk back, travel, world change). A town trip that fails
+// before hunting has started again (after a revival) never reaches it, so that one is noted here.
+{
+  const note = Retry.note, failTown = Town.fail;
+  Retry.note = function (reason) { if (reason) Diagnostics.noteStop('stop', reason); return note.apply(this, arguments); };
+  Town.fail = function (reason) { const running = Hunt.running; if (!running) Diagnostics.noteStop('town', reason); return failTown.apply(this, arguments); };
+}
 
 
 // Manual reports only. No startup requests, saved drafts, or automatic retries.

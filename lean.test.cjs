@@ -6227,6 +6227,21 @@ test('diagnostic history is bounded, retained across stops and tolerates incompl
   f.World.gp = null; assert.doesNotThrow(() => JSON.parse(f.Diagnostics.report()));
   f.World.simOffset = null; assert.doesNotThrow(() => f.Diagnostics.sample());
 });
+test('the report says why the bot stopped by itself, also when a revival trip failed before hunting restarted', () => {
+  const f = fixture(); f.Settings.profile.hunt.center = { regionId: 1, x: 100, y: 0, z: 100 };
+  const reasons = () => JSON.parse(f.Diagnostics.report()).recentStops.map(s => s.reason);
+  f.Hunt.start(); f.Hunt.stop('inventory full');
+  assert.deepEqual(reasons(), ['inventory full']);
+  f.Town.fail('Scroll arrival timed out.');
+  const stops = JSON.parse(f.Diagnostics.report()).recentStops;
+  assert.deepEqual(stops.map(s => s.reason), ['inventory full', 'Scroll arrival timed out.']);
+  assert.equal(stops[1].source, 'town'); assert.equal(typeof stops[1].secondsAgo, 'number');
+  f.Hunt.start(); f.Town.fail('Not enough gold for potion refill.');
+  assert.deepEqual(reasons().slice(2), ['Town cycle stopped: Not enough gold for potion refill.'], 'a running bot is noted once, by its stop');
+  for (let n = 0; n < 12; n++) f.Diagnostics.noteStop('stop', 'reason ' + n);
+  assert.equal(reasons().length, 8);
+  assert.equal(typeof JSON.parse(f.Diagnostics.report()).playerStopped, 'boolean');
+});
 test('F6 minimises and restores the panel like the ×, and the game never sees the key', () => {
   const f = fixture(), keydown = [], minimised = [];
   f.win.addEventListener = (type, fn) => { if (type === 'keydown') keydown.push(fn); };
