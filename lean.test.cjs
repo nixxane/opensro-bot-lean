@@ -4743,6 +4743,52 @@ test('town trips start for a broken weapon, worn gear, no XP and a timer, each w
   f.Town.cancel(); assert.equal(f.Town.reason(), '', 'so the next one is a full interval away');
   f.Hunt.stop(); f.Town.watch(); assert.deepEqual([f.Town.lastXpAt, f.Town.cycleFrom], [0, 0], 'the clocks only run while hunting');
 });
+
+test('no XP can move hunting to the next level spot instead of going to town', () => {
+  const f = townFixture(), c = f.Town.cfg(), gp = f.World.gp;
+  f.pet.inventory = []; gp.inventory.find(i => i.refObjId === 15).quantity = 500;
+  gp.progression = { ...(gp.progression || {}), level: 30, experience: '100' };
+  const here = { ...f.Settings.profile.hunt.center };
+  f.Settings.profile.hunt.radius = 20000;
+  f.Settings.profile.hunt.center = { regionId: 1, x: 5000, y: 0, z: 5000 };
+  assert.equal(f.LevelSpot.add(20), '');
+  f.Settings.profile.hunt.center = { regionId: 1, x: 9000, y: 0, z: 9000 };
+  assert.equal(f.LevelSpot.add(40), '');
+  f.Settings.profile.hunt.center = { ...here };
+  c.noXp.on = true; c.noXp.minutes = 10; c.noXp.action = 'nextSpot';
+  f.Town.watch();
+  f.advance(10 * 60000); f.Town.watch();
+  assert.equal(f.Town.reason(), 'no XP for 10 minutes');
+  f.Town.tick();
+  assert.equal(f.Town.trip, null, 'no town trip: hunting moves instead');
+  assert.equal(f.Settings.profile.hunt.center.x, 9000, 'the spot from level 40 is used next');
+  const restarted = f.Town.lastXpAt;
+  assert.ok(restarted > 0, 'the no-XP window restarts for the new spot');
+  // The level rule alone must not pull the spot back while the character is below the held level.
+  f.Settings.profile.hunt.levelSpots.on = true;
+  f.advance(4000);
+  assert.equal(f.LevelSpot.tick(), false);
+  assert.equal(f.Settings.profile.hunt.center.x, 9000, 'the held spot stays');
+  // Still no XP at the new spot and no higher entry: town is the fallback.
+  f.advance(10 * 60000); f.Town.watch(); assert.equal(f.Town.reason(), 'no XP for 10 minutes');
+  f.Town.tick(); assert.ok(f.Town.trip, 'the level list ran out: the trip starts');
+  f.Town.cancel(); f.Hunt.stop();
+  // A potions-low reason still goes to town even with the switch on.
+  const low = townFixture(); const lc = low.Town.cfg();
+  low.pet.inventory = []; low.World.gp.inventory.find(i => i.refObjId === 15).quantity = 1;
+  low.World.gp.progression = { ...(low.World.gp.progression || {}), level: 30, experience: '100' };
+  lc.noXp.on = true; lc.noXp.minutes = 10; lc.noXp.action = 'nextSpot';
+  low.Town.watch(); low.advance(10 * 60000); low.Town.watch();
+  assert.equal(low.Town.reason(), 'potions running low', 'a supply reason outranks the spot move');
+  low.Town.tick(); assert.ok(low.Town.trip, 'the town trip starts anyway');
+  // Off by default the behaviour is unchanged: no XP starts a town trip.
+  const plain = townFixture(); const pc = plain.Town.cfg();
+  plain.pet.inventory = []; plain.World.gp.inventory.find(i => i.refObjId === 15).quantity = 500;
+  plain.World.gp.progression = { ...(plain.World.gp.progression || {}), level: 30, experience: '100' };
+  pc.noXp.on = true; pc.noXp.minutes = 10;
+  plain.Town.watch(); plain.advance(10 * 60000); plain.Town.watch();
+  plain.Town.tick(); assert.ok(plain.Town.trip, 'the default action is still a town trip');
+});
 test('a town trip says why it started, in the log, the status line and the diagnostics', () => {
   const f = townFixture(); f.Town.reason = () => 'gear durability low (Iron Sword at 12%)';
   f.Town.begin();

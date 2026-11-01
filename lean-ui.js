@@ -946,6 +946,7 @@ const UI = {
         this.number('Gear durability below (%)', () => town().wear.pct, v => town().wear.pct = v, 1, 90),
         this.check('No XP for a while', () => town().noXp.on, v => town().noXp.on = v),
         this.number('No XP for (minutes)', () => town().noXp.minutes, v => town().noXp.minutes = v, 1, 120),
+        this.select('When there is no XP', [['town', 'Return to town'], ['nextSpot', 'Move to the next level spot']], () => town().noXp.action, v => town().noXp.action = v),
         this.check('On a timer', () => town().every.on, v => town().every.on = v),
         this.number('Every (minutes)', () => town().every.minutes, v => town().every.minutes = v, 5, 600),
         this.check('Revive in town and go back to the hunting spot', () => town().revive, v => town().revive = v),

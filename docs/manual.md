@@ -92,7 +92,7 @@ The **Town** page shows the trip as a row of pictures (return scroll, warehouse,
 - **Return when pickup pet is nearly full**, with **Pet free slots ≤**.
 - **Weapon is broken**: the equipped weapon is at 0 durability. On by default.
 - **Gear is worn**: the most worn repairable item you are wearing is below **Gear durability below (%)** of its own maximum (15% by default). The trip repairs it. Off by default.
-- **No XP for a while**: no experience for **No XP for (minutes)** (10 by default). Off by default.
+- **No XP for a while**: no experience for **No XP for (minutes)** (10 by default). Off by default. **When there is no XP** chooses what happens: **Return to town** (the default, unchanged), or **Move to the next level spot** — hunting moves to the next entry of the level-spot list (the one saved for a higher level) and the no-XP clock restarts for the new spot; when the list has no higher spot left, the town trip happens as usual. Any other return reason (supplies, bag, durability…) still goes to town.
 - **On a timer**: every **Every (minutes)** (60 by default). Off by default.
 
 The XP and timer clocks run only while hunting and restart with every trip, so a long trip never starts the next one. All of these need the town cycle on.

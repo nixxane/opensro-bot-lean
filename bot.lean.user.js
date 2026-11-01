@@ -222,7 +222,7 @@ const DEFAULT_PROFILE = {
     restock: {
       enabled: false, vendor: null, route: [], offers: [],
       town: { enabled: false, revive: true, revivePet: false, deathReturn: 'recall', returnBy: 'reverse', storeSox: true, sellStar: false, sellBag: false, storeLevels: '', petFull: true, petFree: 1, arrivalRadius: 500,
-        broken: true, wear: { on: false, pct: 15 }, noXp: { on: false, minutes: 10 }, every: { on: false, minutes: 60 }, arrival: null, storage: null, vendor: null, smith: null, gate: null,
+        broken: true, wear: { on: false, pct: 15 }, noXp: { on: false, minutes: 10, action: 'town' }, every: { on: false, minutes: 60 }, arrival: null, storage: null, vendor: null, smith: null, gate: null,
         keep: '', store: { equipment: true, elixirs: true, powders: true, alchemy: true, others: false } },
       hp: { on: true, refObjId: 0, low: 20, target: 100 },
       mp: { on: true, refObjId: 0, low: 20, target: 300 },
@@ -7403,6 +7403,7 @@ const Town = {
   // (revival item) brings it back. Both are needed before the town trip is worth starting for this.
   deadCollar() { return World.items().find(i => i.slot >= 13 && i.summon?.state === 4) || null; },
   grass() { return World.items().find(i => ItemType.useTarget((i.typeFlags ?? 0) >>> 0) === 'revival' && (i.quantity ?? 1) > 0) || null; },
+  noXpDue() { const c = this.cfg(); return !!(c.noXp?.on && this.lastXpAt && now() - this.lastXpAt >= c.noXp.minutes * 60000); },
   reason() {
     const c = this.cfg(), pet = Loot.pet();
     if (World.freeBagSlots() <= 1) return 'character bag nearly full';
@@ -7413,7 +7414,7 @@ const Town = {
     if (c.broken && this.weaponBroken()) return 'weapon broken';
     const worn = c.wear?.on ? this.wear() : null;
     if (worn && worn.pct < c.wear.pct) return `gear durability low (${worn.name} at ${Math.floor(worn.pct)}%)`;
-    if (c.noXp?.on && this.lastXpAt && now() - this.lastXpAt >= c.noXp.minutes * 60000) return `no XP for ${c.noXp.minutes} minutes`;
+    if (this.noXpDue()) return `no XP for ${c.noXp.minutes} minutes`;
     if (c.every?.on && this.cycleFrom && now() - this.cycleFrom >= c.every.minutes * 60000) return `every ${c.every.minutes} minutes`;
     return '';
   },
@@ -7923,7 +7924,11 @@ const Town = {
     const c = this.cfg();
     this.watch();
     if (!this.trip) {
-      if (this.blocked() || !this.reason()) return false;
+      const why = this.blocked() ? '' : this.reason();
+      if (!why) return false;
+      // With the action set to "next spot", a spot that gives no XP moves hunting to the next level spot instead
+      // of starting a town trip; town stays the fallback when the level list has no higher spot left.
+      if (c.noXp?.action === 'nextSpot' && why === `no XP for ${c.noXp.minutes} minutes` && LevelSpot.advanceOnNoXp()) { this.restartClocks(); return false; }
       this.begin();
       if (!this.trip) return true;
     }
@@ -10780,11 +10785,33 @@ bus.on('hunt', running => { if (running) { const poison = MallBuyer.poison; Mall
 // and the bot walks there. Off by default; it only acts while the bot is hunting and nothing else owns the character.
 const LevelSpot = {
   nextAt: 0, message: '',
+  // Session state: a no-XP move can put hunting on a spot above the character's level gate; the level rule alone
+  // must not pull it back while the character is still below that gate. Kept per character, never saved.
+  heldLevel: 0, heldFor: '',
   cfg() { return Settings.profile.hunt.levelSpots; },
   list() { return (this.cfg().list || []).filter(s => Number.isInteger(s?.level) && s.center).sort((a, b) => a.level - b.level); },
   // The spot that applies at this level, or null below the lowest one.
   spotFor(level) { return this.list().filter(s => s.level <= level).pop() || null; },
+  heldSpot() { return this.heldLevel && this.heldFor === World.charName ? this.list().find(s => s.level === this.heldLevel) || null : null; },
   same(a, b) { return !!a && !!b && a.regionId === b.regionId && a.x === b.x && a.z === b.z; },
+  // The town "no XP" action can ask for the next spot above the applied one. Returns false when the list has no
+  // higher entry left, so the caller falls back to its normal behaviour.
+  advanceOnNoXp() {
+    const level = World.gp?.progression?.level;
+    if (!Number.isInteger(level)) return false;
+    const current = this.heldSpot() || this.spotFor(level);
+    const next = this.list().find(s => s.level > (current?.level ?? 0));
+    if (!next) return false;
+    this.heldLevel = next.level; this.heldFor = World.charName;
+    const H = Hunt.cfg();
+    H.center = { ...next.center };
+    Settings.saveProfile(); bus.emit('center');
+    this.message = 'No XP: hunting moved to the spot from level ' + next.level + '.';
+    Log.info('Level spot: ' + this.message); UI.toast(this.message, 'info', 5000);
+    const pose = World.pose();
+    if (pose && dist2D(pose, H.center) > Math.max(H.radius, 100)) WalkBack.start(true);
+    return true;
+  },
   // Add (or replace the entry of) a level with the current hunting spot.
   add(level) {
     const center = Settings.profile.hunt.center;
@@ -10803,7 +10830,7 @@ const LevelSpot = {
     const level = World.gp?.progression?.level;
     if (!World.inWorld() || World.isDead() || !Hunt.running || !Number.isInteger(level)) return false;
     if (Town.trip || Restock.trip || WalkBack.active || Travel.active || Quest.trip || Resurrect.trip || Controller.resumeAfterRevive) return false;
-    const spot = this.spotFor(level), H = Hunt.cfg();
+    const spot = this.heldSpot() || this.spotFor(level), H = Hunt.cfg();
     if (!spot || this.same(spot.center, H.center)) return false;
     H.center = { ...spot.center };
     Settings.saveProfile(); bus.emit('center');
@@ -17046,6 +17073,7 @@ const UI = {
         this.number('Gear durability below (%)', () => town().wear.pct, v => town().wear.pct = v, 1, 90),
         this.check('No XP for a while', () => town().noXp.on, v => town().noXp.on = v),
         this.number('No XP for (minutes)', () => town().noXp.minutes, v => town().noXp.minutes = v, 1, 120),
+        this.select('When there is no XP', [['town', 'Return to town'], ['nextSpot', 'Move to the next level spot']], () => town().noXp.action, v => town().noXp.action = v),
         this.check('On a timer', () => town().every.on, v => town().every.on = v),
         this.number('Every (minutes)', () => town().every.minutes, v => town().every.minutes = v, 5, 600),
         this.check('Revive in town and go back to the hunting spot', () => town().revive, v => town().revive = v),

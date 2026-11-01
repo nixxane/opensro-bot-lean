@@ -293,6 +293,7 @@ const Town = {
   // (revival item) brings it back. Both are needed before the town trip is worth starting for this.
   deadCollar() { return World.items().find(i => i.slot >= 13 && i.summon?.state === 4) || null; },
   grass() { return World.items().find(i => ItemType.useTarget((i.typeFlags ?? 0) >>> 0) === 'revival' && (i.quantity ?? 1) > 0) || null; },
+  noXpDue() { const c = this.cfg(); return !!(c.noXp?.on && this.lastXpAt && now() - this.lastXpAt >= c.noXp.minutes * 60000); },
   reason() {
     const c = this.cfg(), pet = Loot.pet();
     if (World.freeBagSlots() <= 1) return 'character bag nearly full';
@@ -303,7 +304,7 @@ const Town = {
     if (c.broken && this.weaponBroken()) return 'weapon broken';
     const worn = c.wear?.on ? this.wear() : null;
     if (worn && worn.pct < c.wear.pct) return `gear durability low (${worn.name} at ${Math.floor(worn.pct)}%)`;
-    if (c.noXp?.on && this.lastXpAt && now() - this.lastXpAt >= c.noXp.minutes * 60000) return `no XP for ${c.noXp.minutes} minutes`;
+    if (this.noXpDue()) return `no XP for ${c.noXp.minutes} minutes`;
     if (c.every?.on && this.cycleFrom && now() - this.cycleFrom >= c.every.minutes * 60000) return `every ${c.every.minutes} minutes`;
     return '';
   },
@@ -813,7 +814,11 @@ const Town = {
     const c = this.cfg();
     this.watch();
     if (!this.trip) {
-      if (this.blocked() || !this.reason()) return false;
+      const why = this.blocked() ? '' : this.reason();
+      if (!why) return false;
+      // With the action set to "next spot", a spot that gives no XP moves hunting to the next level spot instead
+      // of starting a town trip; town stays the fallback when the level list has no higher spot left.
+      if (c.noXp?.action === 'nextSpot' && why === `no XP for ${c.noXp.minutes} minutes` && LevelSpot.advanceOnNoXp()) { this.restartClocks(); return false; }
       this.begin();
       if (!this.trip) return true;
     }
