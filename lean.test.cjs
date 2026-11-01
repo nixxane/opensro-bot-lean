@@ -8006,3 +8006,18 @@ test('the Abandon button sends the command once and settles on the journal answe
   f.Quest.abandon(512);
   assert.equal(f.commands.filter(c => c.kind === 'quest-abandon').length, 1, 'an inactive quest is never abandoned');
 });
+
+
+test('Only join and accept parties while the bot is running holds party automation until Start', () => {
+  let f = joinMainFixture({ rows: [{ id: 7, name: 'mainchar', members: 1, type: 1, min: 1, max: 90 }] });
+  f.Settings.profile.party.onlyWhileRunning = true; f.Hunt.running = false;
+  f.Party.tick(); assert.equal(f.commands.length, 0, 'stopped: nothing is sent');
+  f.Hunt.running = true; f.advance(5000); f.Party.tick();
+  assert.deepEqual(jm(f.commands[0]), { kind: 'party-match-join', id: 7 }, 'running: joins');
+  f = fixture(); partyApplication(f); f.Settings.profile.party.onlyWhileRunning = true; f.Hunt.running = false; f.Party.tick();
+  assert.equal(f.commands.filter(c => c.kind === 'party-match-answer').length, 0, 'stopped: applicant left unanswered');
+  f.Hunt.running = true; f.Party.tick();
+  assert.equal(f.commands.filter(c => c.kind === 'party-match-answer').length, 1, 'running: accepted');
+  f = joinMainFixture({ rows: [{ id: 7, name: 'mainchar', members: 1, type: 1, min: 1, max: 90 }] }); f.Hunt.running = false; f.Party.tick();
+  assert.equal(f.commands.length, 1, 'default: still joins while stopped');
+});
