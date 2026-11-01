@@ -5,6 +5,7 @@ Hunt.start = function (...args) {
   if (Alchemy.run || Alchemy.pending) return UI.toast('Stop alchemy and wait for its result before hunting.', 'warn');
   if (Trade.run) return UI.toast('Stop auto trade before hunting.', 'warn');
   if (Stall.run) return UI.toast('Stop the stall session before hunting.', 'warn');
+  if (Quest.trip) return UI.toast('Wait for the quest visit to finish (or stop the bot).', 'warn');
   if (World.gp?.stall?.phase && World.gp.stall.phase !== 'none') return UI.toast('Close the stall before hunting.', 'warn');
   Lure.reset();
   return startHunting.apply(this, args);
@@ -39,6 +40,31 @@ Hunt.threat = function (current) {
   return best;
 };
 Hunt.chooseLoot = () => Loot.choose();
+// Quest monsters first: while a quest's kills are still counting, its learned monster types are
+// taken before distance, as long as they pass the hunt's own filters - class, area, level range,
+// name lists and anti-KS. Something already hitting the player is never displaced by a preference.
+const huntChooseTarget = Hunt.chooseTarget;
+Hunt.chooseTarget = function (...args) {
+  const target = huntChooseTarget.apply(this, args);
+  const preferred = Quest.preferred();
+  if (!preferred.size) return target;
+  const sim = World.simNow() ?? 0;
+  if (target && sim - (World.attackers.get(target.gid) ?? -Infinity) < 6000) return target;
+  const pose = World.pose(), H = this.cfg();
+  if (!pose) return target;
+  const inc = splitList(H.include), exc = splitList(H.exclude);
+  let best = null;
+  for (const e of World.ents.values()) {
+    if (!preferred.has(e.refObjId) || !isAttackableMob(e) || this.banned(this.ban, e.gid)) continue;
+    if (!this.classAllowed(e) || !this.inArea(e) || dist2D(pose, e) > H.chase) continue;
+    if (H.levelMin && (e.level ?? 0) < H.levelMin || H.levelMax && (e.level ?? 0) > H.levelMax) continue;
+    const name = (e.name || '').toLowerCase();
+    if (inc.length && !inc.some(s => name.includes(s)) || exc.some(s => name.includes(s))) continue;
+    if (H.avoidKs && sim - (World.hitByOthers.get(e.gid) ?? -Infinity) < 8000 && sim - (World.hitByUs.get(e.gid) ?? -Infinity) > 8000) continue;
+    if (!best || dist2D(pose, e) < dist2D(pose, best)) best = e;
+  }
+  return best || target;
+};
 Hunt.tick = function () {
   if (!this.running) return;
   if (!Town.cfg().enabled && Restock.tick()) { Loot.suspend(); return; }
@@ -112,6 +138,7 @@ function stopAll() {
   Trade.cancel();
   Stall.stop();
   BuffGear.cancel();
+  Quest.cancel();
   const townActive = !!Town.trip;
   Town.cancel();
   Resurrect.cancelTrip('', true);
@@ -263,6 +290,10 @@ const Controller = {
       if (!WalkBack.active && !Travel.active && !Restock.trip && !Restock.recording && !Restock.activeShop() && !World.gp.storage && Support.tick()) {
         this.mode = 'party support'; return;
       }
+      // Quest journal watching and the window's own reward command run beside everything; an NPC
+      // visit owns the character like a town trip does.
+      this.guard('Quest', () => Quest.observe());
+      if (Quest.trip) { Quest.tick(); this.mode = 'quest'; return; }
       if (WalkBack.active) { this.mode = 'returning'; WalkBack.tick(); }
       else if (Travel.active) { this.mode = 'travelling'; Travel.tick(); }
       else if (Restock.recording) this.mode = 'recording';

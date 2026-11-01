@@ -159,4 +159,4 @@ const MallBuyer = {
 
 // The silk budget is per bot run: a restart gives a fresh one, but a poisoned mall state survives it (the game
 // client itself refuses mall commands until the world is re-entered).
-bus.on('hunt', running => { if (running) { const poison = MallBuyer.poison; MallBuyer.reset(); MallBuyer.newRun(); MallBuyer.poison = poison; } });
+bus.on('hunt', running => { if (running) { const poison = MallBuyer.poison; MallBuyer.reset(); if (!Quest.resuming) MallBuyer.newRun(); MallBuyer.poison = poison; } });
