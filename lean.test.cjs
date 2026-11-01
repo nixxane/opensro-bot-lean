@@ -8022,10 +8022,10 @@ test('Only join and accept parties while the bot is running holds party automati
   assert.equal(f.commands.length, 1, 'default: still joins while stopped');
 });
 
-function sellStarRun(f, storageItems, bagCount = 0) {
+function sellStarRun(f, storageItems, bagCount = 0, x = 150) {
   f.Hunt.running = false;
   const gp = f.World.gp, sold = [], moved = [];
-  gp.pose = { regionId: 1, x: 150, y: 0, z: 100 };
+  gp.pose = { regionId: 1, x, y: 0, z: 100 };
   gp.inventory = Array.from({ length: bagCount }, (_, n) => ({ slot: 13 + n, refObjId: 5000 + n, typeFlags: 4332, quantity: 1, name: 'Filler' }));
   gp.storageItems = storageItems;
   let handled = 0;
@@ -8034,7 +8034,8 @@ function sellStarRun(f, storageItems, bagCount = 0) {
     f.SellStar.tick();
     while (handled < f.commands.length) {
       const c = f.commands[handled++];
-      if (c.kind === 'select') { gp.target = c.gid; gp.targetCapabilities = { 60: 4, 62: 9 }[c.gid]; }
+      if (c.kind === 'move') gp.pose = { ...c.destination };
+      else if (c.kind === 'select') { assert.equal(Math.abs(gp.pose.x - f.World.ents.get(c.gid).x) <= 200, true, 'selected from service range'); gp.target = c.gid; gp.targetCapabilities = { 60: 4, 62: 9 }[c.gid]; }
       else if (c.kind === 'storage-open') gp.storage = { npc: c.gid, phase: 'open', capacity: 30, items: gp.storageItems };
       else if (c.kind === 'storage-move') {
         assert.equal(c.move.type, 3);
@@ -8066,4 +8067,12 @@ test('Sell Star works in batches when the bag is nearly full and refuses to star
   const g = townFixture(); g.Hunt.running = true; g.SellStar.start();
   assert.equal(g.SellStar.run, null); assert.match(g.SellStar.message, /Stop hunting/);
   const h = townFixture(); h.Town.cfg().smith = null; h.SellStar.start(); assert.equal(h.SellStar.run, null); assert.match(h.SellStar.message, /Save the warehouse/);
+});
+
+test('Sell Star walks to the warehouse and the merchant when they are out of reach', () => {
+  const f = townFixture(), c = f.Town.cfg();
+  f.World.ents.get(62).x = c.smith.x = 900; c.smith.npc = undefined;
+  const r = sellStarRun(f, [starItem(0, 'Star one'), starItem(1, 'Star two')], 0, 500);
+  assert.deepEqual(r.sold, ['Star one', 'Star two'], f.SellStar.message);
+  assert.equal(f.commands.some(c => c.kind === 'move'), true, 'walked');
 });

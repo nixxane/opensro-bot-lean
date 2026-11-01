@@ -1,7 +1,7 @@
 // Sell Star from storage: one click takes every Seal of Star piece out of the warehouse and sells it at the saved
 // repair merchant, in batches that fit the bag. Not a setting and never automatic: it only runs when the player
-// presses the button, with both NPCs in reach. Uses the Town page's saved warehouse and repair merchant.
-// phases: open-storage -> withdraw -> close-storage -> open-shop -> sell -> close-shop -> (open-storage again | done)
+// presses the button, and walks to each NPC itself. Uses the Town page's saved warehouse and repair merchant.
+// phases: walk-storage -> open-storage -> withdraw -> close-storage -> walk-smith -> open-shop -> sell -> close-shop -> (walk-storage again | done)
 // Every step waits for the state it expects (the item in the bag, the item gone from the bag); a dispatch is
 // never proof and nothing is resent, so a command the game never answered cannot sell twice.
 const SELL_STAR_STEP_MS = 10000;
@@ -33,7 +33,7 @@ const SellStar = {
     const error = this.blocked();
     if (error) { this.message = error; UI.toast(error, 'warn'); return; }
     if (World.gp.inventoryPending) { this.message = 'Wait for settled inventory state.'; UI.toast(this.message, 'warn'); return; }
-    this.run = { phase: 'open-storage', at: now(), sent: false, pending: null, mine: [], sold: 0, round: 0, refused: new Set(), more: false, rev: null };
+    this.run = { phase: 'walk-storage', at: now(), sent: false, pending: null, mine: [], sold: 0, round: 0, refused: new Set(), more: false, rev: null };
     this.message = 'Selling Star gear from the warehouse.';
     Log.info('Sell Star: started.');
   },
@@ -41,10 +41,32 @@ const SellStar = {
     const r = this.run; this.run = null;
     if (!r) return;
     this.message = text;
-    Log.info(text);
+    Log.warn(text); UI.toast(text, 'warn', 8000);
     if (World.inWorld() && (World.gp.storage || Restock.activeShop())) Cmd.raw({ kind: 'npc-close' }, 'Sell Star: close NPC');
   },
-  enter(phase) { const r = this.run; r.phase = phase; r.at = now(); r.sent = false; r.pending = null; },
+  enter(phase) {
+    const r = this.run;
+    r.phase = phase; r.at = now(); r.sent = false; r.pending = null;
+    r.travel = null; r.lastPose = null; r.progressAt = now(); r.movedAt = -Infinity; r.retryAt = 0; r.stall = null; r.avoid = [];
+  },
+  // Walks to the saved standing point of a service, as the town cycle does; true once in service range.
+  walk(role) {
+    const r = this.run, dest = Town.cfg()[role], pose = World.pose(), what = Town.role('walk-' + role);
+    const radius = Math.max(0, Math.min(60, 190 - dist2D(dest, dest.npc || dest)));
+    if (dist2D(pose, dest) <= Math.max(12, radius) && dist2D(pose, dest.npc || dest) <= 200) return true;
+    if (!Number.isFinite(dist2D(pose, dest))) { this.stop('Sell Star stopped: the ' + what + ' is in another world.'); return false; }
+    if (!r.lastPose || dist2D(r.lastPose, pose) > 3) { r.lastPose = { ...pose }; r.progressAt = now(); }
+    if (now() < r.retryAt) return false;
+    if (now() - r.progressAt > 20000) { this.stop('Sell Star stopped: no way through to the ' + what + ' (no progress for 20 s).'); return false; }
+    if (!World.isSitting() && Navigation.watch(r, pose, r.movedAt, r.travel?.route[r.travel.index] || dest) === 'giveup') { this.stop('Sell Star stopped: blocked on the way to the ' + what + '.'); return false; }
+    const step = Navigation.next(r, dest, false, radius);
+    if (step.waiting || step.error) { r.travel = null; r.retryAt = now() + 3000; this.message = 'Walking to the ' + what + ': waiting for a route.'; return false; }
+    this.message = 'Walking to the ' + what + '.';
+    if (!step.point || now() - r.movedAt < 1000 || World.gp.inventoryPending) return false;
+    if (World.isSitting()) { if (Cmd.action(1000)) r.movedAt = now(); }
+    else if (Cmd.move(step.point)) r.movedAt = now();
+    return false;
+  },
   // Selects the saved NPC and opens its window; true once the window shows.
   open(role, kind) {
     const r = this.run, gp = World.gp, npc = Town.npc(role);
@@ -75,8 +97,11 @@ const SellStar = {
     if (!r) return false;
     const gp = World.gp;
     if (!World.inWorld() || !gp || World.isDead()) { this.stop('Sell Star stopped: left the world or died. Withdrawn gear stays in your bag.'); return true; }
-    if (r.phase !== 'sell' && r.phase !== 'withdraw' && now() - r.at > SELL_STAR_STEP_MS) { this.stop('Sell Star timed out in "' + r.phase + '". Gear already withdrawn stays in your bag.'); return true; }
+    if (r.phase !== 'sell' && r.phase !== 'withdraw' && !r.phase.startsWith('walk-') && now() - r.at > SELL_STAR_STEP_MS) { this.stop('Sell Star timed out in "' + r.phase + '". Gear already withdrawn stays in your bag.'); return true; }
     switch (r.phase) {
+      case 'walk-storage':
+        if (this.walk('storage')) this.enter('open-storage');
+        break;
       case 'open-storage':
         if (this.open('storage', 'storage-open')) { r.round++; this.enter('withdraw'); }
         break;
@@ -98,7 +123,10 @@ const SellStar = {
           r.pending = { dest, ref: item.refObjId, at: now() };
         break;
       }
-      case 'close-storage': this.close(r.mine.length ? 'open-shop' : 'done'); break;
+      case 'close-storage': this.close(r.mine.length ? 'walk-smith' : 'done'); break;
+      case 'walk-smith':
+        if (this.walk('smith')) this.enter('open-shop');
+        break;
       case 'open-shop':
         if (this.open('smith', 'shop-open')) this.enter('sell');
         break;
@@ -119,7 +147,7 @@ const SellStar = {
           r.pending = { slot: next.slot, ref: next.refObjId, at: now() };
         break;
       }
-      case 'close-shop': this.close(r.more && r.round < 50 && !r.refused.size ? 'open-storage' : 'done'); break;
+      case 'close-shop': this.close(r.more && r.round < 50 && !r.refused.size ? 'walk-storage' : 'done'); break;
       case 'done': {
         const left = r.refused.size, text = 'Sold ' + r.sold + ' Star item' + (r.sold === 1 ? '' : 's') + ' from the warehouse' +
           (left ? '; the merchant refused ' + left + ', which stayed in your bag.' : '.');

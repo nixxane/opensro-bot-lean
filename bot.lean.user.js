@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         nixxane bot
 // @namespace    https://opensro.online/
-// @version      1.2.208
+// @version      1.2.209
 // @updateURL    https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.meta.js
 // @downloadURL  https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -22,7 +22,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[NIX] Another SRO assistant is active. Disable it and reload to use NIX.');
   return;
 }
-const VERSION = '1.2.208';
+const VERSION = '1.2.209';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -8875,8 +8875,8 @@ const Stall = {
 
 // Sell Star from storage: one click takes every Seal of Star piece out of the warehouse and sells it at the saved
 // repair merchant, in batches that fit the bag. Not a setting and never automatic: it only runs when the player
-// presses the button, with both NPCs in reach. Uses the Town page's saved warehouse and repair merchant.
-// phases: open-storage -> withdraw -> close-storage -> open-shop -> sell -> close-shop -> (open-storage again | done)
+// presses the button, and walks to each NPC itself. Uses the Town page's saved warehouse and repair merchant.
+// phases: walk-storage -> open-storage -> withdraw -> close-storage -> walk-smith -> open-shop -> sell -> close-shop -> (walk-storage again | done)
 // Every step waits for the state it expects (the item in the bag, the item gone from the bag); a dispatch is
 // never proof and nothing is resent, so a command the game never answered cannot sell twice.
 const SELL_STAR_STEP_MS = 10000;
@@ -8908,7 +8908,7 @@ const SellStar = {
     const error = this.blocked();
     if (error) { this.message = error; UI.toast(error, 'warn'); return; }
     if (World.gp.inventoryPending) { this.message = 'Wait for settled inventory state.'; UI.toast(this.message, 'warn'); return; }
-    this.run = { phase: 'open-storage', at: now(), sent: false, pending: null, mine: [], sold: 0, round: 0, refused: new Set(), more: false, rev: null };
+    this.run = { phase: 'walk-storage', at: now(), sent: false, pending: null, mine: [], sold: 0, round: 0, refused: new Set(), more: false, rev: null };
     this.message = 'Selling Star gear from the warehouse.';
     Log.info('Sell Star: started.');
   },
@@ -8916,10 +8916,32 @@ const SellStar = {
     const r = this.run; this.run = null;
     if (!r) return;
     this.message = text;
-    Log.info(text);
+    Log.warn(text); UI.toast(text, 'warn', 8000);
     if (World.inWorld() && (World.gp.storage || Restock.activeShop())) Cmd.raw({ kind: 'npc-close' }, 'Sell Star: close NPC');
   },
-  enter(phase) { const r = this.run; r.phase = phase; r.at = now(); r.sent = false; r.pending = null; },
+  enter(phase) {
+    const r = this.run;
+    r.phase = phase; r.at = now(); r.sent = false; r.pending = null;
+    r.travel = null; r.lastPose = null; r.progressAt = now(); r.movedAt = -Infinity; r.retryAt = 0; r.stall = null; r.avoid = [];
+  },
+  // Walks to the saved standing point of a service, as the town cycle does; true once in service range.
+  walk(role) {
+    const r = this.run, dest = Town.cfg()[role], pose = World.pose(), what = Town.role('walk-' + role);
+    const radius = Math.max(0, Math.min(60, 190 - dist2D(dest, dest.npc || dest)));
+    if (dist2D(pose, dest) <= Math.max(12, radius) && dist2D(pose, dest.npc || dest) <= 200) return true;
+    if (!Number.isFinite(dist2D(pose, dest))) { this.stop('Sell Star stopped: the ' + what + ' is in another world.'); return false; }
+    if (!r.lastPose || dist2D(r.lastPose, pose) > 3) { r.lastPose = { ...pose }; r.progressAt = now(); }
+    if (now() < r.retryAt) return false;
+    if (now() - r.progressAt > 20000) { this.stop('Sell Star stopped: no way through to the ' + what + ' (no progress for 20 s).'); return false; }
+    if (!World.isSitting() && Navigation.watch(r, pose, r.movedAt, r.travel?.route[r.travel.index] || dest) === 'giveup') { this.stop('Sell Star stopped: blocked on the way to the ' + what + '.'); return false; }
+    const step = Navigation.next(r, dest, false, radius);
+    if (step.waiting || step.error) { r.travel = null; r.retryAt = now() + 3000; this.message = 'Walking to the ' + what + ': waiting for a route.'; return false; }
+    this.message = 'Walking to the ' + what + '.';
+    if (!step.point || now() - r.movedAt < 1000 || World.gp.inventoryPending) return false;
+    if (World.isSitting()) { if (Cmd.action(1000)) r.movedAt = now(); }
+    else if (Cmd.move(step.point)) r.movedAt = now();
+    return false;
+  },
   // Selects the saved NPC and opens its window; true once the window shows.
   open(role, kind) {
     const r = this.run, gp = World.gp, npc = Town.npc(role);
@@ -8950,8 +8972,11 @@ const SellStar = {
     if (!r) return false;
     const gp = World.gp;
     if (!World.inWorld() || !gp || World.isDead()) { this.stop('Sell Star stopped: left the world or died. Withdrawn gear stays in your bag.'); return true; }
-    if (r.phase !== 'sell' && r.phase !== 'withdraw' && now() - r.at > SELL_STAR_STEP_MS) { this.stop('Sell Star timed out in "' + r.phase + '". Gear already withdrawn stays in your bag.'); return true; }
+    if (r.phase !== 'sell' && r.phase !== 'withdraw' && !r.phase.startsWith('walk-') && now() - r.at > SELL_STAR_STEP_MS) { this.stop('Sell Star timed out in "' + r.phase + '". Gear already withdrawn stays in your bag.'); return true; }
     switch (r.phase) {
+      case 'walk-storage':
+        if (this.walk('storage')) this.enter('open-storage');
+        break;
       case 'open-storage':
         if (this.open('storage', 'storage-open')) { r.round++; this.enter('withdraw'); }
         break;
@@ -8973,7 +8998,10 @@ const SellStar = {
           r.pending = { dest, ref: item.refObjId, at: now() };
         break;
       }
-      case 'close-storage': this.close(r.mine.length ? 'open-shop' : 'done'); break;
+      case 'close-storage': this.close(r.mine.length ? 'walk-smith' : 'done'); break;
+      case 'walk-smith':
+        if (this.walk('smith')) this.enter('open-shop');
+        break;
       case 'open-shop':
         if (this.open('smith', 'shop-open')) this.enter('sell');
         break;
@@ -8994,7 +9022,7 @@ const SellStar = {
           r.pending = { slot: next.slot, ref: next.refObjId, at: now() };
         break;
       }
-      case 'close-shop': this.close(r.more && r.round < 50 && !r.refused.size ? 'open-storage' : 'done'); break;
+      case 'close-shop': this.close(r.more && r.round < 50 && !r.refused.size ? 'walk-storage' : 'done'); break;
       case 'done': {
         const left = r.refused.size, text = 'Sold ' + r.sold + ' Star item' + (r.sold === 1 ? '' : 's') + ' from the warehouse' +
           (left ? '; the merchant refused ' + left + ', which stayed in your bag.' : '.');
@@ -15235,7 +15263,7 @@ const Alchemy = {
 };
 
 
-const RELEASE_NOTES = [{"version": "1.2.208", "title": "Sell all Star gear from the warehouse", "items": ["New button on the Town page: Sell all Star gear in warehouse. One click takes every Seal of Star piece out of the warehouse and sells it at your saved repair merchant, in batches that fit your bag, then stops. It never runs on its own.", "Needs the warehouse and repair merchant saved on the Town page, and you standing where both are in reach. Moon and Sun gear, buff-set gear and Keep names stay in the warehouse.", "Only tested in simulation, not on the live server."]}, {"version": "1.2.207", "title": "Party joining can wait for Start", "items": ["New option under Settings > Party: Only join and accept parties while the bot is running. When it is on, Auto-recruit, Auto-accept party-matching joins and joining the party leader's party all wait until you press Start. This fixes the bot joining a party after it was stopped.", "It is off by default, so nothing changes unless you turn it on. Accept resurrection is not affected."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.206", "title": "Lure stops near players or after set pulls", "items": ["Two new lure options under Combat > Hunt area > Lure: Stop when this many other players are within 30 m, and Stop after this many completed pulls. Both are 0 (off) by default, so nothing changes unless you set them.", "The player option stops the lure when that many strangers are within 30 m of your character. You and your party members never count.", "The pull option stops the lure after the chosen number of pulls. A round where nothing was pulled does not use up a pull, and the count starts again each time you start."], "note": "Contributed by duan78 (#85). Tested in simulation only, not in a live game."}, {"version": "1.2.205", "title": "Keep self buffs up while walking back", "items": ["Each buff in Combat > Buffs & imbue now has a Keep (skill) up choice: While hunting, or Hunting and walk-back. The default is While hunting, so nothing changes unless you pick the other one.", "Buffs set to Hunting and walk-back are also cast while the bot walks back to the hunting spot or between towns, so speed or stealth skills stay on for the whole trip.", "Buffs saved before this choice existed keep working only while hunting."], "note": "Contributed by duan78 (#84). Tested in simulation only, not in a live game."}, {"version": "1.2.204", "title": "Town trips sell surplus supplies", "items": ["New option in the town trip settings: Sell surplus restocked potions above the refill amounts. It is off by default.", "When on, the bot sells picked-up or overbought stacks of the supplies it restocks (HP, MP and vigor potions, pills, reverse scrolls, HGP potions, pet kits) at the repair merchant, down to the refill amount.", "Only the extra above the refill amount is sold, largest stack first. Anything the merchant refuses is kept and the trip carries on. Nothing else in your bag is touched by this option."], "note": "Contributed by duan78 (#82). Tested in simulation only, not in a live game."}, {"version": "1.2.203", "title": "Anti-stuck can go to town", "items": ["New option under Settings > Anti-stuck: Go to town instead of stopping. When the bot makes no progress after all its recoveries, it makes a town trip instead of stopping.", "The trip ends in town and does not return to the spot where nothing worked. It needs the town cycle to be on, and it is off by default, so nothing changes unless you turn it on."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.202", "title": "Bug reports say why the bot stopped", "items": ["A bug report now lists the last reasons the bot stopped by itself (for example a town trip that timed out), how long ago, and whether you stopped it last.", "Before, a stopped bot only said \"Bot stopped.\", so reports of the bot doing nothing after a town trip could not say what ended the run.", "This only adds information to reports. Nothing about how the bot hunts or travels changes."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.201", "title": "Panel bottom rows stay on screen", "items": ["On screens like 1920×1080 with browser bars, the bottom of the bot window (the feedback line and the wide window's activity log) was cut off. It now always stays on screen.", "The scrolling part of the window shrinks to fit instead, and the window re-fits when you move it, resize the page, restore it or show it again (Shift+F7).", "On short screens the wide window uses a smaller activity log and status strip to leave room."], "note": "Contributed by duan78 (#81). Tested in simulation, and in a local browser test page at several window sizes. Not tested in a live game."}];
+const RELEASE_NOTES = [{"version": "1.2.209", "title": "Sell Star walks to the warehouse and merchant", "items": ["Fixes the Sell all Star gear button taking the gear out and then not selling it. It now walks to the saved warehouse and then to the saved repair merchant itself, instead of needing you to stand in reach of both.", "If it stops, it now says why in a message.", "Only tested in simulation, not on the live server."]}, {"version": "1.2.208", "title": "Sell all Star gear from the warehouse", "items": ["New button on the Town page: Sell all Star gear in warehouse. One click takes every Seal of Star piece out of the warehouse and sells it at your saved repair merchant, in batches that fit your bag, then stops. It never runs on its own.", "Needs the warehouse and repair merchant saved on the Town page, and you standing where both are in reach. Moon and Sun gear, buff-set gear and Keep names stay in the warehouse.", "Only tested in simulation, not on the live server."]}, {"version": "1.2.207", "title": "Party joining can wait for Start", "items": ["New option under Settings > Party: Only join and accept parties while the bot is running. When it is on, Auto-recruit, Auto-accept party-matching joins and joining the party leader's party all wait until you press Start. This fixes the bot joining a party after it was stopped.", "It is off by default, so nothing changes unless you turn it on. Accept resurrection is not affected."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.206", "title": "Lure stops near players or after set pulls", "items": ["Two new lure options under Combat > Hunt area > Lure: Stop when this many other players are within 30 m, and Stop after this many completed pulls. Both are 0 (off) by default, so nothing changes unless you set them.", "The player option stops the lure when that many strangers are within 30 m of your character. You and your party members never count.", "The pull option stops the lure after the chosen number of pulls. A round where nothing was pulled does not use up a pull, and the count starts again each time you start."], "note": "Contributed by duan78 (#85). Tested in simulation only, not in a live game."}, {"version": "1.2.205", "title": "Keep self buffs up while walking back", "items": ["Each buff in Combat > Buffs & imbue now has a Keep (skill) up choice: While hunting, or Hunting and walk-back. The default is While hunting, so nothing changes unless you pick the other one.", "Buffs set to Hunting and walk-back are also cast while the bot walks back to the hunting spot or between towns, so speed or stealth skills stay on for the whole trip.", "Buffs saved before this choice existed keep working only while hunting."], "note": "Contributed by duan78 (#84). Tested in simulation only, not in a live game."}, {"version": "1.2.204", "title": "Town trips sell surplus supplies", "items": ["New option in the town trip settings: Sell surplus restocked potions above the refill amounts. It is off by default.", "When on, the bot sells picked-up or overbought stacks of the supplies it restocks (HP, MP and vigor potions, pills, reverse scrolls, HGP potions, pet kits) at the repair merchant, down to the refill amount.", "Only the extra above the refill amount is sold, largest stack first. Anything the merchant refuses is kept and the trip carries on. Nothing else in your bag is touched by this option."], "note": "Contributed by duan78 (#82). Tested in simulation only, not in a live game."}, {"version": "1.2.203", "title": "Anti-stuck can go to town", "items": ["New option under Settings > Anti-stuck: Go to town instead of stopping. When the bot makes no progress after all its recoveries, it makes a town trip instead of stopping.", "The trip ends in town and does not return to the spot where nothing worked. It needs the town cycle to be on, and it is off by default, so nothing changes unless you turn it on."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.202", "title": "Bug reports say why the bot stopped", "items": ["A bug report now lists the last reasons the bot stopped by itself (for example a town trip that timed out), how long ago, and whether you stopped it last.", "Before, a stopped bot only said \"Bot stopped.\", so reports of the bot doing nothing after a town trip could not say what ended the run.", "This only adds information to reports. Nothing about how the bot hunts or travels changes."], "note": "Tested in simulation only, not in a live game."}];
 
 // Check trusted repository metadata; never execute downloaded update code.
 const Updates = {
