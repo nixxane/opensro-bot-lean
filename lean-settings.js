@@ -13,7 +13,7 @@ const DEFAULT_PROFILE = {
   statPoints: { enabled: false, str: 1, int: 0, reserve: 0 },
   // Auto Quest: learned tokens bind a quest codename (QNO_...) to its refId, and learned targets
   // name the monster types whose kills advance each refId. Both fill themselves while playing.
-  quest: { on: false, accept: true, include: '', exclude: '', skip: [], learned: {}, targets: {} },
+  quest: { on: false, accept: true, picked: [], include: '', exclude: '', skip: [], learned: {}, targets: {} },
   trade: { from: 'CH', to: 'WC', trips: 1, potions: true, goods: 0 },
   trace: { enabled: false, name: '', distance: 12, fight: true },
   mastery: { enabled: false, ids: [], gap: 0, skills: false, scope: 'rotation', reserve: 0, order: 'masteries' },

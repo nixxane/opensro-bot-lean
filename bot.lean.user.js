@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         nixxane bot
 // @namespace    https://opensro.online/
-// @version      1.2.198
+// @version      1.2.199
 // @updateURL    https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.meta.js
 // @downloadURL  https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -22,7 +22,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[NIX] Another SRO assistant is active. Disable it and reload to use NIX.');
   return;
 }
-const VERSION = '1.2.198';
+const VERSION = '1.2.199';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -197,7 +197,7 @@ const DEFAULT_PROFILE = {
   statPoints: { enabled: false, str: 1, int: 0, reserve: 0 },
   // Auto Quest: learned tokens bind a quest codename (QNO_...) to its refId, and learned targets
   // name the monster types whose kills advance each refId. Both fill themselves while playing.
-  quest: { on: false, accept: true, include: '', exclude: '', skip: [], learned: {}, targets: {} },
+  quest: { on: false, accept: true, picked: [], include: '', exclude: '', skip: [], learned: {}, targets: {} },
   trade: { from: 'CH', to: 'WC', trips: 1, potions: true, goods: 0 },
   trace: { enabled: false, name: '', distance: 12, fight: true },
   mastery: { enabled: false, ids: [], gap: 0, skills: false, scope: 'rotation', reserve: 0, order: 'masteries' },
@@ -8027,6 +8027,54 @@ const Town = {
 };
 
 
+// Quest catalogue from the game's own data files (the live asset packs), like phBot's quest table. questData.json
+// lists every quest with its level and text keys (the first column is the quest's refId, the name key
+// SN_QNO_<NPC>_<n> carries the QNO_ codename the dialogue rows use), npcpos.json places every NPC by refObjId,
+// and the NPC manifest names each refObjId (NPC_<NPC>). A quest's giver is the NPC named in its codename; one that
+// does not resolve is left to the game's quest markers. The server's monster spawns are not in the client, so the
+// monsters to hunt come from the journal's target list and from kills that advanced a quest.
+const QuestData = {
+  quests: new Map(),   // refId -> { refId, level, key, token, title, npcCode }
+  npcs: new Map(),     // NPC_ codename -> { refObjId, regionId, x, y, z }
+  pending: null, loaded: false, failed: false,
+  ready() {
+    if (this.pending) return this.pending;
+    this.pending = Promise.all([Assets.json('/assets/data/questData.json'), Assets.json('/assets/data/npcpos.json'),
+      Assets.json('/assets/npc/manifest.json')]).then(([quest, pos, npc]) => {
+      const names = quest.textEntries || {};
+      const codeOf = new Map(Object.values(npc.models || {}).filter(v => v?.refObjId != null && v.codename).map(v => [v.refObjId, v.codename]));
+      for (const row of pos.rows || []) {
+        const [ref, region, x, y, z] = String(row).split('\t');
+        const code = codeOf.get(Number(ref));
+        if (!code || this.npcs.has(code)) continue;
+        this.npcs.set(code, { refObjId: Number(ref), regionId: Number(region), x: Number(x), y: Number(y), z: Number(z) });
+      }
+      for (const row of quest.rows || []) {
+        const c = String(row).split('\t'), refId = Number(c[0]), level = Number(c[1]), key = c[2] || '';
+        const hit = /^SN_(QNO_(.+?)_\d+)$/.exec(key);
+        if (!refId || !hit) continue;
+        this.quests.set(refId, { refId, level, key, token: hit[1], title: names[key] || '', npcCode: 'NPC_' + hit[2] });
+      }
+      this.loaded = true;
+      if (UI.is('Quest')) UI.draw();
+    }).catch(e => { this.pending = null; this.failed = true; Log.warn('Quest data unavailable: ' + (e?.message || e)); });
+    return this.pending;
+  },
+  quest(refId) { return this.quests.get(refId) || null; },
+  token(refId) { return this.quests.get(refId)?.token || ''; },
+  // Where the quest's giver stands, or null when the codename names no known NPC.
+  giver(refId) {
+    const q = this.quests.get(refId), npc = q && this.npcs.get(q.npcCode);
+    return npc ? { ...npc } : null;
+  },
+  // Quests the list offers, lowest level first. Rows without a resolvable giver stay out: they can only be done
+  // from the game's own markers.
+  list() {
+    return [...this.quests.values()].filter(q => this.npcs.has(q.npcCode)).sort((a, b) => a.level - b.level || a.refId - b.refId);
+  },
+};
+
+
 // Auto Quest. The game's own quest markers route every step: a marker names the quest (refId), the
 // NPC (gid, region and position) and its state (1 offered, 2 in progress, 3 ready to report). The
 // journal the server maintains (gp.quests) tells kinds and counts: a contents node with kind 0 has
@@ -8048,6 +8096,7 @@ const QUEST_REWARD_TRIES = 2;    // after this many refusals the reward waits fo
 const QUEST_VISIT_BACKOFF_MS = 600000;  // a failed NPC visit is not tried again for this long
 const QUEST_WALK_MS = 300000;    // the walk to the NPC owns its own caps; this is only the ceiling
 const QUEST_LEARN_MS = 8000;     // a kill within this of a journal advance names a quest target
+const QUEST_FAR = 6000;          // a giver further than this (world grid, outdoors) is not walked to
 const QUEST_SKIP_MS = 600000;    // a dialogue row that answered with a plain line is left alone this long
 
 // The marker wire row is [u32 refId][u8 flags][u8 state][u16 region][i16 x][i16 y][i16 z][u32 npcGid];
@@ -8079,6 +8128,8 @@ const Quest = {
   record(refId) { return this.journal().find(r => r.refId === refId) || null; },
   completed(refId) { return (World.gp?.completedQuests || []).includes(refId); },
   token(refId) {
+    const known = QuestData.token(refId);
+    if (known) return known;
     const learned = this.cfg().learned || {};
     return Object.keys(learned).find(t => learned[t] === refId) || '';
   },
@@ -8120,9 +8171,11 @@ const Quest = {
       if (r.contents?.[0]?.kind !== 0 && marker?.valueA !== 3) continue;
       const refusals = this.refused.get(r.refId);
       if (r.u10 === 2 && (refusals?.count || 0) < QUEST_REWARD_TRIES) return { intent: 'reward', refId: r.refId, record: r, marker };
-      const npc = cooled(r.refId) ? this.npcRoute(marker) : null;
+      const npc = cooled(r.refId) ? this.npcRoute(marker) || this.dataRoute(r.refId) : null;
       if (npc) return { intent: 'report', refId: r.refId, marker, npc };
     }
+    const picked = (this.cfg().picked || []).filter(id => !skip.includes(id));
+    if (picked.length) return this.planPicked(picked, cooled);
     const open = this.journal().filter(r => !skip.includes(r.refId) && !this.completed(r.refId)).length;
     if (!this.cfg().accept) { this.why = open ? open + ' quest(s) in progress; hunting for kills.' : 'Nothing to do: accepting new quests is off.'; return null; }
     let offered = 0, filtered = 0, unrouted = 0;
@@ -8140,9 +8193,42 @@ const Quest = {
     this.why = open ? open + ' quest(s) in progress; hunting for kills.' :
       !n ? 'The game shows no quest markers (no quest NPC known yet).' :
       !offered ? 'No NPC offers a quest right now (' + n + ' marker' + (n === 1 ? '' : 's') + ', none open).' :
-      unrouted ? unrouted + ' offered quest(s) have an NPC in another region or no position; only the current region is walked to.' :
+      unrouted ? unrouted + ' offered quest(s) have no usable NPC position or are too far away.' :
       filtered + ' offered quest(s) are excluded by your lists or waiting after a failed visit.';
     return null;
+  },
+  // The quests ticked on the Quest page, lowest level first: each is accepted at the NPC its codename names, wherever
+  // that NPC stands (the walk crosses regions), and the journal then drives the hunt and the turn-in.
+  planPicked(picked, cooled) {
+    const level = World.gp?.progression?.level ?? 0;
+    if (!QuestData.loaded) { QuestData.ready(); this.why = QuestData.failed ? 'The quest data could not be loaded.' : 'Loading the quest data.'; return null; }
+    const n = { active: 0, done: 0, high: 0, wait: 0, lost: 0 };
+    const rows = picked.map(id => QuestData.quest(id)).filter(Boolean).sort((a, b) => a.level - b.level || a.refId - b.refId);
+    for (const q of rows) {
+      if (this.record(q.refId)) { n.active++; continue; }
+      if (this.completed(q.refId)) { n.done++; continue; }
+      if (q.level > level) { n.high++; continue; }
+      if (!this.wanted(q.refId) || !cooled(q.refId)) { n.wait++; continue; }
+      const marker = this.marker(q.refId), npc = this.dataRoute(q.refId) || this.npcRoute(marker);
+      if (!npc) { n.lost++; continue; }
+      return { intent: 'accept', refId: q.refId, marker, npc, viaData: true };
+    }
+    const parts = [];
+    if (n.active) parts.push(n.active + ' in progress');
+    if (n.done) parts.push(n.done + ' already done');
+    if (n.high) parts.push(n.high + ' above your level');
+    if (n.wait) parts.push(n.wait + ' waiting after a failed visit or excluded');
+    if (n.lost) parts.push(n.lost + ' with a giver too far away or in a dungeon');
+    this.why = n.active && parts.length === 1 ? n.active + ' quest(s) in progress; hunting for kills.' : 'Picked quests: ' + (parts.join(', ') || 'none found in the quest data') + '.';
+    return null;
+  },
+  // The giver of a quest from the game's NPC table. The walk is world-grid, so another region is fine outdoors.
+  dataRoute(refId) {
+    const g = QuestData.giver(refId), here = World.pose();
+    if (!g || !here) return null;
+    const pose = { regionId: g.regionId, x: g.x, y: g.y, z: g.z }, far = dist2D(here, pose);
+    if (!Number.isFinite(far) || far > QUEST_FAR) return null;
+    return { gid: 0, ref: g.refObjId, pose };
   },
   // Same-region NPCs only: an adjacent region's marker position is a world-grid planar distance
   // away, and v1 leaves cross-region quest routes to a later travel plan.
@@ -8164,6 +8250,7 @@ const Quest = {
   },
   observe() {
     if (!this.on()) { this.idle = ''; return; }
+    if (!QuestData.pending) QuestData.ready();
     if (this.trip) return;
     if (!World.inWorld() || World.isDead()) { this.idle = 'Waiting for the game world.'; return; }
     if (this.abandonSent && now() - this.abandonSent.at > 10000) this.abandonSent = null;
@@ -8254,6 +8341,7 @@ const Quest = {
     for (const r of this.journal()) {
       if (skip.includes(r.refId) || this.completed(r.refId)) continue;
       for (const ref of (this.cfg().targets || {})[r.refId] || []) out.add(ref);
+      for (const ref of r.targetIds || []) out.add(ref);   // the journal's own target list
     }
     return out;
   },
@@ -8263,7 +8351,7 @@ const Quest = {
     if (!pose) return null;
     let best = null;
     for (const e of World.ents.values())
-      if (e.kind === 'npc' && dist2D(e, pose) <= QUEST_FIND && (!best || dist2D(e, pose) < dist2D(best, pose))) best = e;
+      if (e.kind === 'npc' && (!t.npc.ref || e.refObjId === t.npc.ref) && dist2D(e, pose) <= QUEST_FIND && (!best || dist2D(e, pose) < dist2D(best, pose))) best = e;
     return best;
   },
   begin(p) {
@@ -8307,7 +8395,7 @@ const Quest = {
       if (!npc) return;                                   // the NPC spawns near its marker; the step timeout fails the trip
       if (gp.targetPending) return;
       if (gp.target !== npc.gid) { if (Cmd.spaced('select')) Cmd.select(npc.gid); return; }
-      if (t.intent === 'accept' && this.markers().length && !this.marker(t.refId)) return this.fail('the quest is no longer offered');
+      if (t.intent === 'accept' && !t.viaData && this.markers().length && !this.marker(t.refId)) return this.fail('the quest is no longer offered');
       if (!(gp.targetCapabilities & 2)) return this.fail('the NPC cannot be talked to');
       t.phase = 'talk'; t.at = now(); t.talked = false; t.seenRevision = gp.npcConversation?.dialogueRevision || 0;
       return;
@@ -14934,7 +15022,7 @@ const Alchemy = {
 };
 
 
-const RELEASE_NOTES = [{"version": "1.2.198", "title": "Auto quest says what it is waiting for", "items": ["When Start quests is on but nothing happens, the Quest page now says why: no quest markers, no NPC offering a quest, an NPC in another region, quests excluded by your lists, or what it is waiting on.", "The same reason is written to the log when it changes."], "note": "Only tested in simulation. This explains the idle state; it does not yet walk to NPCs in other regions."}, {"version": "1.2.197", "title": "Quest Start button and stall prompts", "items": ["Auto quest now has Start quests and Stop quests buttons.", "Auto stall now answers the game's own OK prompt when opening the stall, so it no longer hangs waiting for you to click it."], "note": "Only tested in simulation; the OK prompt press was not checked on the live server."}, {"version": "1.2.196", "title": "Shorter page list in the wide window", "items": ["In the wide window, the page list now shows one row per page: a small icon with the name beside it, like the Classic window's sidebar.", "The wide window is about 190 px shorter, and the page list column is a little wider to fit the names."], "note": "Tested in simulation only, not in a live game. The layout was checked on a screenshot replica, not in a real browser."}, {"version": "1.2.195", "title": "Shorter page list in the wide window", "items": ["In the wide window, the page list now shows one row per page: a small icon with the name beside it, like the Classic window's sidebar.", "The wide window is about 190 px shorter, and the page list column is a little wider to fit the names."], "note": "Tested in simulation only, not in a live game. The layout was checked on a screenshot replica, not in a real browser."}, {"version": "1.2.194", "title": "Fixed the gap above the page content", "items": ["In the wide and classic windows, the page content started too low, leaving a big empty gap at the top. It now starts right under the top bar.", "The extra height from the tab list now goes to the feedback area at the bottom instead."], "note": "Tested in simulation only, not in a live game. The layout was checked on a small replica, not in a real browser."}, {"version": "1.2.193", "title": "Fixed the gap above the page content", "items": ["In the wide and classic windows, the page content started far too low, leaving a big empty gap at the top. It now starts right under the top bar.", "The extra height from the tab list now goes to the feedback area at the bottom instead."], "note": "Tested in simulation only, not in a live game. The layout was checked on a small replica, not in a real browser."}, {"version": "1.2.192", "title": "Fixed blank Setup icons and Stall tab icon", "items": ["The icons in the Setup checklist were showing as blank. They now show the game's own icons.", "The Stall tab now has an icon in the page list, like the other pages."], "note": "Tested in simulation only, not in a live game. The icon paths were not checked against the live game assets."}, {"version": "1.2.191", "title": "Fixed blank Setup icons and Stall tab icon", "items": ["The icons in the Setup checklist were showing as black squares. They now show the game's own icons.", "The Stall tab now has an icon in the page list, like the other pages."], "note": "Tested in simulation only, not in a live game."}];
+const RELEASE_NOTES = [{"version": "1.2.199", "title": "Auto quest: pick quests from a list", "items": ["The Quest page now has a list of quests to tick, like phBot. Each shows its level and name. The list comes from the game's own quest data (about 140 quests whose NPC the data names).", "Ticked quests are done lowest level first: the bot walks to the quest NPC from the game's NPC table (it can cross regions, outdoors), takes the quest, hunts what the quest counts and turns it in. Quests above your level wait.", "Quest codenames now come from the data, so the right dialogue row is picked without learning it first. The journal's own target list is hunted first.", "With nothing ticked it still follows the quest markers the game shows. The status line says what it is waiting for."], "note": "Only tested in simulation and against the game data files. Monster spawns are not in the client, so the bot hunts where your hunting area already is. Not checked on the live server."}, {"version": "1.2.198", "title": "Auto quest says what it is waiting for", "items": ["When Start quests is on but nothing happens, the Quest page now says why: no quest markers, no NPC offering a quest, an NPC in another region, quests excluded by your lists, or what it is waiting on.", "The same reason is written to the log when it changes."], "note": "Only tested in simulation. This explains the idle state; it does not yet walk to NPCs in other regions."}, {"version": "1.2.197", "title": "Quest Start button and stall prompts", "items": ["Auto quest now has Start quests and Stop quests buttons.", "Auto stall now answers the game's own OK prompt when opening the stall, so it no longer hangs waiting for you to click it."], "note": "Only tested in simulation; the OK prompt press was not checked on the live server."}, {"version": "1.2.196", "title": "Shorter page list in the wide window", "items": ["In the wide window, the page list now shows one row per page: a small icon with the name beside it, like the Classic window's sidebar.", "The wide window is about 190 px shorter, and the page list column is a little wider to fit the names."], "note": "Tested in simulation only, not in a live game. The layout was checked on a screenshot replica, not in a real browser."}, {"version": "1.2.195", "title": "Shorter page list in the wide window", "items": ["In the wide window, the page list now shows one row per page: a small icon with the name beside it, like the Classic window's sidebar.", "The wide window is about 190 px shorter, and the page list column is a little wider to fit the names."], "note": "Tested in simulation only, not in a live game. The layout was checked on a screenshot replica, not in a real browser."}, {"version": "1.2.194", "title": "Fixed the gap above the page content", "items": ["In the wide and classic windows, the page content started too low, leaving a big empty gap at the top. It now starts right under the top bar.", "The extra height from the tab list now goes to the feedback area at the bottom instead."], "note": "Tested in simulation only, not in a live game. The layout was checked on a small replica, not in a real browser."}, {"version": "1.2.193", "title": "Fixed the gap above the page content", "items": ["In the wide and classic windows, the page content started far too low, leaving a big empty gap at the top. It now starts right under the top bar.", "The extra height from the tab list now goes to the feedback area at the bottom instead."], "note": "Tested in simulation only, not in a live game. The layout was checked on a small replica, not in a real browser."}, {"version": "1.2.192", "title": "Fixed blank Setup icons and Stall tab icon", "items": ["The icons in the Setup checklist were showing as blank. They now show the game's own icons.", "The Stall tab now has an icon in the page list, like the other pages."], "note": "Tested in simulation only, not in a live game. The icon paths were not checked against the live game assets."}];
 
 // Check trusted repository metadata; never execute downloaded update code.
 const Updates = {
@@ -16547,7 +16635,7 @@ const UI = {
     } else if (this.current === 'Town') {
       this.sections('townTrip', 'townWhen', 'townCycle', 'townAmmo');
     } else if (this.current === 'Quest') {
-      this.sections('questAuto', 'questJournal');
+      this.sections('questAuto', 'questPick', 'questJournal');
     } else if (this.current === 'Party') {
       this.sections('partyMembers', 'partyHeal', 'partyBuffs', 'partyParty', 'partyTrace');
     } else if (this.current === 'Items') {
@@ -16588,7 +16676,7 @@ const UI = {
       { name: 'Party/Autores', icon: 'action\\icon_cha_party', pages: ['Party'], sections: [
         ['partyMembers', 'Current party'], ['partyParty', 'Party settings'], ['partyHeal']] },
       { name: 'Player buffing', icon: 'action\\icon_cha_party', pages: ['Party'], sections: [['partyBuffs', 'Player buffing']] },
-      { name: 'Quest', icon: 'action\\icon_cha_camp', pages: ['Quest'], sections: [['questAuto', 'Auto quest settings'], ['questJournal']] },
+      { name: 'Quest', icon: 'action\\icon_cha_camp', pages: ['Quest'], sections: [['questAuto', 'Auto quest settings'], ['questPick', 'Quests to do'], ['questJournal']] },
       { name: 'Auto alchemy', icon: 'action\\icon_cha_alchemy', pages: ['Alchemy'], draw() { Alchemy.draw(); } },
       { name: 'Stall', icon: 'action\\icon_cha_shop', pages: ['Stall'], draw() { Stall.draw(); } },
       { name: 'Extra', icon: 'action\\icon_cha_helper', pages: ['Settings'], sections: [
@@ -16983,6 +17071,28 @@ const UI = {
       this.text('Only quests named', () => Q().include, v => Q().include = v, 'comma-separated QNO_ codenames'),
       this.text('Never quests named', () => Q().exclude, v => Q().exclude = v, 'comma-separated QNO_ codenames'),
       el('p', 'The quest markers the game itself sends route the bot: it walks to the quest NPC, takes the quest, hunts the monsters whose kills advance it and turns it in. Quests the reward window can close are rewarded without walking. Which dialogue row is which quest, and which monsters count, are learned while playing.', 'muted')));
+  },
+  // The quest list, like phBot's: tick the quests to do. The bot takes them lowest level first at the NPC named in
+  // each quest's codename. With nothing ticked it falls back to the quests the game's own markers offer.
+  section_questPick(host) {
+    const Q = () => Settings.profile.quest;
+    if (!QuestData.pending) QuestData.ready();
+    if (!QuestData.loaded) {
+      host.append(this.group('Quests to do', el('p', QuestData.failed ? 'The quest list could not be loaded. Reload the game and try again.' : 'Loading the quest list…', 'muted')));
+      return;
+    }
+    const level = World.gp?.progression?.level ?? 0, find = (this.questFind || '').toLowerCase().trim();
+    const set = (refId, on) => { const list = new Set(Q().picked || []); on ? list.add(refId) : list.delete(refId); Q().picked = [...list]; Settings.saveProfile(); };
+    const all = QuestData.list().filter(q => (this.questHigh || !level || q.level <= level) && (!find || (q.title + ' ' + q.token).toLowerCase().includes(find)));
+    const shown = all.slice(0, 80);
+    host.append(this.group('Quests to do',
+      this.text('Find a quest', () => this.questFind || '', v => { this.questFind = v; this.draw(); }, 'part of the name'),
+      this.check('Show quests above my level', () => !!this.questHigh, v => { this.questHigh = v; this.draw(); }),
+      this.row(this.button('Pick all shown', () => { const list = new Set(Q().picked || []); for (const q of shown) list.add(q.refId); Q().picked = [...list]; Settings.saveProfile(); this.draw(); }),
+        this.button('Clear picks', () => { Q().picked = []; Settings.saveProfile(); this.draw(); })),
+      el('p', (Q().picked || []).length + ' picked. ' + (all.length > shown.length ? 'Showing the first ' + shown.length + ' of ' + all.length + '; use Find to narrow the list.' : all.length + ' shown.'), 'muted'),
+      ...shown.map(q => this.check('Lv ' + q.level + ' · ' + (q.title || q.token), () => (Q().picked || []).includes(q.refId), v => set(q.refId, v))),
+      el('p', 'Picked quests are done lowest level first: the bot walks to the NPC, takes the quest, hunts what the quest counts and turns it in. Only quests whose NPC the game data names are listed. Quests too far away or above your level wait.', 'muted')));
   },
   section_questJournal(host) {
     const Q = () => Settings.profile.quest;

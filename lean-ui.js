@@ -560,7 +560,7 @@ const UI = {
     } else if (this.current === 'Town') {
       this.sections('townTrip', 'townWhen', 'townCycle', 'townAmmo');
     } else if (this.current === 'Quest') {
-      this.sections('questAuto', 'questJournal');
+      this.sections('questAuto', 'questPick', 'questJournal');
     } else if (this.current === 'Party') {
       this.sections('partyMembers', 'partyHeal', 'partyBuffs', 'partyParty', 'partyTrace');
     } else if (this.current === 'Items') {
@@ -601,7 +601,7 @@ const UI = {
       { name: 'Party/Autores', icon: 'action\\icon_cha_party', pages: ['Party'], sections: [
         ['partyMembers', 'Current party'], ['partyParty', 'Party settings'], ['partyHeal']] },
       { name: 'Player buffing', icon: 'action\\icon_cha_party', pages: ['Party'], sections: [['partyBuffs', 'Player buffing']] },
-      { name: 'Quest', icon: 'action\\icon_cha_camp', pages: ['Quest'], sections: [['questAuto', 'Auto quest settings'], ['questJournal']] },
+      { name: 'Quest', icon: 'action\\icon_cha_camp', pages: ['Quest'], sections: [['questAuto', 'Auto quest settings'], ['questPick', 'Quests to do'], ['questJournal']] },
       { name: 'Auto alchemy', icon: 'action\\icon_cha_alchemy', pages: ['Alchemy'], draw() { Alchemy.draw(); } },
       { name: 'Stall', icon: 'action\\icon_cha_shop', pages: ['Stall'], draw() { Stall.draw(); } },
       { name: 'Extra', icon: 'action\\icon_cha_helper', pages: ['Settings'], sections: [
@@ -996,6 +996,28 @@ const UI = {
       this.text('Only quests named', () => Q().include, v => Q().include = v, 'comma-separated QNO_ codenames'),
       this.text('Never quests named', () => Q().exclude, v => Q().exclude = v, 'comma-separated QNO_ codenames'),
       el('p', 'The quest markers the game itself sends route the bot: it walks to the quest NPC, takes the quest, hunts the monsters whose kills advance it and turns it in. Quests the reward window can close are rewarded without walking. Which dialogue row is which quest, and which monsters count, are learned while playing.', 'muted')));
+  },
+  // The quest list, like phBot's: tick the quests to do. The bot takes them lowest level first at the NPC named in
+  // each quest's codename. With nothing ticked it falls back to the quests the game's own markers offer.
+  section_questPick(host) {
+    const Q = () => Settings.profile.quest;
+    if (!QuestData.pending) QuestData.ready();
+    if (!QuestData.loaded) {
+      host.append(this.group('Quests to do', el('p', QuestData.failed ? 'The quest list could not be loaded. Reload the game and try again.' : 'Loading the quest list…', 'muted')));
+      return;
+    }
+    const level = World.gp?.progression?.level ?? 0, find = (this.questFind || '').toLowerCase().trim();
+    const set = (refId, on) => { const list = new Set(Q().picked || []); on ? list.add(refId) : list.delete(refId); Q().picked = [...list]; Settings.saveProfile(); };
+    const all = QuestData.list().filter(q => (this.questHigh || !level || q.level <= level) && (!find || (q.title + ' ' + q.token).toLowerCase().includes(find)));
+    const shown = all.slice(0, 80);
+    host.append(this.group('Quests to do',
+      this.text('Find a quest', () => this.questFind || '', v => { this.questFind = v; this.draw(); }, 'part of the name'),
+      this.check('Show quests above my level', () => !!this.questHigh, v => { this.questHigh = v; this.draw(); }),
+      this.row(this.button('Pick all shown', () => { const list = new Set(Q().picked || []); for (const q of shown) list.add(q.refId); Q().picked = [...list]; Settings.saveProfile(); this.draw(); }),
+        this.button('Clear picks', () => { Q().picked = []; Settings.saveProfile(); this.draw(); })),
+      el('p', (Q().picked || []).length + ' picked. ' + (all.length > shown.length ? 'Showing the first ' + shown.length + ' of ' + all.length + '; use Find to narrow the list.' : all.length + ' shown.'), 'muted'),
+      ...shown.map(q => this.check('Lv ' + q.level + ' · ' + (q.title || q.token), () => (Q().picked || []).includes(q.refId), v => set(q.refId, v))),
+      el('p', 'Picked quests are done lowest level first: the bot walks to the NPC, takes the quest, hunts what the quest counts and turns it in. Only quests whose NPC the game data names are listed. Quests too far away or above your level wait.', 'muted')));
   },
   section_questJournal(host) {
     const Q = () => Settings.profile.quest;

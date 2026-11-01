@@ -3,7 +3,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(__dirname + '/bot.lean.user.js', 'utf8');
 const isolated = source.slice(0, source.lastIndexOf('installWorkerHook();')) +
-  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, Quest, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap};\n})();';
+  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap};\n})();';
 function fixture(document) {
   let time = 100000;
   const storage = new Map(), commands = [], notices = [], intervals = [], timers = [];
@@ -7544,7 +7544,7 @@ test('a quest bot with nothing to do says why instead of staying silent', () => 
   assert.match(f.Quest.status(), /none open/);
   f = questFixture({ markers: [qMarker(7, 1, 9)] });
   f.Quest.observe();
-  assert.match(f.Quest.status(), /another region/);
+  assert.match(f.Quest.status(), /no usable NPC position/);
   f.Settings.profile.quest.on = false;
   f.Quest.observe();
   assert.equal(f.Quest.status(), '', 'off means no status');
@@ -7619,6 +7619,42 @@ test('an offered quest is accepted at its NPC end to end, and the codename is le
   assert.equal(f.Quest.trip, null);
 });
 
+function questData(f, rows) {
+  const Q = f.QuestData;
+  for (const [refId, level, token, npc] of rows) {
+    Q.quests.set(refId, { refId, level, key: 'SN_' + token, token, title: 'Quest ' + refId, npcCode: 'NPC_' + npc });
+    Q.npcs.set('NPC_' + npc, { refObjId: 900, regionId: 1, x: 110, y: 0, z: 100 });
+  }
+  Q.loaded = true;
+}
+test('a quest ticked on the list is accepted from the game data with no marker, lowest level first', () => {
+  const f = questFixture();
+  questData(f, [[600, 5, 'QNO_CH_A_1', 'CH_A'], [601, 1, 'QNO_CH_B_1', 'CH_B']]);
+  f.World.gp.progression = { ...(f.World.gp.progression || {}), level: 3 };
+  f.Settings.profile.quest.picked = [600, 601];
+  f.Quest.observe();
+  assert.equal(f.Quest.trip?.refId, 601, 'the level-1 quest comes first; the level-5 one is above the character');
+  assert.equal(f.Quest.trip.intent, 'accept');
+  assert.equal(f.Quest.token(601), 'QNO_CH_B_1', 'the codename comes from the data, not from learning');
+  f.Quest.tick(); f.World.gp = { ...f.World.gp, target: 901, targetPending: false, targetCapabilities: 2 };
+  qMenu(f); f.Quest.tick(); f.advance(1300); f.Quest.tick();
+  qDialog(f, { kind: 4, prompt: 'SN_TALK_MENU', options: [{ choice: 5, symbol: 'SN_CON_QNO_CH_A_1' }, { choice: 6, symbol: 'SN_CON_QNO_CH_B_1' }] });
+  f.Quest.tick(); f.Quest.tick();
+  assert.ok(qSent(f, 'npc-choice').some(c => c.choice === 6), 'its own row is chosen, not the other one');
+});
+test('picked quests that cannot run say why', () => {
+  const f = questFixture();
+  questData(f, [[600, 50, 'QNO_CH_A_1', 'CH_A']]);
+  f.World.gp.progression = { ...(f.World.gp.progression || {}), level: 3 };
+  f.Settings.profile.quest.picked = [600];
+  f.Quest.observe();
+  assert.equal(f.Quest.trip, null);
+  assert.match(f.Quest.status(), /above your level/);
+});
+test('a journal target list is hunted first', () => {
+  const f = questFixture({ quests: [qRecord(512, { targetIds: [77, 78] })] });
+  assert.deepEqual([...f.Quest.preferred()].sort(), [77, 78]);
+});
 test('a turn-in completes through its learned row; a report never guesses between unknown rows', () => {
   const f = questFixture({ quests: [qRecord(512, { u10: 1, contents: [{ tag: 1, kind: 0, description: 'SN_CON_Q', objectiveSentinel: false, objectiveValues: [20] }] })] });
   f.Settings.profile.quest.learned = { QNO_TEST_1: 512 };
