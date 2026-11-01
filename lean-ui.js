@@ -559,6 +559,8 @@ const UI = {
       this.pane.append(el('p', 'Town trips, what starts them, and arrows and bolts are on the Town page.', 'muted'));
     } else if (this.current === 'Town') {
       this.sections('townTrip', 'townWhen', 'townCycle', 'townAmmo');
+    } else if (this.current === 'Quest') {
+      this.sections('questAuto', 'questJournal');
     } else if (this.current === 'Party') {
       this.sections('partyMembers', 'partyHeal', 'partyBuffs', 'partyParty', 'partyTrace');
     } else if (this.current === 'Items') {
@@ -584,7 +586,7 @@ const UI = {
   },
   // ---- Classic layout: an SBot-style frame and tab order (opt-in, screens at least 900 px wide) ----
   // Each tab is a list of the page sections above (title = the heading it gets here); a tab only exists when we have
-  // the feature, so there is no Chat, Union Party, Quest or Alarms tab yet.
+  // the feature, so there is no Chat, Union Party or Alarms tab yet.
   classicTabs() {
     return [
       { name: 'Settings', icon: 'action\\icon_cha_helper', pages: ['Supplies', 'Loot', 'Town', 'Combat', 'Settings'], sections: [
@@ -599,6 +601,7 @@ const UI = {
       { name: 'Party/Autores', icon: 'action\\icon_cha_party', pages: ['Party'], sections: [
         ['partyMembers', 'Current party'], ['partyParty', 'Party settings'], ['partyHeal']] },
       { name: 'Player buffing', icon: 'action\\icon_cha_party', pages: ['Party'], sections: [['partyBuffs', 'Player buffing']] },
+      { name: 'Quest', icon: 'action\\icon_cha_camp', pages: ['Quest'], sections: [['questAuto', 'Auto quest settings'], ['questJournal']] },
       { name: 'Auto alchemy', icon: 'action\\icon_cha_alchemy', pages: ['Alchemy'], draw() { Alchemy.draw(); } },
       { name: 'Stall', icon: 'action\\icon_cha_shop', pages: ['Stall'], draw() { Stall.draw(); } },
       { name: 'Extra', icon: 'action\\icon_cha_helper', pages: ['Settings'], sections: [
@@ -612,7 +615,7 @@ const UI = {
   // The classic tab that holds a compact page (so Setup and the checklist can open the right place).
   tabFor(page, combatTab) {
     if (page === 'Combat') return combatTab === 'Hunt area' ? 'Training place' : 'Skills';
-    return { Loot: 'Settings', Supplies: 'Settings', Town: 'Items/Storage', Party: 'Party/Autores', Items: 'Items/Storage', Alchemy: 'Auto alchemy', Trade: 'Auto trade', Settings: 'Extra' }[page] || page;
+    return { Loot: 'Settings', Supplies: 'Settings', Town: 'Items/Storage', Quest: 'Quest', Party: 'Party/Autores', Items: 'Items/Storage', Alchemy: 'Auto alchemy', Trade: 'Auto trade', Settings: 'Extra' }[page] || page;
   },
   // Is this compact page (and optional Combat sub-tab) what the window shows right now, in either layout?
   is(page, tab) {
@@ -644,10 +647,10 @@ const UI = {
   },
   buildNav() {
     this.nav.replaceChildren();
-    const icons = { Items: 'action\\cos_cmd_inventory', Party: 'action\\icon_cha_party', Combat: 'action\\icon_cha_auto_attack', Loot: 'action\\icon_cha_autoget', Supplies: 'action\\icon_cha_recovery', Town: 'item\\etc\\mall_return_scroll',
+    const icons = { Items: 'action\\cos_cmd_inventory', Party: 'action\\icon_cha_party', Combat: 'action\\icon_cha_auto_attack', Loot: 'action\\icon_cha_autoget', Supplies: 'action\\icon_cha_recovery', Town: 'item\\etc\\mall_return_scroll', Quest: 'action\\icon_cha_camp',
       Alchemy: 'action\\icon_cha_alchemy', Trade: 'action\\icon_cha_shop', Wardrobe: 'action\\icon_cha_shop', Settings: 'action\\icon_cha_helper', Setup: 'action\\icon_cha_camp' };
     const entries = this.classic ? this.classicTabs().map(t => ({ name: t.name, icon: t.icon, open: () => { this.ctab = t.name; this.draw(); } }))
-      : ['Setup', 'Map', 'Combat', 'Party', 'Loot', 'Items', 'Supplies', 'Town', 'Stall', 'Alchemy', 'Trade', 'Wardrobe', 'Settings'].map(name => ({ name, icon: icons[name], open: () => { this.current = name; this.draw(); } }));
+      : ['Setup', 'Map', 'Combat', 'Party', 'Loot', 'Items', 'Supplies', 'Town', 'Quest', 'Stall', 'Alchemy', 'Trade', 'Wardrobe', 'Settings'].map(name => ({ name, icon: icons[name], open: () => { this.current = name; this.draw(); } }));
     // Page icons are the game's own action-bar icons; they show only in the wide and classic windows' page lists.
     for (const entry of entries) {
       const tab = this.button(entry.name, entry.open);
@@ -979,6 +982,51 @@ const UI = {
         this.number('Bolts: go to town at or below', () => ammo().bolt.low, v => ammo().bolt.low = v, 0, 9999),
         this.number('Bolts: refill to', () => ammo().bolt.target, v => ammo().bolt.target = v, 1, 10000),
         el('p', 'Bought at the repair merchant after selling pet loot and before repairing. The count includes the stack in your ammunition slot and any spare stacks in the bag. A trip also starts when the count falls to the low-stock number. If the merchant does not sell it, there is no bag space or not enough gold, that item is skipped and the rest of the trip goes on. Equipping the bought ammunition is up to you.', 'muted')));
+  },
+  section_questAuto(host) {
+    const Q = () => Settings.profile.quest;
+    host.append(this.group('Auto quests',
+      this.check('Do quests automatically', () => Q().on, v => Q().on = v),
+      this.check('Accept quests their NPC offers', () => Q().accept, v => Q().accept = v),
+      this.text('Only quests named', () => Q().include, v => Q().include = v, 'comma-separated QNO_ codenames'),
+      this.text('Never quests named', () => Q().exclude, v => Q().exclude = v, 'comma-separated QNO_ codenames'),
+      el('p', 'The quest markers the game itself sends route the bot: it walks to the quest NPC, takes the quest, hunts the monsters whose kills advance it and turns it in. Quests the reward window can close are rewarded without walking. Which dialogue row is which quest, and which monsters count, are learned while playing.', 'muted')));
+  },
+  section_questJournal(host) {
+    const Q = () => Settings.profile.quest;
+    const status = el('p', Quest.status() || 'No quest visit running.', 'muted');
+    const list = el('div', null, 'members');
+    let armedAbandon = 0;
+    const render = () => {
+      status.textContent = Quest.status() || 'No quest visit running.';
+      const rows = Quest.listing();
+      if (!rows.length) { list.replaceChildren(el('div', 'No active quests.', 'empty')); return; }
+      list.replaceChildren(...rows.map(row => {
+        const line = el('div', null, 'member');
+        const name = el('div', null, 'member-name');
+        name.append(el('strong', row.token || 'quest #' + row.refId),
+          el('span', (row.progress !== null ? 'count ' + row.progress : 'no counter') + (row.done ? ' · ready to turn in' : '') +
+            (row.around ? '' : ' · targets not around') + (row.skipped ? ' · skipped' : ''), 'muted'));
+        const skip = this.button(row.skipped ? 'Unskip' : 'Skip', () => {
+          const list = new Set(Q().skip || []);
+          list.has(row.refId) ? list.delete(row.refId) : list.add(row.refId);
+          Q().skip = [...list]; Settings.saveProfile(); render();
+        });
+        // Abandon drops all progress: the first click only arms the button for a moment.
+        const abandon = this.button(armedAbandon === row.refId ? 'Sure?' : 'Abandon', () => {
+          if (armedAbandon !== row.refId) {
+            armedAbandon = row.refId; abandon.textContent = 'Sure?';
+            setTimeout(() => { if (armedAbandon === row.refId) { armedAbandon = 0; render(); } }, 3000);
+            return;
+          }
+          armedAbandon = 0; Quest.abandon(row.refId); render();
+        });
+        line.append(name, skip, abandon); return line;
+      }));
+    };
+    render();
+    this.refreshers.push(render);
+    host.append(this.group('Quest journal', status, list));
   },
   section_partyMembers(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();

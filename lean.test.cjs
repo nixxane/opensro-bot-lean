@@ -3,7 +3,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(__dirname + '/bot.lean.user.js', 'utf8');
 const isolated = source.slice(0, source.lastIndexOf('installWorkerHook();')) +
-  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, ScrollBuff, boot, Ticker, Sound, LeanMap};\n})();';
+  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, Quest, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, ScrollBuff, boot, Ticker, Sound, LeanMap};\n})();';
 function fixture(document) {
   let time = 100000;
   const storage = new Map(), commands = [], notices = [], intervals = [], timers = [];
@@ -7433,4 +7433,301 @@ test('a price change mid-session stops the stall instead of mixing old offers', 
   f.advance(400); f.Controller.tick(); stallRespond(f);
   assert.equal(f.Stall.run, null);
   assert.equal(f.commands.at(-1).kind, 'stall-close');
+});
+
+// ---- Auto quest ----
+// The game's answers drive the journal, the markers and the NPC conversation exactly as the server
+// does: a talk opens the row menu, a row's confirm asks Yes/No, the journal moves after Yes, and a
+// marker names the NPC (gid, region, position) with its state (1 offer, 3 report).
+function questFixture({ markers = [], quests = [], completed = [], npc = true } = {}) {
+  const f = fixture();
+  f.Settings.profile.quest.on = true;
+  f.World.gp = { ...f.World.gp, questMarkers: markers, quests, completedQuests: completed, questProgress: [], questPending: 0,
+    revision: 1, npcConversation: { phase: 'closed' } };
+  if (npc) f.World.ents.set(901, { gid: 901, kind: 'npc', refObjId: 900, name: 'Quest giver', regionId: 1, x: 110, y: 0, z: 100 });
+  return f;
+}
+const qMarker = (refId, valueA, regionId = 1) => ({ refId, flags: 2, valueA, word: regionId, tail6: [110, 0, 0, 0, 100, 0], optional: 901 });
+const qRecord = (refId, over = {}) => ({ refId, u08: 1, u09: 1, flags: 0x18, progress: 0, u10: 2,
+  contents: [{ tag: 1, kind: 1, description: 'SN_CON_Q', objectiveSentinel: false, objectiveValues: [0] }], targetIds: [], ...over });
+// Apply the server's next gameplay push: bumps the revision so settle logic can tell pushes apart.
+const qPush = (f, gp) => {
+  f.World.gp = { ...f.World.gp, ...gp, revision: (f.World.gp.revision || 0) + 1 };
+  f.bus.emit('gameplay', f.World.gp);
+};
+// The conversation's next reply: each call is one more dialogue revision, like the worker's state.
+const qDialog = (f, dialogue, gid = 901) => {
+  const previous = f.World.gp.npcConversation || { dialogueRevision: 0 };
+  f.World.gp = { ...f.World.gp, npcConversation: { phase: 'ready', gid, dialogueRevision: (previous.dialogueRevision || 0) + 1, dialogue } };
+};
+const qMenu = f => { f.World.gp = { ...f.World.gp, npcConversation: { phase: 'menu', gid: 901, dialogueRevision: 0 } }; };
+const qSent = (f, kind) => f.commands.filter(c => c.kind === kind);
+
+test('a ready kind-2 quest is rewarded with the quest window command, once', () => {
+  const f = questFixture({ quests: [qRecord(512, { contents: [{ tag: 1, kind: 0, description: 'SN_CON_Q', objectiveSentinel: false, objectiveValues: [20] }] })] });
+  f.Quest.observe();
+  assert.equal(qSent(f, 'quest-reward').length, 1, 'the reward command is sent');
+  assert.equal(qSent(f, 'quest-reward')[0].refId, 512);
+  f.advance(500); f.Quest.observe();
+  assert.equal(qSent(f, 'quest-reward').length, 1, 'it is never resent while the answer is outstanding');
+  qPush(f, { quests: [], completedQuests: [512] });
+  assert.match(f.Quest.message, /completed/);
+  f.Quest.observe();
+  assert.equal(qSent(f, 'quest-reward').length, 1, 'the completed quest asks for nothing more');
+});
+
+test('a refused reward backs off and falls back to the NPC after two tries', () => {
+  const done = qRecord(512, { contents: [{ tag: 1, kind: 0, description: 'SN_CON_Q', objectiveSentinel: false, objectiveValues: [20] }] });
+  const f = questFixture({ quests: [done] });
+  f.Quest.observe();
+  assert.equal(qSent(f, 'quest-reward').length, 1);
+  // The worker holds the single quest transaction, then releases it with no journal change:
+  // that release is the server's refusal.
+  qPush(f, { questPending: 512 });
+  f.advance(1600);
+  qPush(f, { questPending: 0, quests: [done] });
+  assert.equal(f.Quest.refused.get(512).count, 1, 'the refusal is counted');
+  f.advance(5000); f.Quest.observe();
+  assert.equal(qSent(f, 'quest-reward').length, 1, 'the backoff window holds a second send');
+  f.advance(65000); f.Quest.observe();
+  assert.equal(qSent(f, 'quest-reward').length, 2, 'after a minute one retry is allowed');
+  qPush(f, { questPending: 512 });
+  f.advance(1600);
+  qPush(f, { questPending: 0, quests: [done] });
+  assert.equal(f.Quest.refused.get(512).count, 2);
+  // Two refusals: the marker route takes over instead of a third command.
+  qPush(f, { questMarkers: [qMarker(512, 3)] });
+  f.Quest.observe();
+  assert.equal(f.Quest.trip?.intent, 'report', 'the NPC turn-in takes over');
+  assert.equal(qSent(f, 'quest-reward').length, 2);
+});
+
+test('an offered quest is accepted at its NPC end to end, and the codename is learned', () => {
+  const f = questFixture({ markers: [qMarker(512, 1)] });
+  f.Quest.observe();
+  assert.equal(f.Quest.trip?.intent, 'accept');
+  assert.equal(f.Quest.trip.phase, 'select', 'the NPC is within reach, so no walk');
+  f.Quest.tick();
+  assert.ok(qSent(f, 'select').some(c => c.gid === 901));
+  f.World.gp = { ...f.World.gp, target: 901, targetPending: false, targetCapabilities: 2 };
+  qMenu(f);
+  f.Quest.tick();
+  assert.equal(f.Quest.trip.phase, 'talk');
+  f.advance(1300); f.Quest.tick();
+  assert.ok(qSent(f, 'npc-talk').length, 'the talk opens the menu');
+  qDialog(f, { kind: 4, prompt: 'SN_TALK_MENU', options: [{ choice: 5, symbol: 'SN_CON_QNO_TEST_1' }, { choice: 6, symbol: 'SN_CON_QNO_OTHER' }] });
+  f.Quest.tick();
+  assert.equal(f.Quest.trip.phase, 'choose');
+  f.Quest.tick();
+  assert.ok(qSent(f, 'npc-choice').some(c => c.choice === 5), 'the unbound quest row is chosen');
+  qDialog(f, { kind: 3, prompt: 'SN_TALK_QNO_TEST_1_01', options: [] });
+  f.advance(300); f.Quest.tick();
+  assert.ok(qSent(f, 'npc-choice').some(c => c.choice === 2), 'Yes confirms the offer');
+  qDialog(f, { kind: 1, prompt: 'SN_TALK_QNO_TEST_1_02', options: [] });
+  qPush(f, { quests: [qRecord(512)], questMarkers: [] });
+  f.Quest.tick();
+  assert.equal(f.Settings.profile.quest.learned.QNO_TEST_1, 512, 'the codename binds to the journal refId');
+  assert.match(f.Quest.message, /accepted/);
+  f.Quest.tick();
+  assert.ok(qSent(f, 'npc-close').length, 'the dialogue is closed');
+  assert.equal(f.Quest.trip, null);
+});
+
+test('a turn-in completes through its learned row; a report never guesses between unknown rows', () => {
+  const f = questFixture({ quests: [qRecord(512, { u10: 1, contents: [{ tag: 1, kind: 0, description: 'SN_CON_Q', objectiveSentinel: false, objectiveValues: [20] }] })] });
+  f.Settings.profile.quest.learned = { QNO_TEST_1: 512 };
+  qPush(f, { questMarkers: [qMarker(512, 3)] });
+  f.Quest.observe();
+  assert.equal(f.Quest.trip?.intent, 'report');
+  f.Quest.tick();
+  f.World.gp = { ...f.World.gp, target: 901, targetPending: false, targetCapabilities: 2 };
+  qMenu(f); f.Quest.tick(); f.advance(1300); f.Quest.tick();
+  // Two quest rows, neither bound to this quest: no guess is made.
+  qDialog(f, { kind: 4, prompt: 'SN_TALK_MENU', options: [{ choice: 5, symbol: 'SN_CON_QNO_OTHER_A' }, { choice: 6, symbol: 'SN_CON_QNO_OTHER_B' }] });
+  f.Quest.tick(); f.Quest.tick();
+  assert.equal(qSent(f, 'npc-choice').length, 0, 'an unidentified row is never answered');
+  assert.match(f.Quest.message, /could not tell which dialogue row/);
+  assert.equal(f.Quest.trip, null);
+  // With the quest's own row present it is chosen, confirmed, and the journal removal completes it.
+  const g = questFixture({ quests: [qRecord(512, { u10: 1, contents: [{ tag: 1, kind: 0, description: 'SN_CON_Q', objectiveSentinel: false, objectiveValues: [20] }] })], markers: [qMarker(512, 3)] });
+  g.Settings.profile.quest.learned = { QNO_TEST_1: 512 };
+  g.Quest.observe(); g.Quest.tick();
+  g.World.gp = { ...g.World.gp, target: 901, targetPending: false, targetCapabilities: 2 };
+  qMenu(g); g.Quest.tick(); g.advance(1300); g.Quest.tick();
+  qDialog(g, { kind: 4, prompt: 'SN_TALK_MENU', options: [{ choice: 5, symbol: 'SN_CON_QNO_OTHER' }, { choice: 6, symbol: 'SN_TALK_QNO_TEST_1_01' }] });
+  g.Quest.tick(); g.Quest.tick();
+  assert.ok(qSent(g, 'npc-choice').some(c => c.choice === 6), 'the learned token row is chosen');
+  qDialog(g, { kind: 3, prompt: 'SN_TALK_QNO_TEST_1_06', options: [] });
+  g.advance(300); g.Quest.tick();
+  qDialog(g, { kind: 1, prompt: 'SN_TALK_QNO_TEST_1_07', options: [] });
+  qPush(g, { quests: [], questMarkers: [] });
+  g.Quest.tick();
+  assert.match(g.Quest.message, /completed/);
+});
+
+test('a dialogue row bound to another quest is not chosen for an acceptance', () => {
+  const f = questFixture({ markers: [qMarker(512, 1)] });
+  f.Settings.profile.quest.learned = { QNO_OTHER: 999 };
+  f.Quest.observe(); f.Quest.tick();
+  f.World.gp = { ...f.World.gp, target: 901, targetPending: false, targetCapabilities: 2 };
+  qMenu(f); f.Quest.tick(); f.advance(1300); f.Quest.tick();
+  qDialog(f, { kind: 4, prompt: 'SN_TALK_MENU', options: [{ choice: 5, symbol: 'SN_CON_QNO_OTHER' }] });
+  f.Quest.tick(); f.Quest.tick();
+  assert.equal(qSent(f, 'npc-choice').length, 0, 'a row another quest owns is left alone');
+  assert.match(f.Quest.message, /could not tell which dialogue row/);
+});
+
+test('an informational row is skipped and the next row is tried', () => {
+  const f = questFixture({ markers: [qMarker(512, 1)] });
+  f.Quest.observe(); f.Quest.tick();
+  f.World.gp = { ...f.World.gp, target: 901, targetPending: false, targetCapabilities: 2 };
+  qMenu(f); f.Quest.tick(); f.advance(1300); f.Quest.tick();
+  qDialog(f, { kind: 4, prompt: 'SN_TALK_MENU', options: [{ choice: 5, symbol: 'SN_TALK_QNO_INFO_04' }, { choice: 6, symbol: 'SN_TALK_QNO_WANT_1_01' }] });
+  f.Quest.tick(); f.Quest.tick();
+  assert.ok(qSent(f, 'npc-choice').some(c => c.choice === 5), 'the first unbound row is tried');
+  // The row answers with a plain line instead of a Yes/No: it was informational.
+  qDialog(f, { kind: 1, prompt: 'SN_TALK_QNO_INFO_TXT', options: [] });
+  f.Quest.tick();
+  assert.equal(f.Quest.trip.phase, 'talk', 'the menu is asked for again');
+  f.advance(1300); f.Quest.tick();
+  assert.equal(qSent(f, 'npc-talk').length, 2, 'the menu reopens');
+  qDialog(f, { kind: 4, prompt: 'SN_TALK_MENU', options: [{ choice: 5, symbol: 'SN_TALK_QNO_INFO_04' }, { choice: 6, symbol: 'SN_TALK_QNO_WANT_1_01' }] });
+  f.Quest.tick(); f.Quest.tick();
+  assert.ok(qSent(f, 'npc-choice').at(-1).choice === 6, 'the skipped row is not retried');
+});
+
+test('a marker in another region never starts a trip, and a dead character does neither', () => {
+  const f = questFixture({ markers: [qMarker(512, 1, 2)] });
+  f.Quest.observe();
+  assert.equal(f.Quest.trip, null, 'an out-of-region marker is not actionable');
+  const g = questFixture({ quests: [qRecord(512, { contents: [{ tag: 1, kind: 0, description: 'SN_CON_Q', objectiveSentinel: false, objectiveValues: [20] }] })], markers: [qMarker(512, 3)] });
+  g.World.gp = { ...g.World.gp, vitals: [{ gid: 1, hp: 0, maxHp: 100, mp: 100, maxMp: 100 }] };
+  g.Quest.observe();
+  assert.equal(g.Quest.trip, null, 'a dead character is left alone');
+});
+
+test('manual control and a settings change fail the visit cleanly, and stopAll cancels it', () => {
+  const f = questFixture({ markers: [qMarker(512, 1)] });
+  f.Quest.observe(); f.Quest.tick();
+  f.World.gp = { ...f.World.gp, target: 901, targetPending: false, targetCapabilities: 2 };
+  qMenu(f); f.Quest.tick();
+  f.Manual.lastAt = 123456;
+  f.Quest.tick();
+  assert.match(f.Quest.message, /manual control/);
+  assert.equal(f.Quest.trip, null);
+  const g = questFixture({ markers: [qMarker(512, 1)] });
+  g.Quest.observe(); g.Quest.tick();
+  g.Settings.profile.quest.on = false;
+  g.Quest.tick();
+  assert.match(g.Quest.message, /settings changed/);
+  assert.equal(g.Quest.trip, null);
+  const h = questFixture({ markers: [qMarker(512, 1)] });
+  h.Quest.observe(); h.stopAll();
+  assert.equal(h.Quest.trip, null, 'stopAll cancels a pending visit');
+});
+
+test('a game refusal during the dialogue fails the visit with its message', () => {
+  const f = questFixture({ markers: [qMarker(512, 1)] });
+  f.Quest.observe(); f.Quest.tick();
+  f.World.gp = { ...f.World.gp, target: 901, targetPending: false, targetCapabilities: 2 };
+  qMenu(f); f.Quest.tick(); f.advance(1300); f.Quest.tick();
+  f.bus.emit('game-error', 'Select an available talking NPC');
+  assert.match(f.Quest.message, /talking NPC/);
+  assert.equal(f.Quest.trip, null);
+});
+
+test('kills that advance a quest are learned and hunted first', () => {
+  const f = questFixture({ quests: [qRecord(512)] });
+  // Only a monster our own hunt engaged counts; a despawn we never touched is noise.
+  f.World.hitByUs.set(40, f.World.simNow() ?? 100000);
+  f.bus.emit('despawn', { gid: 40, kind: 'monster', refObjId: 555 });
+  f.bus.emit('despawn', { gid: 50, kind: 'monster', refObjId: 556 });
+  qPush(f, { questProgress: [{ sequence: 1, refId: 512, before: { objectiveValues: [0] }, after: { objectiveValues: [1] } }] });
+  assert.equal(f.Settings.profile.quest.targets[512]?.length, 1);
+  assert.equal(f.Settings.profile.quest.targets[512][0], 555);
+  assert.ok(f.Quest.preferred().has(555), 'the learned type is a preferred hunt target');
+  // The hunt picks the quest monster over a nearer unrelated one, but keeps the user's filters.
+  f.Hunt.start();
+  f.World.ents.set(41, { gid: 41, kind: 'monster', refObjId: 556, name: 'Other', regionId: 1, x: 130, y: 0, z: 100, rarity: 0, level: 5 });
+  f.World.ents.set(42, { gid: 42, kind: 'monster', refObjId: 555, name: 'Wanted', regionId: 1, x: 180, y: 0, z: 100, rarity: 0, level: 5 });
+  assert.equal(f.Hunt.chooseTarget()?.refObjId, 555, 'the quest monster wins over distance');
+  f.Settings.profile.hunt.levelMax = 3;
+  f.World.ents.get(41).level = 2;
+  assert.equal(f.Hunt.chooseTarget()?.refObjId, 556, 'the level range still filters quest monsters');
+});
+
+test('skipped and excluded quests are never taken', () => {
+  const f = questFixture({ markers: [qMarker(512, 1), qMarker(513, 1)] });
+  f.Settings.profile.quest.skip = [512];
+  f.Settings.profile.quest.exclude = 'QNO_NOPE';
+  f.Settings.profile.quest.learned = { QNO_NOPE: 513 };
+  f.Quest.observe();
+  assert.equal(f.Quest.trip, null, 'the skipped quest and the excluded quest both stay untouched');
+  const g = questFixture({ quests: [qRecord(512, { contents: [{ tag: 1, kind: 0, description: 'SN_CON_Q', objectiveSentinel: false, objectiveValues: [20] }] })] });
+  g.Settings.profile.quest.skip = [512];
+  g.Quest.observe();
+  assert.equal(g.Quest.trip, null);
+  assert.equal(qSent(g, 'quest-reward').length, 0);
+});
+
+test('the quest feature off sends nothing at all', () => {
+  const f = questFixture({ markers: [qMarker(512, 1)], quests: [qRecord(513, { contents: [{ tag: 1, kind: 0, description: 'SN_CON_Q', objectiveSentinel: false, objectiveValues: [20] }] })] });
+  f.Settings.profile.quest.on = false;
+  f.Quest.observe();
+  assert.equal(f.Quest.trip, null);
+  assert.equal(f.commands.length, 0);
+});
+
+test('a failed visit is not retried for ten minutes', () => {
+  const f = questFixture({ quests: [qRecord(512, { u10: 1, contents: [{ tag: 1, kind: 0, description: 'SN_CON_Q', objectiveSentinel: false, objectiveValues: [20] }] })], markers: [qMarker(512, 3)] });
+  f.Quest.observe();
+  assert.ok(f.Quest.trip, 'the first visit starts');
+  // Reach the dialogue and fail it: a turn-in with two unbound rows cannot be identified.
+  f.Quest.tick();
+  f.World.gp = { ...f.World.gp, target: 901, targetPending: false, targetCapabilities: 2 };
+  qMenu(f); f.Quest.tick(); f.advance(1300); f.Quest.tick();
+  qDialog(f, { kind: 4, prompt: 'SN_TALK_MENU', options: [{ choice: 5, symbol: 'SN_CON_QNO_A' }, { choice: 6, symbol: 'SN_CON_QNO_B' }] });
+  f.Quest.tick(); f.Quest.tick();
+  assert.equal(f.Quest.trip, null, 'the visit failed');
+  // The plan is not re-made every tick: nothing happens for the whole backoff window.
+  f.advance(5000);
+  for (let i = 0; i < 5; i++) f.Quest.observe();
+  assert.equal(f.Quest.trip, null, 'the failed quest waits out its backoff');
+  f.advance(600000);
+  f.Quest.observe();
+  assert.ok(f.Quest.trip, 'after ten minutes the visit is tried again');
+});
+
+test('a running town trip keeps the quest waiting', () => {
+  const f = questFixture({ markers: [qMarker(512, 1)] });
+  f.Town.trip = { phase: 'vendor' };
+  f.Quest.observe();
+  assert.equal(f.Quest.trip, null, 'town services come first');
+  assert.equal(f.commands.length, 0);
+  f.Town.trip = null;
+  f.Quest.observe();
+  assert.ok(f.Quest.trip, 'with town done the visit starts');
+});
+
+test('a repeatable quest is offered and accepted again after completion', () => {
+  const f = questFixture({ markers: [qMarker(512, 1)], completed: [512] });
+  f.Quest.observe();
+  assert.equal(f.Quest.trip?.intent, 'accept', 'a completed repeatable quest whose NPC offers again is taken');
+});
+
+test('the Abandon button sends the command once and settles on the journal answer', () => {
+  const f = questFixture({ quests: [qRecord(512)] });
+  f.Quest.abandon(512);
+  const sent = f.commands.filter(c => c.kind === 'quest-abandon');
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].refId, 512);
+  // While the worker holds the transaction a second click sends nothing.
+  f.World.gp.questPending = 512;
+  f.Quest.abandon(512);
+  assert.equal(f.commands.filter(c => c.kind === 'quest-abandon').length, 1);
+  f.advance(1600);
+  qPush(f, { questPending: 0, quests: [] });
+  assert.match(f.Quest.message, /abandoned/);
+  f.Quest.abandon(512);
+  assert.equal(f.commands.filter(c => c.kind === 'quest-abandon').length, 1, 'an inactive quest is never abandoned');
 });
