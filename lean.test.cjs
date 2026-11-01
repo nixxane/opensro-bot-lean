@@ -3,7 +3,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(__dirname + '/bot.lean.user.js', 'utf8');
 const isolated = source.slice(0, source.lastIndexOf('installWorkerHook();')) +
-  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, Quest, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, ScrollBuff, boot, Ticker, Sound, LeanMap};\n})();';
+  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, Quest, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap};\n})();';
 function fixture(document) {
   let time = 100000;
   const storage = new Map(), commands = [], notices = [], intervals = [], timers = [];
@@ -3418,6 +3418,31 @@ test('a quest visit restarting the hunt keeps the mall silk budget; a user start
   assert.equal(f.MallBuyer.spentSilk, 82, 'the same bot run keeps what it spent');
   f.Hunt.stop(); f.Hunt.start();
   assert.equal(f.MallBuyer.spentSilk, 0, 'a user-started run gets a fresh budget');
+});
+test('the hunting spot follows the character level and walks to the new spot', () => {
+  const f = mallFixture();
+  const here = f.Settings.profile.hunt.center = { regionId: 1, x: 100, y: 0, z: 100 };
+  assert.equal(f.LevelSpot.add(10), '', 'the current spot is saved for level 10');
+  f.Settings.profile.hunt.center = { regionId: 1, x: 5000, y: 0, z: 5000 };
+  assert.equal(f.LevelSpot.add(20), '');
+  assert.match(f.LevelSpot.add(0), /level/, 'a bad level is refused');
+  f.Settings.profile.hunt.center = { ...here };
+  f.Settings.profile.hunt.levelSpots.on = true;
+  f.Hunt.start();
+  f.World.gp.progression = { ...(f.World.gp.progression || {}), level: 25 };
+  f.advance(4000);
+  assert.equal(f.LevelSpot.tick(), true, 'level 25 uses the level 20 spot');
+  assert.equal(f.Settings.profile.hunt.center.x, 5000);
+  f.advance(4000);
+  assert.equal(f.LevelSpot.tick(), false, 'already there: nothing changes');
+  f.Settings.profile.hunt.levelSpots.on = false;
+  f.Settings.profile.hunt.center = { ...here };
+  f.advance(4000);
+  assert.equal(f.LevelSpot.tick(), false, 'off by default: never moves the spot');
+  assert.equal(f.Settings.profile.hunt.center.x, 100);
+  f.Settings.profile.hunt.levelSpots.on = true; f.Hunt.stop();
+  f.advance(4000);
+  assert.equal(f.LevelSpot.tick(), false, 'only while hunting');
 });
 test('an order never races an in-flight inventory transaction (live regression)', () => {
   // Live: the scroll buff's item-use and the mall order went out in the same second; the worker silently

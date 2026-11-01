@@ -235,6 +235,7 @@ const DEFAULT_PROFILE = {
     },
   },
   hunt: {
+    levelSpots: { on: false, list: [] },
     center: null, radius: 400, chase: 700, returnToCenter: true, travel: true, attack: true,
     classes: { normal: true, champion: true, giant: true, party: false, elite: false, unique: false, titan: false },
     levelMin: 0, levelMax: 0, include: '', exclude: '', priority: 'attackers', avoidKs: true,
@@ -10333,6 +10334,7 @@ const Controller = {
       Party.resumeTick();
       AutoMastery.tick();
       StatPoints.tick();
+      this.guard('Level spot', () => LevelSpot.tick());
       Potion.tick();
       ItemRules.trackGear();
       if (!ItemRules.dropTick()) ItemRules.balanceTick();
@@ -10646,6 +10648,47 @@ const MallBuyer = {
 // The silk budget is per bot run: a restart gives a fresh one, but a poisoned mall state survives it (the game
 // client itself refuses mall commands until the world is re-entered).
 bus.on('hunt', running => { if (running) { const poison = MallBuyer.poison; MallBuyer.reset(); if (!Quest.resuming) MallBuyer.newRun(); MallBuyer.poison = poison; } });
+
+
+// Hunting spot by level. The profile keeps a list of spots, each used from a character level on; the highest one at or
+// below the character's level is the hunting spot. When the level crosses into a new spot, the hunting spot switches
+// and the bot walks there. Off by default; it only acts while the bot is hunting and nothing else owns the character.
+const LevelSpot = {
+  nextAt: 0, message: '',
+  cfg() { return Settings.profile.hunt.levelSpots; },
+  list() { return (this.cfg().list || []).filter(s => Number.isInteger(s?.level) && s.center).sort((a, b) => a.level - b.level); },
+  // The spot that applies at this level, or null below the lowest one.
+  spotFor(level) { return this.list().filter(s => s.level <= level).pop() || null; },
+  same(a, b) { return !!a && !!b && a.regionId === b.regionId && a.x === b.x && a.z === b.z; },
+  // Add (or replace the entry of) a level with the current hunting spot.
+  add(level) {
+    const center = Settings.profile.hunt.center;
+    if (!Number.isInteger(level) || level < 1 || level > 150) return 'Enter a level from 1 to 150.';
+    if (!center) return 'Set a hunting spot first.';
+    const list = this.cfg().list.filter(s => s.level !== level);
+    list.push({ level, center: { ...center } });
+    this.cfg().list = list.sort((a, b) => a.level - b.level);
+    Settings.saveProfile();
+    return '';
+  },
+  remove(level) { this.cfg().list = this.cfg().list.filter(s => s.level !== level); Settings.saveProfile(); },
+  tick() {
+    if (!this.cfg().on || now() < this.nextAt) return false;
+    this.nextAt = now() + 3000;
+    const level = World.gp?.progression?.level;
+    if (!World.inWorld() || World.isDead() || !Hunt.running || !Number.isInteger(level)) return false;
+    if (Town.trip || Restock.trip || WalkBack.active || Travel.active || Quest.trip || Resurrect.trip || Controller.resumeAfterRevive) return false;
+    const spot = this.spotFor(level), H = Hunt.cfg();
+    if (!spot || this.same(spot.center, H.center)) return false;
+    H.center = { ...spot.center };
+    Settings.saveProfile(); bus.emit('center');
+    this.message = 'Level ' + level + ': moved the hunting spot to the one from level ' + spot.level + '.';
+    Log.info('Level spot: ' + this.message); UI.toast(this.message, 'info', 5000);
+    const pose = World.pose();
+    if (pose && dist2D(pose, H.center) > Math.max(H.radius, 100)) WalkBack.start(true);
+    return true;
+  },
+};
 
 
 // Anti-stuck watchdog. While hunting it watches for confirmed progress (kills, XP, gold,
@@ -15633,6 +15676,24 @@ const LeanMap = {
     current.append(UI.field('Current', this.coordinateText), UI.button('Get position', () => this.getCoordinates()), UI.button('Copy', () => { void this.copyCoordinates(); }));
     const coordinates = el('div', null, 'map-position');
     coordinates.append(spotHeader, spotFields, el('p', 'Outdoor X / Y coordinates in metres.', 'muted'), current);
+    const spots = el('div', null, 'level-spots'), spotLevel = el('input');
+    spotLevel.type = 'number'; spotLevel.min = '1'; spotLevel.max = '150'; spotLevel.step = '1';
+    const drawSpots = () => {
+      spots.textContent = '';
+      for (const s of LevelSpot.list()) {
+        const c = this.space(s.center) ? displayCoords(s.center) : null;
+        spots.append(UI.row(el('span', 'From level ' + s.level + (c ? ': ' + c.x + ', ' + c.y : '')), UI.button('Remove', () => { LevelSpot.remove(s.level); drawSpots(); })));
+      }
+    };
+    drawSpots();
+    const levelSpots = UI.group('Spot by level',
+      UI.check('Switch the hunting spot by level', () => Settings.profile.hunt.levelSpots.on, v => { Settings.profile.hunt.levelSpots.on = v; }),
+      el('p', 'Set the hunting spot above, enter the level it is for, and press Save. The highest saved level at or below yours is used; the bot walks there when you level into a new one.', 'muted'),
+      UI.row(UI.field('From level', spotLevel), UI.button('Save current spot', () => {
+        const error = LevelSpot.add(Number(spotLevel.value));
+        if (error) UI.toast(error, 'warn'); else { drawSpots(); UI.toast('Level spot saved.'); }
+      })),
+      spots);
     const area = UI.group('Hunting area',
       coordinates,
       UI.number('Hunt radius (m)', () => H().radius / 10, v => { H().radius = v * 10; this.dirty = true; }, 5, 200),
@@ -15643,7 +15704,7 @@ const LeanMap = {
       row.append(mark, el('span', label)); legend.append(row);
     }
     legend.append(el('p', 'Yellow circle: hunt radius. Dashed ring: chase distance. Click the map to mark a point, drag to move it, use + and − to zoom.', 'muted'));
-    parent.append(box, area, legend);
+    parent.append(box, area, levelSpots, legend);
     for (const mark of legend.querySelectorAll('i[data-sign]')) this.paintSign(mark, mark.dataset.sign);
     this.bind(); this.dirty = true; this.render();
     clearInterval(this.timer); this.timer = setInterval(() => this.tick(), 200);

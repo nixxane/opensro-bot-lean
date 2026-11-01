@@ -51,6 +51,7 @@ const DEFAULT_PROFILE = {
     },
   },
   hunt: {
+    levelSpots: { on: false, list: [] },
     center: null, radius: 400, chase: 700, returnToCenter: true, travel: true, attack: true,
     classes: { normal: true, champion: true, giant: true, party: false, elite: false, unique: false, titan: false },
     levelMin: 0, levelMax: 0, include: '', exclude: '', priority: 'attackers', avoidKs: true,
