@@ -15819,6 +15819,10 @@ const Equip = {
   step(t) {
     if (!this.on() || !World.inWorld()) return false;
     const p = t.pending, gp = World.gp;
+    // A warehouse transaction still in flight owns the trip — an equip move is never sent beside it — and a
+    // busy game inventory admits no new one either: the same one-confirmed-transaction-at-a-time rule as Town.
+    if (p && p.kind !== 'equip') return false;
+    if (!p && gp.inventoryPending) return false;
     if (p?.kind === 'equip') {
       // A swap counts only once the worn slot really holds the new piece — matched by its full key, not just the
       // item number, because the case this feature is built around is the same base item with a better roll.

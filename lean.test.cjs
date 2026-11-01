@@ -4938,6 +4938,34 @@ test('the town trip wears carried armour with better real stats and stores the r
   assert.equal(off.commands.some(c => c.kind === 'inventory-move'), false, 'off by default nothing is worn');
 });
 
+test('no equip move is sent while a warehouse deposit is still unconfirmed', () => {
+  const f = townFixture(), gp = f.World.gp;
+  f.pet.inventory = [];
+  f.Settings.profile.items.autoEquip = true;
+  gp.progression = { ...(gp.progression || {}), level: 30, experience: '100' };
+  const fields = (pdHi, mdHi) => ({ canRepair: 1, canSell: 1, reqLevelType1: 1, requiredLevel: 30,
+    varianceFloatMin1c8: 10, varianceFloatMax1cc: pdHi, varianceFloatPerPlus1d0: 0,
+    varianceFloatMin1f4: 8, varianceFloatMax1f8: mdHi, varianceFloatPerPlus1fc: 0 });
+  const rolls = String((31n << 15n) | (31n << 20n));
+  const piece = (slot, ref, pd, md) => ({ slot, refObjId: ref, typeFlags: 44 | (2 << 7), quantity: 1, plus: 0, magic: [], variance: rolls, tooltip: { fields: fields(pd, md) } });
+  gp.inventory.push(piece(2, 800, 20, 16), piece(16, 801, 30, 24), piece(17, 803, 40, 30));
+  f.Town.begin(); f.Town.enter('store'); gp.storage = { npc: 60, phase: 'open', capacity: 30, items: [] }; gp.target = 60;
+  const moves = () => f.commands.filter(c => c.kind === 'inventory-move').length;
+  f.Town.store(); assert.equal(moves(), 1, 'the best piece is worn first');
+  const move = f.commands.find(c => c.kind === 'inventory-move');
+  { const a = gp.inventory.find(i => i.slot === move.source), b = gp.inventory.find(i => i.slot === move.destination); a.slot = move.destination; b.slot = move.source; }
+  f.advance(1000); f.Town.store(); assert.equal(f.Town.trip.pending, null, 'the swap is confirmed');
+  f.advance(1000); f.Town.store();
+  assert.equal(f.Town.trip.pending?.kind, 'store', 'the replaced piece is being deposited');
+  f.advance(1000); f.Town.store();
+  assert.equal(moves(), 1, 'a swap candidate exists, but the unconfirmed deposit blocks it');
+  assert.equal(f.Town.trip.pending?.kind, 'store', 'the deposit pending is untouched');
+  const stored = gp.inventory.find(i => i.slot === move.source);
+  gp.storage.items.push({ ...stored, slot: 0 }); gp.inventory = gp.inventory.filter(i => i.slot !== move.source);
+  f.advance(1000); f.Town.store();
+  assert.equal(moves(), 2, 'once the deposit is confirmed the next swap goes out');
+});
+
 test('a same-item swap with a better roll is confirmed by the slot key, never by the item number', () => {
   const f = townFixture(), gp = f.World.gp;
   f.pet.inventory = [];
