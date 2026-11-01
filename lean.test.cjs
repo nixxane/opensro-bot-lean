@@ -4954,6 +4954,46 @@ test('town never sells items the game marks unsellable, and skips a refused sale
   assert.equal(f.commands.filter(c => c.kind === 'cos-shop-sell').length, 2, 'the refused item is not offered again');
 });
 
+test('the surplus of restocked potions above the refill amount is sold, down to the target', () => {
+  const f = townFixture(), gp = f.World.gp;
+  f.Town.cfg().sellExcess = true;
+  f.pet.inventory = [];
+  gp.inventory.push({ slot: 16, refObjId: 15, typeFlags: 4332, quantity: 80 });
+  f.Town.begin(); f.Town.enter('sell'); gp.target = 62; gp.shop = { npc: 62 };
+  f.Town.tick();
+  assert.equal(f.commands.at(-1).kind, 'shop-sell', 'the surplus stack is sold from the character bag');
+  assert.equal(f.commands.at(-1).slot, 16);
+  assert.equal(f.commands.at(-1).quantity, 31, '81 picked-up MP potions above a target of 50 sell exactly 31');
+  gp.inventory.find(i => i.slot === 16).quantity -= 31;
+  f.advance(1000); f.Town.tick();
+  assert.equal(f.Town.trip.phase, 'repair', 'at the target the trip moves on');
+  assert.equal(gp.inventory.filter(i => i.refObjId === 15).reduce((n, i) => n + i.quantity, 0), 50);
+});
+
+test('a refused surplus sale is skipped without ending the trip, and sellExcess off leaves picked-up potions alone', () => {
+  const f = townFixture(), gp = f.World.gp;
+  f.Town.cfg().sellExcess = true;
+  f.pet.inventory = [];
+  gp.inventory = gp.inventory.filter(i => i.slot !== 15);
+  gp.inventory.push({ slot: 16, refObjId: 15, typeFlags: 4332, quantity: 80 }, { slot: 17, refObjId: 15, typeFlags: 4332, quantity: 10 });
+  f.Town.begin(); f.Town.enter('sell'); gp.target = 62; gp.shop = { npc: 62 };
+  f.Town.tick(); assert.equal(f.commands.at(-1).slot, 16); assert.equal(f.commands.at(-1).quantity, 40);
+  gp.error = 'Inventory rejected: 2'; f.advance(1000); f.Town.tick();
+  assert.equal(f.Town.trip?.phase, 'sell', 'a refused surplus sale does not end the trip');
+  gp.error = null; f.advance(1000); f.Town.tick();
+  assert.equal(f.commands.filter(c => c.kind === 'shop-sell').length, 2, 'the refused stack is not offered again');
+  assert.equal(f.commands.at(-1).slot, 17); assert.equal(f.commands.at(-1).quantity, 10, 'another stack still sells its surplus');
+  gp.inventory = gp.inventory.filter(i => i.slot !== 17); f.advance(1000); f.Town.tick();
+  assert.equal(f.Town.trip.phase, 'repair', 'with only the refused stack left the trip moves on');
+  assert.equal(gp.inventory.find(i => i.slot === 16).quantity, 80, 'the refused stack is kept whole');
+  const off = townFixture(); off.Town.cfg().sellExcess = false; off.pet.inventory = [];
+  off.World.gp.inventory.push({ slot: 16, refObjId: 15, typeFlags: 4332, quantity: 80 });
+  off.Town.begin(); off.Town.enter('sell'); off.World.gp.target = 62; off.World.gp.shop = { npc: 62 };
+  off.Town.tick();
+  assert.equal(off.commands.some(c => c.kind === 'shop-sell'), false, 'off by default nothing is sold');
+  assert.equal(off.Town.trip.phase, 'repair');
+});
+
 function stalledSale() {
   const f = townFixture(), gp = f.World.gp;
   const ware = (slot, ref) => ({ slot, refObjId: ref, typeFlags: 44 | (6 << 7), quantity: 1, plus: 0, magic: [], tooltip: { fields: { rarity: 0 } } });

@@ -37,7 +37,7 @@ const DEFAULT_PROFILE = {
     prefer: { hp: 0, mp: 0, vigor: 0, cure: 0 }, delayMs: 350,
     restock: {
       enabled: false, vendor: null, route: [], offers: [],
-      town: { enabled: false, revive: true, revivePet: false, deathReturn: 'recall', returnBy: 'reverse', storeSox: true, sellStar: false, sellBag: false, storeLevels: '', petFull: true, petFree: 1, arrivalRadius: 500,
+      town: { enabled: false, revive: true, revivePet: false, deathReturn: 'recall', returnBy: 'reverse', storeSox: true, sellStar: false, sellBag: false, sellExcess: false, storeLevels: '', petFull: true, petFree: 1, arrivalRadius: 500,
         broken: true, wear: { on: false, pct: 15 }, noXp: { on: false, minutes: 10 }, every: { on: false, minutes: 60 }, arrival: null, storage: null, vendor: null, smith: null, gate: null,
         keep: '', store: { equipment: true, elixirs: true, powders: true, alchemy: true, others: false } },
       hp: { on: true, refObjId: 0, low: 20, target: 100 },
