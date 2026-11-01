@@ -4947,23 +4947,28 @@ test('no equip move is sent while a warehouse deposit is still unconfirmed', () 
     varianceFloatMin1c8: 10, varianceFloatMax1cc: pdHi, varianceFloatPerPlus1d0: 0,
     varianceFloatMin1f4: 8, varianceFloatMax1f8: mdHi, varianceFloatPerPlus1fc: 0 });
   const rolls = String((31n << 15n) | (31n << 20n));
-  const piece = (slot, ref, pd, md) => ({ slot, refObjId: ref, typeFlags: 44 | (2 << 7), quantity: 1, plus: 0, magic: [], variance: rolls, tooltip: { fields: fields(pd, md) } });
-  gp.inventory.push(piece(2, 800, 20, 16), piece(16, 801, 30, 24), piece(17, 803, 40, 30));
+  const piece = (slot, ref, pd, md, family = 2) => ({ slot, refObjId: ref, typeFlags: 44 | (family << 7), quantity: 1, plus: 0, magic: [], variance: rolls, tooltip: { fields: fields(pd, md) } });
+  gp.inventory.push(piece(2, 800, 20, 16), piece(16, 801, 30, 24), piece(17, 803, 40, 30),
+    piece(3, 810, 20, 16, 9), piece(18, 811, 30, 24, 9));
   f.Town.begin(); f.Town.enter('store'); gp.storage = { npc: 60, phase: 'open', capacity: 30, items: [] }; gp.target = 60;
   const moves = () => f.commands.filter(c => c.kind === 'inventory-move').length;
+  const apply = c => { const a = gp.inventory.find(i => i.slot === c.source), b = gp.inventory.find(i => i.slot === c.destination); a.slot = c.destination; b.slot = c.source; };
   f.Town.store(); assert.equal(moves(), 1, 'the best piece is worn first');
-  const move = f.commands.find(c => c.kind === 'inventory-move');
-  { const a = gp.inventory.find(i => i.slot === move.source), b = gp.inventory.find(i => i.slot === move.destination); a.slot = move.destination; b.slot = move.source; }
+  apply(f.commands.find(c => c.kind === 'inventory-move'));
   f.advance(1000); f.Town.store(); assert.equal(f.Town.trip.pending, null, 'the swap is confirmed');
-  f.advance(1000); f.Town.store();
-  assert.equal(f.Town.trip.pending?.kind, 'store', 'the replaced piece is being deposited');
-  f.advance(1000); f.Town.store();
-  assert.equal(moves(), 1, 'a swap candidate exists, but the unconfirmed deposit blocks it');
+  // The second family would swap now, but a busy game inventory admits no new move.
+  gp.inventoryPending = true; f.advance(600); f.Town.store();
+  assert.equal(moves(), 1, 'a busy game inventory blocks the next swap');
+  gp.inventoryPending = false; f.advance(1000); f.Town.store();
+  assert.equal(moves(), 2, 'the second family swaps once the inventory settles');
+  apply(f.commands.filter(c => c.kind === 'inventory-move')[1]);
+  f.advance(1000); f.Town.store(); assert.equal(f.Town.trip.pending, null, 'the second swap is confirmed');
+  // A warehouse deposit still in flight owns the trip: a further swap candidate waits for it.
+  f.Town.trip.pending = { kind: 'store', source: 99, destination: 5, ref: 800, quantity: 1, at: f.Town.trip.started };
+  gp.inventory.push(piece(19, 812, 60, 50, 9));
+  f.advance(600); f.Town.store();
+  assert.equal(moves(), 2, 'the unconfirmed deposit blocks the next swap');
   assert.equal(f.Town.trip.pending?.kind, 'store', 'the deposit pending is untouched');
-  const stored = gp.inventory.find(i => i.slot === move.source);
-  gp.storage.items.push({ ...stored, slot: 0 }); gp.inventory = gp.inventory.filter(i => i.slot !== move.source);
-  f.advance(1000); f.Town.store();
-  assert.equal(moves(), 2, 'once the deposit is confirmed the next swap goes out');
 });
 
 test('a same-item swap with a better roll is confirmed by the slot key, never by the item number', () => {
