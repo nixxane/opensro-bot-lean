@@ -10792,7 +10792,14 @@ const LevelSpot = {
   list() { return (this.cfg().list || []).filter(s => Number.isInteger(s?.level) && s.center).sort((a, b) => a.level - b.level); },
   // The spot that applies at this level, or null below the lowest one.
   spotFor(level) { return this.list().filter(s => s.level <= level).pop() || null; },
-  heldSpot() { return this.heldLevel && this.heldFor === World.charName ? this.list().find(s => s.level === this.heldLevel) || null : null; },
+  // The hold ends the moment the character reaches the held spot's level: from there the level rule alone
+  // picks the spot, so it moves on to a higher entry instead of staying pinned until a reload.
+  heldSpot() {
+    if (!this.heldLevel || this.heldFor !== World.charName) return null;
+    const level = World.gp?.progression?.level;
+    if (Number.isInteger(level) && level >= this.heldLevel) { this.heldLevel = 0; return null; }
+    return this.list().find(s => s.level === this.heldLevel) || null;
+  },
   same(a, b) { return !!a && !!b && a.regionId === b.regionId && a.x === b.x && a.z === b.z; },
   // The town "no XP" action can ask for the next spot above the applied one. Returns false when the list has no
   // higher entry left, so the caller falls back to its normal behaviour.

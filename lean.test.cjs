@@ -4769,6 +4769,16 @@ test('no XP can move hunting to the next level spot instead of going to town', (
   f.advance(4000);
   assert.equal(f.LevelSpot.tick(), false);
   assert.equal(f.Settings.profile.hunt.center.x, 9000, 'the held spot stays');
+  // Once the character's level reaches the held spot's gate, the hold ends and the level rule moves on.
+  f.Settings.profile.hunt.center = { regionId: 1, x: 5000, y: 0, z: 5000 };
+  assert.equal(f.LevelSpot.add(60), '', 'the level 60 spot is saved elsewhere');
+  f.Settings.profile.hunt.center = { regionId: 1, x: 9000, y: 0, z: 9000 };
+  gp.progression = { ...(gp.progression || {}), level: 61 };
+  f.advance(4000);
+  assert.equal(f.LevelSpot.tick(), true, 'the level rule takes over past the gate');
+  assert.equal(f.Settings.profile.hunt.center.x, 5000, 'hunting moves to the level 60 spot');
+  assert.equal(f.LevelSpot.heldLevel, 0, 'the hold is cleared, not pinned until reload');
+  f.Town.watch(); // the level jump reads as progress: start the no-XP window from here
   // Still no XP at the new spot and no higher entry: town is the fallback.
   f.advance(10 * 60000); f.Town.watch(); assert.equal(f.Town.reason(), 'no XP for 10 minutes');
   f.Town.tick(); assert.ok(f.Town.trip, 'the level list ran out: the trip starts');
