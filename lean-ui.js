@@ -986,7 +986,9 @@ const UI = {
   section_questAuto(host) {
     const Q = () => Settings.profile.quest;
     host.append(this.group('Auto quests',
-      this.check('Do quests automatically', () => Q().on, v => Q().on = v),
+      this.row(this.button('Start quests', () => { Q().on = true; Settings.saveProfile(); this.toast('Auto quests started.', 'info', 3000); this.draw(); }),
+        this.button('Stop quests', () => { Q().on = false; Settings.saveProfile(); this.toast('Auto quests stopped.', 'info', 3000); this.draw(); })),
+      el('p', Q().on ? 'Auto quests are running.' : 'Auto quests are stopped. Press Start quests.', 'muted'),
       this.check('Accept quests their NPC offers', () => Q().accept, v => Q().accept = v),
       this.text('Only quests named', () => Q().include, v => Q().include = v, 'comma-separated QNO_ codenames'),
       this.text('Never quests named', () => Q().exclude, v => Q().exclude = v, 'comma-separated QNO_ codenames'),

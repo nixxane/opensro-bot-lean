@@ -7347,14 +7347,14 @@ function stallBag(f) {
   f.World.gp.inventory.push({ slot: 14, refObjId: 63, quantity: 4, typeFlags: 0x56c, name: 'Element', tooltip: { fields: { canSell: 1 } } });
 }
 // Applies the game's answer to the last command; refuse one add bagSlot by simply not answering it.
-function stallRespond(f, { ignoreAdd = -1 } = {}) {
+function stallRespond(f, { ignoreAdd = -1, ignoreOpen = false } = {}) {
   const c = f.commands.at(-1), stall = f.World.gp.stall;
   if (!c || c.__done) return;
   c.__done = true;
   if (c.kind === 'stall-name') f.World.gp.stall = { phase: 'naming', namingSequence: 1, owner: 0, title: '', greeting: '', savedGreeting: '', open: false, mode: 0, networkRegistered: false, offers: [], visitors: [], network: { open: false, rows: [], pages: 0, page: 0, category: 0, buying: null } };
   else if (c.kind === 'stall-create') { stall.phase = 'owner'; stall.owner = f.World.gp.localGid; stall.title = c.title; }
   else if (c.kind === 'stall-add') { if (c.bagSlot !== ignoreAdd) stall.offers.push({ slot: c.slot, bagSlot: c.bagSlot, quantity: c.quantity, price: c.price, item: { refObjId: c.bagSlot === 13 ? 62 : 63, name: c.bagSlot === 13 ? 'Lucky Powder' : 'Element', quantity: c.quantity } }); }
-  else if (c.kind === 'stall-open') stall.open = true;
+  else if (c.kind === 'stall-open') { if (!ignoreOpen) stall.open = true; }
   else if (c.kind === 'stall-close') f.World.gp.stall = undefined;
 }
 function stallDrive(f, ticks, options) {
@@ -7386,6 +7386,16 @@ test('the stall names, creates, registers each priced stack at its price and ope
   assert.deepEqual(f.World.gp.stall.offers.map(o => [o.slot, o.bagSlot, o.quantity, o.price]), [[1, 13, 20, 150], [2, 14, 4, 4000]]);
   assert.deepEqual(f.commands.map(c => c.kind), ['stall-name', 'stall-create', 'stall-add', 'stall-add', 'stall-open']);
   assert.equal(f.Stall.message.includes('2 offers'), true, f.Stall.message);
+});
+test('the stall presses Enter to answer the game prompt when opening for business is not confirmed', () => {
+  const f = stallFixture(); stallBag(f);
+  f.Settings.profile.stall.prices = { 62: 150 };
+  const keys = [], press = f.Stall.pressOk;
+  f.Stall.pressOk = function () { keys.push(1); return true; };
+  f.Stall.start();
+  for (let i = 0; i < 30 && f.Stall.run; i++) { f.advance(400); f.Controller.tick(); stallRespond(f, { ignoreOpen: true }); }
+  assert.ok(keys.length >= 2, 'Enter pressed while the open step waits; presses: ' + keys.length + ' ' + f.Stall.message);
+  f.Stall.pressOk = press;
 });
 test('a sale counts only when the offer disappears and gold rises; the stall then closes when empty', () => {
   const f = stallFixture(); stallBag(f);
