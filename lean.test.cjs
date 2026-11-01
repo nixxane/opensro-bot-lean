@@ -462,6 +462,13 @@ test('every supported town has a trade merchant in the town table, and the trade
   const g = f.botProfile({ trade: { from: 'KT', to: 'EU', trips: 3, potions: false, extra: 1 } });
   assert.equal(g.trade.from, 'KT'); assert.equal(g.trade.trips, 3); assert.equal(g.trade.potions, false); assert.equal('extra' in g.trade, false);
 });
+test('the alert-sound switches persist like every other profile section, and unknown fields are dropped', () => {
+  const f = fixture();
+  const saved = f.botProfile({ sounds: { player: true, died: true, levelUp: false, unique: false, mystery: 1 } });
+  assert.deepEqual([saved.sounds.player, saved.sounds.died, saved.sounds.levelUp, saved.sounds.unique], [true, true, false, false]);
+  assert.equal('mystery' in saved.sounds, false, 'unknown fields are dropped');
+  assert.deepEqual(f.botProfile({}).sounds, { player: false, died: false, levelUp: false, unique: false });
+});
 test('auto pot keeps drinking while an auto trade runs, from the Controller loop', () => {
   const t = tradeFixture(), f = t.f;
   t.gp.inventory.push({ slot: 13, refObjId: 101, typeFlags: 2284, quantity: 10, name: 'HP potion' });
