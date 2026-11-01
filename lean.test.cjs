@@ -2539,6 +2539,28 @@ test('Attack monsters off also keeps luring from starting fights', () => {
   f.Settings.profile.hunt.attack = false; idleFor(f, 1000); assert.equal(lured, 0);
   f.Settings.profile.hunt.attack = true; idleFor(f, 300); assert.ok(lured > 0);
 });
+test('the lure can stop when other players come near, and after a chosen number of pulls', () => {
+  const f = fixture(); f.Hunt.start();
+  const c = f.Settings.profile.lure;
+  c.enabled = true; c.points = [{ regionId: 1, x: 150, y: 0, z: 100 }];
+  c.stopOnPlayers = 2;
+  f.World.ents.set(50, { gid: 50, kind: 'player', name: 'Stranger', regionId: 1, x: 200, y: 0, z: 100 });
+  f.Lure.tick(); assert.equal(f.Hunt.running, true, 'the character itself and one stranger are below the threshold of two');
+  f.World.gp.social = { members: [{ name: 'Stranger' }] };
+  f.World.ents.set(51, { gid: 51, kind: 'player', name: 'Party mate', regionId: 1, x: 150, y: 0, z: 100 });
+  f.Lure.tick(); assert.equal(f.Hunt.running, true, 'the party member within 30 m does not count');
+  f.World.gp.social = { members: [{ name: 'Party mate' }] };
+  f.World.ents.set(52, { gid: 52, kind: 'player', name: 'Stranger 2', regionId: 1, x: 250, y: 0, z: 100 });
+  f.Lure.tick(); assert.equal(f.Hunt.running, false, 'two strangers within 30 m stop the lure');
+  assert.match(f.Lure.message, /2 players within 30 m/);
+  const g = fixture(); g.Hunt.start();
+  const gc = g.Settings.profile.lure;
+  gc.enabled = true; gc.points = [{ regionId: 1, x: 150, y: 0, z: 100 }]; gc.stopAfter = 1;
+  g.Lure.tick(); assert.equal(g.Hunt.running, true, 'nothing pulled yet: the pull budget is not spent');
+  g.Lure.pulled = true; g.Lure.next(); assert.equal(g.Lure.pulls, 1, 'a completed pull counts once');
+  g.Lure.tick(); assert.equal(g.Hunt.running, false, 'the pull budget stops the lure');
+  assert.match(g.Lure.message, /1 pulls? done/);
+});
 test('anti-stuck drops the target, then walks back, then stops after the configured recoveries', () => {
   const f = fixture(); f.Hunt.start(); idleFor(f, 1000);
   assert.equal(f.Hunt.state, 'search');

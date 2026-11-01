@@ -201,7 +201,7 @@ const DEFAULT_PROFILE = {
   trade: { from: 'CH', to: 'WC', trips: 1, potions: true, goods: 0 },
   trace: { enabled: false, name: '', distance: 12, fight: true },
   mastery: { enabled: false, ids: [], gap: 0, skills: false, scope: 'rotation', reserve: 0, order: 'masteries' },
-  lure: { enabled: false, points: [], taunt: { id: 0, group: 0 }, area: { id: 0, group: 0 }, holdS: 10, pauseEveryM: 10, pauseS: 4, radius: 15, returnHpPct: 50, stopAt: 0 },
+  lure: { enabled: false, points: [], taunt: { id: 0, group: 0 }, area: { id: 0, group: 0 }, holdS: 10, pauseEveryM: 10, pauseS: 4, radius: 15, returnHpPct: 50, stopAt: 0, stopOnPlayers: 0, stopAfter: 0 },
   pet: { attack: { on: false, recall: true, radius: 15, timeout: 3, resend: 5 } },
   scroll: { damageInc: false, damageAbs: false },
   mall: { on: false, budgetSilk: 0, hp: { on: false, low: 10, target: 1000 }, mp: { on: false, low: 10, target: 1000 }, damageInc: { on: false, low: 5, target: 20 }, damageAbs: { on: false, low: 5, target: 20 }, reverse: { on: false, low: 10, target: 50 } },
@@ -10036,11 +10036,11 @@ const LURE_ARRIVAL = 30;      // 3 m
 const LURE_TAUNT_MS = 10000;  // give up on a pull point's target after this long and walk back
 const Lure = {
   phase: 'back', index: -1, holdUntil: 0, phaseAt: 0, target: 0, pulled: false, sentAt: -Infinity, travel: null, message: 'Lure off.',
-  legFrom: null, pauseUntil: 0, halted: false, hurry: false,
+  legFrom: null, pauseUntil: 0, halted: false, hurry: false, pulls: 0,
   cfg() { return Settings.profile.lure; },
   on() { return !!this.cfg().enabled && this.cfg().points.length > 0; },
   // Every start begins at the hunting spot, with no hold since nothing was pulled yet; the next point is then A.
-  reset() { this.enter('back'); this.index = -1; this.pulled = false; },
+  reset() { this.enter('back'); this.index = -1; this.pulled = false; this.pulls = 0; },
   enter(phase) { this.phase = phase; this.phaseAt = now(); this.target = 0; this.travel = null; this.sentAt = -Infinity; this.legFrom = null; this.pauseUntil = 0; this.hurry = false; },
   addPoint() {
     const p = World.pose();
@@ -10087,10 +10087,34 @@ const Lure = {
     if (this.phase !== 'back') this.pulled = true;
     return true;
   },
+  // Strangers within 30 m of the character; party members and the character itself never count.
+  playersNear() {
+    const pose = World.pose();
+    if (!pose) return 0;
+    const party = new Set((World.gp?.social?.members || []).map(m => m?.name));
+    let n = 0;
+    for (const e of World.ents.values())
+      if (e.kind === 'player' && e.gid !== World.localGid() && !party.has(e.name) && dist2D(pose, e) <= 300) n++;
+    return n;
+  },
   tick() {
     const c = this.cfg(), home = Settings.profile.hunt.center, point = c.points[this.index];
     Hunt.state = 'lure';
     if (!home) { this.message = 'Lure: save a hunting spot first.'; return Hunt.stop(this.message); }
+    // Pulling monsters onto strangers is what gets a lure reported: with the switches on it stops when other
+    // players come within 30 m, and after a chosen number of completed pulls.
+    if (c.stopOnPlayers > 0) {
+      const strangers = this.playersNear();
+      if (strangers >= c.stopOnPlayers) {
+        this.message = strangers + ' players within 30 m; lure stopped.';
+        Log.info('Lure: ' + this.message);
+        return Hunt.stop('Lure: ' + this.message);
+      }
+    }
+    if (c.stopAfter > 0 && this.pulls >= c.stopAfter) {
+      this.message = c.stopAfter + ' pulls done; lure stopped.';
+      return Hunt.stop('Lure: ' + this.message);
+    }
     if (!point && (this.phase === 'out' || this.phase === 'taunt')) this.reset();
     if (World.isCasting() || now() - Combat.lastCastAt < (Settings.profile.macro.castGapMs ?? 250)) return;
     if (this.areaTaunt()) return;
@@ -10135,7 +10159,7 @@ const Lure = {
     this.legFrom = { ...p }; this.pauseUntil = now() + Number(c.pauseS) * 1000; this.halted = false;
     return this.pause(home);
   },
-  next() { this.index = (this.index + 1) % this.cfg().points.length; this.pulled = false; this.enter('out'); },
+  next() { if (this.pulled) this.pulls++; this.index = (this.index + 1) % this.cfg().points.length; this.pulled = false; this.enter('out'); },
   // Pick the monster nearest the point, select it, get into range and cast the single-target taunt on it.
   taunt(point) {
     const id = this.skill(this.cfg().taunt);
@@ -10173,6 +10197,8 @@ const Lure = {
       UI.number('Pause length (s)', () => c().pauseS, v => c().pauseS = v, 0, 30),
       UI.number('Search radius at a point (m)', () => c().radius, v => c().radius = v, 3, 50),
       UI.number('Stop pulling at this many monsters in the training area (0 = off)', () => c().stopAt, v => c().stopAt = v, 0, 50),
+      UI.number('Stop when this many other players are within 30 m (0 = off)', () => c().stopOnPlayers, v => c().stopOnPlayers = v, 0, 8),
+      UI.number('Stop after this many completed pulls (0 = off)', () => c().stopAfter, v => c().stopAfter = v, 0, 999),
       UI.number('Back to the party below HP (%)', () => c().returnHpPct, v => c().returnHpPct = v, 0, 95),
       UI.button('Add pull point here', () => this.addPoint()));
     const center = Settings.profile.hunt.center;
