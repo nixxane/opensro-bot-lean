@@ -47,6 +47,10 @@ The **Items** page lists every item in the game with sBot-style filters under **
 
 While hunting, the primary weapon is the combat weapon. When something else is worn (after a reconnect or a manual change), the bot puts it back on, with the chosen shield when it is one-handed; a bow wears arrows and a crossbow bolts: the worn stack when it fits, otherwise the biggest stack in your bag, and the next one when a stack runs out. A secondary bow or crossbow gets its ammunition the same way. Under each buff, **Gear for <skill>** can be **Primary weapon**, **Secondary weapon** or **Shield (with a one-handed weapon)**: the bot wears it, casts the buff, then goes back to the primary weapon. Automatic buff swaps try the secondary weapon first, then the primary. A primary weapon or shield the game will not equip is not tried again until you pick it again, and the gear worn before goes back on; any other refused move waits five minutes. Hunting goes on either way. Without a primary weapon chosen, whatever is worn stays the combat gear.
 
+## Berserk
+
+Under **Combat → Berserk when the gauge is full, on**, tick the monster kinds berserk is spent on (only Giants by default; it fires once the gauge is full, so the gauge waits for a ticked kind). **Also berserk when this many monsters attack at once** (0 = off) fires a full gauge whatever the monsters' kind once that many living monsters attack at the same time — the defensive panic button of a luring tank or an over-pulled spot; it also works while luring, where no target kind is ever consulted.
+
 ## Vigor and pet potions
 
 Under **Supplies → Automatic potion use**:

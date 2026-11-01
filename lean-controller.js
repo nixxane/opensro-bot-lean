@@ -114,6 +114,8 @@ Hunt.tick = function () {
     this.state = 'resting'; return;
   }
   if (Combat.buffs(true)) { this.state = 'buff'; return; }
+  // Cornered berserk runs before the attack and lure branches, so it also covers a luring tank with no target.
+  if (Combat.corneredBerserk()) return;
   // A support character (Attack monsters off) never starts a fight, not even with what hits it: it keeps looting,
   // its own buffs and party support, at its hunting spot or beside the member it follows.
   const attack = H.attack !== false;
@@ -187,6 +189,22 @@ Combat.berserk = function (cls) {
   if (!Settings.profile.macro.berserkClasses?.[key] || World.berserkGauge < 5) return false;
   if (World.local()?.appearanceState?.[2] === 1) return false;
   return Cmd.berserk();
+};
+// SBot-style cornered berserk: with the switch on, a full gauge also fires when enough living monsters attack
+// at once, whatever their class — the defensive panic button of a luring tank or an over-pulled spot. The gauge,
+// berserk-form and attacker-expiry rules are the combat ones.
+Combat.corneredBerserk = function () {
+  const need = Number(Settings.profile.macro.berserkCornered) || 0;
+  if (need <= 0 || !Hunt.running || World.isDead() || World.berserkGauge < 5) return false;
+  if (World.local()?.appearanceState?.[2] === 1) return false;
+  const sim = World.simNow();
+  let count = 0;
+  for (const [gid, at] of World.attackers) {
+    if (sim == null || sim - at > 5000) continue;
+    const e = World.ents.get(gid);
+    if (e && World.isAlive(e) && ++count >= need) return Cmd.berserk();
+  }
+  return false;
 };
 const Controller = {
   mode: 'idle', lastErrorAt: -Infinity, resumeAfterRevive: false, guardAt: {},

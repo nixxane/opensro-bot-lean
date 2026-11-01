@@ -212,7 +212,7 @@ const DEFAULT_PROFILE = {
   macro: {
     rotations: { normal: [], champion: [], giant: [], party: [], elite: [], unique: [] },
     fallbackToNormal: true, normalAttack: true, buffs: [], imbue: null, buffSwap: false, buffAuto: true, buffSets: [],
-    imbueBeforeAttack: true, berserkClasses: { normal: false, champion: false, giant: true, giantParty: false, party: false, elite: false, unique: false, titan: false },
+    imbueBeforeAttack: true, berserkClasses: { normal: false, champion: false, giant: true, giantParty: false, party: false, elite: false, unique: false, titan: false }, berserkCornered: 0,
     minMpPct: 0, castGapMs: 350,
   },
   potion: {
@@ -10303,6 +10303,8 @@ Hunt.tick = function () {
     this.state = 'resting'; return;
   }
   if (Combat.buffs(true)) { this.state = 'buff'; return; }
+  // Cornered berserk runs before the attack and lure branches, so it also covers a luring tank with no target.
+  if (Combat.corneredBerserk()) return;
   // A support character (Attack monsters off) never starts a fight, not even with what hits it: it keeps looting,
   // its own buffs and party support, at its hunting spot or beside the member it follows.
   const attack = H.attack !== false;
@@ -10376,6 +10378,22 @@ Combat.berserk = function (cls) {
   if (!Settings.profile.macro.berserkClasses?.[key] || World.berserkGauge < 5) return false;
   if (World.local()?.appearanceState?.[2] === 1) return false;
   return Cmd.berserk();
+};
+// SBot-style cornered berserk: with the switch on, a full gauge also fires when enough living monsters attack
+// at once, whatever their class — the defensive panic button of a luring tank or an over-pulled spot. The gauge,
+// berserk-form and attacker-expiry rules are the combat ones.
+Combat.corneredBerserk = function () {
+  const need = Number(Settings.profile.macro.berserkCornered) || 0;
+  if (need <= 0 || !Hunt.running || World.isDead() || World.berserkGauge < 5) return false;
+  if (World.local()?.appearanceState?.[2] === 1) return false;
+  const sim = World.simNow();
+  let count = 0;
+  for (const [gid, at] of World.attackers) {
+    if (sim == null || sim - at > 5000) continue;
+    const e = World.ents.get(gid);
+    if (e && World.isAlive(e) && ++count >= need) return Cmd.berserk();
+  }
+  return false;
 };
 const Controller = {
   mode: 'idle', lastErrorAt: -Infinity, resumeAfterRevive: false, guardAt: {},
@@ -16872,7 +16890,8 @@ const UI = {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
       host.append(this.group('Berserk when the gauge is full, on',
         ...[['giant', 'Giants'], ['giantParty', 'Giant party'], ['titan', 'Titans'], ['unique', 'Uniques'], ['elite', 'Elites'], ['party', 'Party monsters'], ['champion', 'Champions'], ['normal', 'Normal monsters']]
-          .map(([key, label]) => this.check(label, () => M().berserkClasses[key], v => M().berserkClasses[key] = v))));
+          .map(([key, label]) => this.check(label, () => M().berserkClasses[key], v => M().berserkClasses[key] = v)),
+        this.number('Also berserk when this many monsters attack at once (0 = off)', () => M().berserkCornered, v => M().berserkCornered = v, 0, 8)));
   },
   section_combatGear(host) {
     const pick = (title, slot) => this.select(title, () => ItemRules.gearOptions(slot), () => ItemRules.cfg().gear?.[slot] || '', v => ItemRules.setGear(slot, v));
