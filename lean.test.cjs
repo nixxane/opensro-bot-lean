@@ -6543,6 +6543,16 @@ test('the wait status box keeps one height for short and long text, so the panel
   assert.doesNotMatch(css, /\.waiting\{[^}]*min-height/, 'a minimum height still lets long text grow the box');
   assert.match(ui, /waitNote\.title = /, 'the full text stays readable in the tooltip');
 });
+test('the window fits the screen: the pane gives way instead of a guessed max-height cutting the bottom off', () => {
+  const fs = require('fs'), css = fs.readFileSync(__dirname + '/lean-skin.css', 'utf8'), ui = fs.readFileSync(__dirname + '/lean-ui.js', 'utf8');
+  assert.match(css, /:host\{[^}]*max-height:calc\(100vh - \d+px\)/, 'the host itself never grows past the viewport');
+  assert.doesNotMatch(css, /clamp\(2\d\dpx,calc\(100vh/, 'no viewport-derived guess for the pane height anywhere');
+  assert.match(css, /(^|\n)\.pane\{[^}]*flex:1 1 auto;[^}]*min-height:\d+px/, 'the scrolling pane is the part that shrinks');
+  assert.match(css, /\.panel:not\(\.dialog\)\{[^}]*flex-direction:column/, 'the panel lays out as one column that can be capped');
+  assert.match(css, /\.panel:not\(\.dialog\)>\.body\{[^}]*flex-direction:column/, 'the main body is the flexible column; dialog bodies are not');
+  assert.match(ui, /fitPanel\(\)\s*\{/, 'the cap is computed from the real window position');
+  assert.match(ui, /restorePanel\(\)[\s\S]{0,600}fitPanel/, 'and recomputed when the window is restored or moved');
+});
 test('buff gear says why a due buff is not being swapped in, instead of staying silent', () => {
   const f = buffGearFixture(), gp = f.World.gp;
   gp.inventory = gp.inventory.filter(i => i.slot !== 15);

@@ -163,7 +163,7 @@ const UI = {
   group(title, ...children) { const b = el('fieldset'); b.append(el('legend', title), ...children); return b; },
   toggleVisibility() {
     const host = this.root?.host;
-    if (host) host.hidden = !host.hidden;
+    if (host) { host.hidden = !host.hidden; this.fitPanel(); }
   },
   toggleMinimised() {
     const host = this.root?.host;
@@ -216,8 +216,8 @@ const UI = {
     this.panel = panel;
     this.tip = el('div', null, 'skill-tip'); this.tip.hidden = true; this.root.append(this.tip);
     // The panel's spot is remembered across reloads (global, like the minimised icon's).
-    this.dragBy(header, host, () => { if (host.style.left) this.uiPrefs({ panel: { x: host.offsetLeft, y: host.offsetTop } }); });
-    W.addEventListener('resize', () => { this.applyClassic(); this.fitWindow(this.reportBox); this.fitWindow(this.notesBox); this.fitWindow(this.sessionBox); this.fitWindow(this.activityExportBox); if (this.minimised) this.placeOrb(host.offsetLeft, host.offsetTop); else if (host.style.left) this.fitWindow(host); });
+    this.dragBy(header, host, () => { if (host.style.left) this.uiPrefs({ panel: { x: host.offsetLeft, y: host.offsetTop } }); this.fitPanel(); });
+    W.addEventListener('resize', () => { this.fitPanel(); this.applyClassic(); this.fitWindow(this.reportBox); this.fitWindow(this.notesBox); this.fitWindow(this.sessionBox); this.fitWindow(this.activityExportBox); if (this.minimised) this.placeOrb(host.offsetLeft, host.offsetTop); else if (host.style.left) this.fitWindow(host); });
     this.setWide(!!this.uiPrefs().wide && !this.uiPrefs().classic, false); this.applyClassic();
     this.draw(); this.update();
     this.restorePanel();
@@ -386,12 +386,20 @@ const UI = {
     orb.addEventListener('pointerenter', () => { if (this.orbAlert) setTimeout(() => { this.orbAlert = ''; this.updateOrb(); }, 2500); });
     return orb;
   },
+  // Keep the window inside the screen: the pane shrinks (it scrolls); the rows below it never get cut off.
+  // The CSS cap covers the default top-right spot; this refines it for wherever the window was moved.
+  // Skipped while hidden (Shift+F7): a hidden host reports offsetTop 0, which would loosen the cap.
+  fitPanel() {
+    const host = this.root?.host;
+    if (!host || this.minimised || host.hidden || !W.innerHeight) return;
+    host.style.maxHeight = Math.max(300, W.innerHeight - host.offsetTop - 8) + 'px';
+  },
   // Put the panel at its saved spot, kept on screen; without one it uses the default top-right position.
   restorePanel() {
     const host = this.root.host, saved = this.uiPrefs().panel;
     if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
-      host.style.right = 'auto'; host.style.left = saved.x + 'px'; host.style.top = saved.y + 'px'; this.fitWindow(host);
-    } else { host.style.left = ''; host.style.top = ''; host.style.right = ''; }
+      host.style.right = 'auto'; host.style.left = saved.x + 'px'; host.style.top = saved.y + 'px'; this.fitPanel(); this.fitWindow(host);
+    } else { host.style.left = ''; host.style.top = ''; host.style.right = ''; this.fitPanel(); }
   },
   placeOrb(x, y) {
     const host = this.root.host;
