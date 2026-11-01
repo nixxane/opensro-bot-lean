@@ -8125,3 +8125,18 @@ test('Sell Star finds a withdrawn item that lands in another bag slot and does n
   assert.deepEqual(r.sold, ['Star one', 'Star two'], f.SellStar.message);
   assert.equal(f.commands.some(c => c.kind === 'move'), false, 'near the NPCs: no walking');
 });
+
+test("Don't pick up Star gear skips only Star equipment and is off by default", () => {
+  const f = fixture(), P = f.Settings.profile.hunt.pickup;
+  const star = f.drop(41, 44), moon = f.drop(42, 44), sun = f.drop(43, 44), plain = f.drop(44, 44), potion = f.drop(45, 2284);
+  star.refObjId = 901; moon.refObjId = 902; sun.refObjId = 903; plain.refObjId = 900;
+  f.Items.data.set(900, { name: 'Plain', icon: '', code: 'ITEM_CH_SWORD_01_A' });
+  f.Items.data.set(901, { name: 'Star', icon: '', code: 'ITEM_CH_SWORD_01_A_RARE' });
+  f.Items.data.set(902, { name: 'Moon', icon: '', code: 'ITEM_CH_SWORD_01_B_RARE_HONOR' });
+  f.Items.data.set(903, { name: 'Sun', icon: '', code: 'ITEM_CH_SWORD_01_C_LEGEND' });
+  assert.equal(P.skipStar, false); assert.deepEqual([star, moon, sun, plain, potion].map(e => f.Loot.allowed(e)), [true, true, true, true, true]);
+  P.skipStar = true;
+  assert.deepEqual([star, moon, sun, plain, potion].map(e => f.Loot.allowed(e)), [false, true, true, true, true]);
+  assert.equal(f.Loot.filterWhy(star), 'star');
+  P.soxOnly = true; assert.deepEqual([star, moon, sun, plain].map(e => f.Loot.allowed(e)), [false, true, true, false], 'with SoX only: Moon and Sun');
+});

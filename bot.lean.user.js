@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         nixxane bot
 // @namespace    https://opensro.online/
-// @version      1.2.211
+// @version      1.2.212
 // @updateURL    https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.meta.js
 // @downloadURL  https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -22,7 +22,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[NIX] Another SRO assistant is active. Disable it and reload to use NIX.');
   return;
 }
-const VERSION = '1.2.211';
+const VERSION = '1.2.212';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -240,7 +240,7 @@ const DEFAULT_PROFILE = {
     classes: { normal: true, champion: true, giant: true, party: false, elite: false, unique: false, titan: false },
     levelMin: 0, levelMax: 0, include: '', exclude: '', priority: 'attackers', avoidKs: true,
     targetTimeoutS: 25,
-    pickup: { enabled: true, soxOnly: false, gold: true, potions: true, equipment: true, elixirs: true, powders: true, magicStones: true, attrStones: true, alchemy: true, others: true,
+    pickup: { enabled: true, soxOnly: false, skipStar: false, gold: true, potions: true, equipment: true, elixirs: true, powders: true, magicStones: true, attrStones: true, alchemy: true, others: true,
       collector: 'character', by: {}, petFullSound: true, soxSound: true, include: '', exclude: '', radius: 300, afterKillOnly: true, retries: 2 },
     sit: { enabled: true, hpBelow: 35, mpBelow: 20, resumeAt: 90 },
     antiStuck: { enabled: true, minutes: 3, maxRecoveries: 3, recall: false },
@@ -6208,6 +6208,8 @@ const Loot = {
     this.ensureCatalogue();
     return Items.data.size ? Items.sox(e.refObjId) : 0;
   },
+  // "Don't pick up Star gear": Star equipment only; Moon and Sun still drop in. Unknown until the catalogue is loaded, so it waits.
+  starSkipped(e, P, tf) { return !!P.skipStar && ItemType.isEquipment(tf) && (this.sox(e) === 1 || !Items.data.size); },
   allowed(e) {
     if (!e || e.kind !== 'ground-item' || !this.owned(e)) return false;
     const P = Hunt.cfg().pickup, tf = e.groundItem.typeFlags ?? e.tidWord ?? 0;
@@ -6217,7 +6219,7 @@ const Loot = {
     if (rule && (rule.pick === 'no' || rule.act === 'drop')) return false;
     const gold = ItemType.isGold(tf);
     if (rule?.pick !== 'yes') {
-      if (splitList(P.exclude).some(s => name.includes(s))) return false;
+      if (splitList(P.exclude).some(s => name.includes(s)) || this.starSkipped(e, P, tf)) return false;
       const included = splitList(P.include).some(s => name.includes(s));
       // SoX-only narrows equipment to Star/Moon/Sun gear; every other category keeps its own switch.
       if (P.soxOnly && ItemType.isEquipment(tf)) { if (!this.sox(e)) return false; }
@@ -6242,7 +6244,7 @@ const Loot = {
     const tf = e.groundItem.typeFlags ?? e.tidWord ?? 0, name = (e.name || '').toLowerCase(), rule = ItemRules.get(e.refObjId);
     if (rule && (rule.pick === 'no' || rule.act === 'drop')) return 'rule';
     const included = splitList(P.include).some(s => name.includes(s));
-    const filtered = rule?.pick !== 'yes' && (splitList(P.exclude).some(s => name.includes(s)) ||
+    const filtered = rule?.pick !== 'yes' && (splitList(P.exclude).some(s => name.includes(s)) || this.starSkipped(e, P, tf) ||
       (P.soxOnly && ItemType.isEquipment(tf) ? !this.sox(e) : !included && !P[this.category(tf)]));
     if (filtered) return 'filter';
     if (this.collector(e) === 'pet') {
@@ -6256,10 +6258,11 @@ const Loot = {
   filterWhy(e) {
     const P = Hunt.cfg().pickup, tf = e.groundItem.typeFlags ?? e.tidWord ?? 0, name = (e.name || '').toLowerCase();
     if (splitList(P.exclude).some(s => name.includes(s))) return 'name';
+    if (this.starSkipped(e, P, tf)) return 'star';
     return P.soxOnly && ItemType.isEquipment(tf) ? 'sox' : this.category(tf);
   },
   filterLabel(key) {
-    return { name: 'excluded by name', sox: 'not Star/Moon/Sun gear (SoX only)', gold: 'gold', potions: 'potions', equipment: 'equipment', elixirs: 'elixirs',
+    return { name: 'excluded by name', sox: 'not Star/Moon/Sun gear (SoX only)', star: 'Star gear (skipped by choice)', gold: 'gold', potions: 'potions', equipment: 'equipment', elixirs: 'elixirs',
       powders: 'lucky powders', magicStones: 'magic stones', attrStones: 'attribute stones', alchemy: 'other alchemy items', others: 'other items' }[key] || key;
   },
   skip(e, reason, inventoryBound = false) {
@@ -15289,7 +15292,7 @@ const Alchemy = {
 };
 
 
-const RELEASE_NOTES = [{"version": "1.2.211", "title": "Sell Star: withdrawals and walking fixed", "items": ["Fixes Sell all Star gear stopping with \"a withdrawal did not reach the bag\". It now waits for the gear to show up in the bag, in whatever slot the game puts it.", "It no longer insists on reaching the exact saved standing spot: close enough to the warehouse or merchant is enough, and if it cannot find a way it tries from where it stands.", "Only tested in simulation, not on the live server."]}, {"version": "1.2.210", "title": "Sell Star also sells Star gear already in the bag", "items": ["Fixes Sell all Star gear doing nothing when Star gear from an earlier run was still in your bag. Star gear in the bag is now sold along with what comes out of the warehouse.", "When it stops, the reason now shows in the bug report (Diagnostics), so a failed run can be diagnosed.", "Only tested in simulation, not on the live server."]}, {"version": "1.2.209", "title": "Sell Star walks to the warehouse and merchant", "items": ["Fixes the Sell all Star gear button taking the gear out and then not selling it. It now walks to the saved warehouse and then to the saved repair merchant itself, instead of needing you to stand in reach of both.", "If it stops, it now says why in a message.", "Only tested in simulation, not on the live server."]}, {"version": "1.2.208", "title": "Sell all Star gear from the warehouse", "items": ["New button on the Town page: Sell all Star gear in warehouse. One click takes every Seal of Star piece out of the warehouse and sells it at your saved repair merchant, in batches that fit your bag, then stops. It never runs on its own.", "Needs the warehouse and repair merchant saved on the Town page, and you standing where both are in reach. Moon and Sun gear, buff-set gear and Keep names stay in the warehouse.", "Only tested in simulation, not on the live server."]}, {"version": "1.2.207", "title": "Party joining can wait for Start", "items": ["New option under Settings > Party: Only join and accept parties while the bot is running. When it is on, Auto-recruit, Auto-accept party-matching joins and joining the party leader's party all wait until you press Start. This fixes the bot joining a party after it was stopped.", "It is off by default, so nothing changes unless you turn it on. Accept resurrection is not affected."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.206", "title": "Lure stops near players or after set pulls", "items": ["Two new lure options under Combat > Hunt area > Lure: Stop when this many other players are within 30 m, and Stop after this many completed pulls. Both are 0 (off) by default, so nothing changes unless you set them.", "The player option stops the lure when that many strangers are within 30 m of your character. You and your party members never count.", "The pull option stops the lure after the chosen number of pulls. A round where nothing was pulled does not use up a pull, and the count starts again each time you start."], "note": "Contributed by duan78 (#85). Tested in simulation only, not in a live game."}, {"version": "1.2.205", "title": "Keep self buffs up while walking back", "items": ["Each buff in Combat > Buffs & imbue now has a Keep (skill) up choice: While hunting, or Hunting and walk-back. The default is While hunting, so nothing changes unless you pick the other one.", "Buffs set to Hunting and walk-back are also cast while the bot walks back to the hunting spot or between towns, so speed or stealth skills stay on for the whole trip.", "Buffs saved before this choice existed keep working only while hunting."], "note": "Contributed by duan78 (#84). Tested in simulation only, not in a live game."}, {"version": "1.2.204", "title": "Town trips sell surplus supplies", "items": ["New option in the town trip settings: Sell surplus restocked potions above the refill amounts. It is off by default.", "When on, the bot sells picked-up or overbought stacks of the supplies it restocks (HP, MP and vigor potions, pills, reverse scrolls, HGP potions, pet kits) at the repair merchant, down to the refill amount.", "Only the extra above the refill amount is sold, largest stack first. Anything the merchant refuses is kept and the trip carries on. Nothing else in your bag is touched by this option."], "note": "Contributed by duan78 (#82). Tested in simulation only, not in a live game."}];
+const RELEASE_NOTES = [{"version": "1.2.212", "title": "Option to not pick up Star gear", "items": ["New option under the Loot settings: Equipment: don't pick up Star gear (Moon and Sun still are). When it is on, the bot and the pet leave Star (Seal of Star) equipment on the ground and keep picking up everything else, including Moon and Sun gear.", "It is off by default, so nothing changes unless you turn it on. A Pick rule on an item still takes that item.", "Only tested in simulation, not on the live server."]}, {"version": "1.2.211", "title": "Sell Star: withdrawals and walking fixed", "items": ["Fixes Sell all Star gear stopping with \"a withdrawal did not reach the bag\". It now waits for the gear to show up in the bag, in whatever slot the game puts it.", "It no longer insists on reaching the exact saved standing spot: close enough to the warehouse or merchant is enough, and if it cannot find a way it tries from where it stands.", "Only tested in simulation, not on the live server."]}, {"version": "1.2.210", "title": "Sell Star also sells Star gear already in the bag", "items": ["Fixes Sell all Star gear doing nothing when Star gear from an earlier run was still in your bag. Star gear in the bag is now sold along with what comes out of the warehouse.", "When it stops, the reason now shows in the bug report (Diagnostics), so a failed run can be diagnosed.", "Only tested in simulation, not on the live server."]}, {"version": "1.2.209", "title": "Sell Star walks to the warehouse and merchant", "items": ["Fixes the Sell all Star gear button taking the gear out and then not selling it. It now walks to the saved warehouse and then to the saved repair merchant itself, instead of needing you to stand in reach of both.", "If it stops, it now says why in a message.", "Only tested in simulation, not on the live server."]}, {"version": "1.2.208", "title": "Sell all Star gear from the warehouse", "items": ["New button on the Town page: Sell all Star gear in warehouse. One click takes every Seal of Star piece out of the warehouse and sells it at your saved repair merchant, in batches that fit your bag, then stops. It never runs on its own.", "Needs the warehouse and repair merchant saved on the Town page, and you standing where both are in reach. Moon and Sun gear, buff-set gear and Keep names stay in the warehouse.", "Only tested in simulation, not on the live server."]}, {"version": "1.2.207", "title": "Party joining can wait for Start", "items": ["New option under Settings > Party: Only join and accept parties while the bot is running. When it is on, Auto-recruit, Auto-accept party-matching joins and joining the party leader's party all wait until you press Start. This fixes the bot joining a party after it was stopped.", "It is off by default, so nothing changes unless you turn it on. Accept resurrection is not affected."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.206", "title": "Lure stops near players or after set pulls", "items": ["Two new lure options under Combat > Hunt area > Lure: Stop when this many other players are within 30 m, and Stop after this many completed pulls. Both are 0 (off) by default, so nothing changes unless you set them.", "The player option stops the lure when that many strangers are within 30 m of your character. You and your party members never count.", "The pull option stops the lure after the chosen number of pulls. A round where nothing was pulled does not use up a pull, and the count starts again each time you start."], "note": "Contributed by duan78 (#85). Tested in simulation only, not in a live game."}, {"version": "1.2.205", "title": "Keep self buffs up while walking back", "items": ["Each buff in Combat > Buffs & imbue now has a Keep (skill) up choice: While hunting, or Hunting and walk-back. The default is While hunting, so nothing changes unless you pick the other one.", "Buffs set to Hunting and walk-back are also cast while the bot walks back to the hunting spot or between towns, so speed or stealth skills stay on for the whole trip.", "Buffs saved before this choice existed keep working only while hunting."], "note": "Contributed by duan78 (#84). Tested in simulation only, not in a live game."}];
 
 // Check trusted repository metadata; never execute downloaded update code.
 const Updates = {
@@ -17160,7 +17163,7 @@ const UI = {
         this.check('Chime and notice when a SoX item is picked up', () => L().soxSound, v => L().soxSound = v), this.button('Test SoX chime', () => Sound.test('sox')));
       this.petNote = el('p', '', 'muted pet-note'); options.append(this.petNote);
       options.append(this.row(...[['Elixirs only','elixirs'],['Elixirs + gold','elixirs-gold'],['All items','all']].map(([label,mode]) => this.button(label, () => { Loot.preset(mode); this.draw(); }))));
-      for (const [key, label] of [['enabled', 'Collect drops'], ['soxOnly', 'Equipment: only SoX (Star / Moon / Sun)'], ['afterKillOnly', 'Character: finish the current fight before picking up']]) options.append(this.check(label, () => L()[key], v => L()[key] = v));
+      for (const [key, label] of [['enabled', 'Collect drops'], ['soxOnly', 'Equipment: only SoX (Star / Moon / Sun)'], ['skipStar', "Equipment: don't pick up Star gear (Moon and Sun still are)"], ['afterKillOnly', 'Character: finish the current fight before picking up']]) options.append(this.check(label, () => L()[key], v => L()[key] = v));
       options.append(this.number('Pickup radius (m)', () => L().radius / 10, v => L().radius = v * 10, 3, 100),
         this.number('Retries after first attempt', () => L().retries, v => L().retries = v, 0, 3),
         this.text('Always include names', () => L().include, v => L().include = v),
