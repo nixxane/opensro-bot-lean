@@ -964,6 +964,7 @@ const UI = {
         this.check('Deposit SoX gear in the warehouse (character and pet bags)', () => town().storeSox, v => town().storeSox = v),
         this.check('Sell Star gear too (instead of depositing it)', () => town().sellStar, v => town().sellStar = v),
         this.check('Sell ordinary gear from the character bag too', () => town().sellBag, v => town().sellBag = v),
+        this.check('Sell surplus restocked potions above the refill amounts', () => town().sellExcess, v => town().sellExcess = v),
         this.text('Also deposit gear requiring level', () => town().storeLevels, v => town().storeLevels = v, 'e.g. 85 or 80-90, 100'),
         this.number('Town arrival tolerance (m)', () => town().arrivalRadius / 10, v => town().arrivalRadius = v * 10, 10, 150),
         el('p', 'Bind your recall to Hotan, Jangan, Donwhang, Constantinople or Samarkand in the game. Quickest: pick your town and press Set up this town; the arrival point is where its return scroll always lands, so you do not have to be in town. It fills the arrival point and the four services. To do it by hand instead, save the arrival point where a return scroll places you, then stand near, select and save the warehouse, potion merchant, repair merchant and world statue / teleport. Open the potion shop before saving its merchant. Saves your standing position for each approach. Uses collision-aware walking between services. Overrides the recorded walking restock while enabled.', 'muted'));

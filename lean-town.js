@@ -628,6 +628,21 @@ const Town = {
       t.staged = direct ? null : { slot: pending.destination, ref: pending.ref };
     }
   },
+  // The surplus of a supply this profile restocks, above its refill target, from the character bag.
+  // Stacks the merchant refused are left alone; the sale itself is a partial one, bounded by the surplus.
+  excess() {
+    const t = this.trip;
+    for (const s of t.supplies || []) {
+      if (!s.on || !s.refObjId || !Number.isInteger(s.target)) continue;
+      const count = Restock.count(s.refObjId);
+      if (count <= s.target) continue;
+      const stack = World.items().filter(i => i.refObjId === s.refObjId && !t.unsold?.includes('bag:' + i.slot + ':' + i.refObjId))
+        .sort((a, b) => (b.quantity ?? 1) - (a.quantity ?? 1))[0];
+      if (!stack) continue;
+      return { kind: s.kind, stack, quantity: Math.min(stack.quantity ?? 1, count - s.target) };
+    }
+    return null;
+  },
   sell() {
     const t = this.trip, gp = World.gp, pet = Loot.pet();
     if (!Restock.activeShop() || gp.shop.npc !== this.npc('smith')?.gid || gp.shop.error) return this.fail(gp.shop?.error || 'Weapon merchant selection changed.');
@@ -642,12 +657,21 @@ const Town = {
       Activity.emit({ category: 'town', code: 'sale-refused', level: 'warn', text: 'Town sell: merchant refused an item (' + gp.error + '); skipped.', userText: 'The merchant refused one item; it was kept and selling continued.', outcome: 'refused', operationId: Activity.contexts.town?.id });
       t.pending = null;
     }
-    if (!this.pendingDone(p => p.bag ? !World.items().some(i => i.slot === p.source && i.refObjId === p.ref) : !pet.rec.inventory.some(i => i.slot === p.source && i.refObjId === p.ref)) || !this.trip || gp.inventoryPending) return;
+    if (!this.pendingDone(p => p.excess ? Restock.count(p.ref) <= p.before - p.quantity : p.bag ? !World.items().some(i => i.slot === p.source && i.refObjId === p.ref) : !pet.rec.inventory.some(i => i.slot === p.source && i.refObjId === p.ref)) || !this.trip || gp.inventoryPending) return;
     const unsold = (where, i) => t.unsold?.includes(where + i.slot + ':' + i.refObjId);
     const petItem = pet?.rec.inventory.find(i => this.sellable(i) && !unsold('pet:', i));
     const bagItem = !petItem && t.sellFirst ? World.items().find(i => this.sellableBag(i) && !unsold('bag:', i)) : null;
     const item = petItem || bagItem;
     if (!item) {
+      // Picked-up or overbought supplies crowd the bag: with the switch on, their surplus above the refill
+      // target sells here. Only items this profile restocks are ever touched, so nothing else is at risk.
+      const excess = this.cfg().sellExcess ? this.excess() : null;
+      if (excess) {
+        const label = { hp: 'HP potions', mp: 'MP potions', vigor: 'vigor potions', cure: 'pills', reverse: 'reverse scrolls', hgp: 'HGP potions', kit: 'pet kits' }[excess.kind] || excess.kind;
+        if (Cmd.raw({ kind: 'shop-sell', slot: excess.stack.slot, quantity: excess.quantity }, 'Town: sell surplus ' + label))
+          t.pending = { bag: true, excess: true, source: excess.stack.slot, ref: excess.stack.refObjId, quantity: excess.quantity, before: Restock.count(excess.stack.refObjId), at: now() };
+        return;
+      }
       // Protected items may still fill the pet; the trip carries on and goes back to hunting rather than stopping in town.
       this.enter(this.ammoSupplies().length ? 'ammo' : 'repair'); return;
     }
