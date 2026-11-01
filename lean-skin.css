@@ -95,7 +95,7 @@ textarea{width:100%;color:inherit;background:#151916;font:11px monospace}
 @media(min-width:900px){
 header button.layout{display:inline-flex;height:22px;min-width:0;margin-left:8px;font-size:11px}
 :host(.wide){width:min(1000px,calc(100vw - 8px))}
-:host(.wide) .body{display:grid;grid-template-columns:104px minmax(0,1fr) 196px;grid-template-areas:"note note note" "strip strip ctl" "nav wait side" "nav pane side" "nav fb side" "log log log";column-gap:8px;align-items:start}
+:host(.wide) .body{display:grid;grid-template-columns:104px minmax(0,1fr) 196px;grid-template-areas:"note note note" "strip strip ctl" "nav wait side" "nav pane side" "nav fb side" "log log log";grid-template-rows:auto auto auto auto minmax(0,1fr) auto;column-gap:8px;align-items:start}
 :host(.wide) .wide-only{display:block}
 :host(.wide) .status{display:none}
 :host(.wide) .update-note{grid-area:note}
@@ -206,7 +206,7 @@ fieldset>input[type=search]{width:100%;margin:2px 0 6px}
 :host(.classic) header button.version{background:none;border:0;padding:0;margin:0 0 0 4px;text-decoration:underline dotted}
 :host(.classic) header button.fold{background:none;border:0;width:16px;height:16px;top:7px;right:10px;color:#000;font-size:0;background-image:var(--s-close)}
 :host(.classic) .panel:not(.dialog)>.body{margin:0;padding:0 0 6px;display:grid;grid-template-columns:106px minmax(0,1fr) 140px;column-gap:6px;align-items:start;
-  grid-template-areas:"menu menu menu" "note note note" "strip strip strip" "ctl ctl ctl" "nav wait side" "nav pane side" "nav fb side"}
+  grid-template-areas:"menu menu menu" "note note note" "strip strip strip" "ctl ctl ctl" "nav wait side" "nav pane side" "nav fb side";grid-template-rows:auto auto auto auto auto auto minmax(0,1fr)}
 :host(.classic) .menubar{grid-area:menu;display:flex;gap:2px;position:relative;padding:3px 6px;background:#fff;color:#000;margin-bottom:4px}
 :host(.classic) .menubar button.menu-title{height:20px;min-width:0;padding:0 8px;border:0;border-image:none;background:none;color:#000;font-size:12px}
 :host(.classic) .menubar button.menu-title:hover{background:#d9e8ff}
