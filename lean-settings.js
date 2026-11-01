@@ -3,6 +3,7 @@ const NOTES_URL = 'https://nixxane.github.io/opensro-bot-lean-site/#patch-notes'
 const CLASS_KEYS = ['normal', 'champion', 'giant', 'party', 'elite', 'unique'];
 const DEFAULT_PROFILE = {
   items: { rules: {}, balance: false, gear: { primaryWeapon: null, secondaryWeapon: null, shield: null } },
+  sounds: { player: false, died: false, levelUp: false, unique: false },
   stall: { title: '', greeting: '', network: true, closeWhenEmpty: true, prices: {} },
   alchemy: { target: 3, limit: 20, elixir: 0, powder: false, use: { luck: false, steady: false, immortal: false, astral: false }, stones: { luck: 1, steady: 1, immortal: 1, astral: 1 }, stoneLimit: 0,
     // The plus from which each helper is used: a failure from +5 up can destroy the item (Steady and Immortal matter from there),
@@ -153,7 +154,26 @@ const Sound = {
     } catch {}
   },
   // Only these alerts are audible; existing combat/UI calls stay silent.
-  tones: { 'pet-full': { notes: [659.25, 830.61, 987.77], gap: 0.18 }, sox: { notes: [783.99, 987.77, 1174.66, 1567.98], gap: 0.11 } },
+  tones: { 'pet-full': { notes: [659.25, 830.61, 987.77], gap: 0.18 }, sox: { notes: [783.99, 987.77, 1174.66, 1567.98], gap: 0.11 },
+    player: { notes: [392, 329.63], gap: 0.25 }, died: { notes: [523.25, 415.3, 329.63], gap: 0.2 },
+    levelUp: { notes: [523.25, 659.25, 783.99, 1046.5], gap: 0.12 }, unique: { notes: [880, 1108.73, 880, 1108.73], gap: 0.15 } },
+  // Alert chimes for events the bus already carries (SBot-style alarms); every switch is off by default.
+  level: null,
+  anyOn() { const s = Settings.profile.sounds; return !!(s && (s.player || s.died || s.levelUp || s.unique)); },
+  init() {
+    bus.on('alert', (kind, e) => { if (kind === 'player' && e && Settings.profile.sounds?.player) this.play('player'); });
+    bus.on('death', e => { if (e?.gid === World.localGid() && Settings.profile.sounds?.died) this.play('died'); });
+    bus.on('spawn', e => { if (Settings.profile.sounds?.unique && e?.kind === 'monster' && RARITY[e.rarity] === 'unique') this.play('unique'); });
+    // The first snapshot only learns the level; a chime needs a rise, and a character switch resets it.
+    bus.on('gameplay', () => {
+      if (!Settings.profile.sounds?.levelUp) { this.level = null; return; }
+      const level = World.gp?.progression?.level;
+      if (!Number.isInteger(level)) return;
+      if (this.level !== null && level > this.level) this.play('levelUp');
+      this.level = level;
+    });
+    bus.on('profile', () => { this.level = null; });
+  },
   play(kind) {
     const tone = this.tones[kind];
     if (!tone) return false;

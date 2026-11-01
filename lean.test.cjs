@@ -2539,6 +2539,30 @@ test('Attack monsters off also keeps luring from starting fights', () => {
   f.Settings.profile.hunt.attack = false; idleFor(f, 1000); assert.equal(lured, 0);
   f.Settings.profile.hunt.attack = true; idleFor(f, 300); assert.ok(lured > 0);
 });
+test('alert chimes: a player near, death, a level up and a unique in view, each behind its own switch', () => {
+  const f = fixture(); f.Sound.init();
+  const played = []; f.Sound.play = kind => { played.push(kind); return true; };
+  const S = f.Settings.profile.sounds;
+  assert.deepEqual([S.player, S.died, S.levelUp, S.unique], [false, false, false, false], 'all off by default');
+  f.bus.emit('alert', 'player', { gid: 9 }); assert.deepEqual(played, [], 'off means silent');
+  S.player = true; f.bus.emit('alert', 'player', { gid: 9 }); assert.deepEqual(played, ['player']);
+  f.bus.emit('death', { gid: f.World.localGid() }); assert.deepEqual(played, ['player'], 'the death chime is off');
+  S.died = true; f.bus.emit('death', { gid: f.World.localGid() }); assert.deepEqual(played, ['player', 'died']);
+  f.bus.emit('death', { gid: 42 }); assert.equal(played.length, 2, 'another entity dying stays silent');
+  S.unique = true;
+  f.bus.emit('spawn', { gid: 60, kind: 'monster', rarity: 3 }); assert.deepEqual(played, ['player', 'died', 'unique']);
+  f.bus.emit('spawn', { gid: 61, kind: 'monster', rarity: 0 }); assert.equal(played.length, 3, 'ordinary monsters stay silent');
+  f.bus.emit('spawn', { gid: 62, kind: 'player', rarity: 3 }); assert.equal(played.length, 3, 'only monsters count');
+  S.levelUp = true;
+  f.World.gp.progression = { ...(f.World.gp.progression || {}), level: 10 };
+  f.bus.emit('gameplay'); f.bus.emit('gameplay'); assert.equal(played.length, 3, 'the first snapshot only learns the level');
+  f.World.gp.progression = { ...(f.World.gp.progression || {}), level: 11 };
+  f.bus.emit('gameplay'); assert.deepEqual(played, ['player', 'died', 'unique', 'levelUp']);
+  f.bus.emit('profile');
+  f.World.gp.progression = { ...(f.World.gp.progression || {}), level: 20 };
+  f.bus.emit('gameplay'); assert.equal(played.length, 4, 'a character switch does not chime on the level jump');
+  assert.equal(f.Sound.anyOn(), true);
+});
 test('anti-stuck drops the target, then walks back, then stops after the configured recoveries', () => {
   const f = fixture(); f.Hunt.start(); idleFor(f, 1000);
   assert.equal(f.Hunt.state, 'search');

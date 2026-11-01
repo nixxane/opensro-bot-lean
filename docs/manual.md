@@ -316,6 +316,10 @@ Under **Settings → Anti-stuck**, the bot watches for progress while hunting: a
 
 When the bot confirms a pickup of Star, Moon or Sun equipment, it shows the item name and tier and plays a short chime. Turn it off with **Chime and notice when a SoX item is picked up** in **Loot**; **Test SoX chime** previews the sound. The count also appears under Session stats. It needs the item catalogue, which loads automatically when hunting starts, and it only announces bot pickups.
 
+## Alert sounds
+
+Under **Loot → Alert sounds**, each switch turns on a short chime, all off by default: **another player comes near** (the same detection the player alert uses), **the character dies**, **a level up**, and **a unique monster coming into view**. A click anywhere in the game unlocks the sound after the browser blocked it; the pet and SoX chime buttons preview the sound.
+
 ## Session stats
 
 Open **Settings → Session stats** for hunting time, XP/hour, net gold, confirmed kills, deaths, potion use, pickups and SoX found. Totals pause when hunting stops and stay across toggles. **Reset session**, reloading or changing character clears them. Stats stay local to the page.
