@@ -28,7 +28,7 @@ const DEFAULT_PROFILE = {
   macro: {
     rotations: { normal: [], champion: [], giant: [], party: [], elite: [], unique: [] },
     fallbackToNormal: true, normalAttack: true, buffs: [], imbue: null, buffSwap: false, buffAuto: true, buffSets: [],
-    imbueBeforeAttack: true, berserkClasses: { normal: false, champion: false, giant: true, giantParty: false, party: false, elite: false, unique: false, titan: false },
+    imbueBeforeAttack: true, berserkClasses: { normal: false, champion: false, giant: true, giantParty: false, party: false, elite: false, unique: false, titan: false }, berserkCornered: 0,
     minMpPct: 0, castGapMs: 350,
   },
   potion: {

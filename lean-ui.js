@@ -775,7 +775,8 @@ const UI = {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
       host.append(this.group('Berserk when the gauge is full, on',
         ...[['giant', 'Giants'], ['giantParty', 'Giant party'], ['titan', 'Titans'], ['unique', 'Uniques'], ['elite', 'Elites'], ['party', 'Party monsters'], ['champion', 'Champions'], ['normal', 'Normal monsters']]
-          .map(([key, label]) => this.check(label, () => M().berserkClasses[key], v => M().berserkClasses[key] = v))));
+          .map(([key, label]) => this.check(label, () => M().berserkClasses[key], v => M().berserkClasses[key] = v)),
+        this.number('Also berserk when this many monsters attack at once (0 = off)', () => M().berserkCornered, v => M().berserkCornered = v, 0, 8)));
   },
   section_combatGear(host) {
     const pick = (title, slot) => this.select(title, () => ItemRules.gearOptions(slot), () => ItemRules.cfg().gear?.[slot] || '', v => ItemRules.setGear(slot, v));

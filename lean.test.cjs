@@ -4616,6 +4616,40 @@ test('Berserk fires only on ticked classes, with a full gauge', () => {
   f.World.berserkGauge = 5; f.Settings.profile.macro.berserkClasses.champion = true; assert.equal(f.Combat.berserk('champion'), true);
   f.advance(2000); f.Settings.profile.macro.berserkClasses.giant = false; assert.equal(f.Combat.berserk('giant'), false);
 });
+test('cornered berserk: a full gauge fires when enough living monsters attack at once, whatever their class', () => {
+  const f = fixture(), kinds = () => f.commands.filter(c => c.kind === 'berserk').length;
+  const mob = (gid, alive = true) => ({ gid, kind: 'monster', rarity: 0, x: 100, y: 0, z: 100, appearanceState: alive ? [0] : [2, 0, 0] });
+  const attack = (gid, alive = true) => { f.World.ents.set(gid, mob(gid, alive)); f.World.attackers.set(gid, f.World.simNow()); };
+  f.Settings.profile.macro.berserkCornered = 3;
+  f.Hunt.start();
+  f.World.berserkGauge = 5;
+  attack(30); attack(31);
+  assert.equal(f.Combat.corneredBerserk(), false, 'two attackers are below the threshold of three');
+  attack(32);
+  assert.equal(f.Combat.corneredBerserk(), true, 'three living attackers fire it whatever their class');
+  assert.equal(kinds(), 1);
+  f.advance(2000); f.World.berserkGauge = 4;
+  assert.equal(f.Combat.corneredBerserk(), false, 'an empty gauge never fires');
+  f.World.berserkGauge = 5; f.World.ents.get(1).appearanceState = [0, 0, 1];
+  assert.equal(f.Combat.corneredBerserk(), false, 'already in berserk form');
+  f.World.ents.get(1).appearanceState = [0, 0, 0];
+  f.advance(6000);
+  assert.equal(f.Combat.corneredBerserk(), false, 'old attacks expire');
+  attack(33, false);
+  assert.equal(f.Combat.corneredBerserk(), false, 'dead attackers do not count');
+  const g = fixture(); g.Hunt.start(); g.World.berserkGauge = 5;
+  for (const gid of [40, 41, 42]) { g.World.ents.set(gid, mob(gid)); g.World.attackers.set(gid, g.World.simNow()); }
+  assert.equal(g.Settings.profile.macro.berserkCornered, 0, 'off by default');
+  assert.equal(g.Combat.corneredBerserk(), false);
+  // The hunt tick fires it before luring, where no target class is ever consulted.
+  const h = fixture(); h.Settings.profile.macro.berserkCornered = 2; h.World.berserkGauge = 5;
+  h.Settings.profile.lure.enabled = true; h.Settings.profile.lure.points = [{ regionId: 1, x: 130, y: 0, z: 100 }];
+  h.Hunt.start();
+  for (const gid of [50, 51]) { h.World.ents.set(gid, mob(gid)); h.World.attackers.set(gid, h.World.simNow()); }
+  const before = h.commands.filter(c => c.kind === 'berserk').length;
+  h.Controller.tick();
+  assert.equal(h.commands.filter(c => c.kind === 'berserk').length, before + 1, 'the hunt tick fires the cornered berserk before luring');
+});
 test('Berserk on party Giants follows its own switch', () => {
   const f = fixture(), kinds = () => f.commands.filter(c => c.kind === 'berserk').length, B = f.Settings.profile.macro.berserkClasses;
   f.World.berserkGauge = 5;
