@@ -15820,7 +15820,10 @@ const Equip = {
     if (!this.on() || !World.inWorld()) return false;
     const p = t.pending, gp = World.gp;
     if (p?.kind === 'equip') {
-      if (!gp.inventoryPending && gp.inventory?.find(i => i.slot === p.slot)?.refObjId === p.ref) {
+      // A swap counts only once the worn slot really holds the new piece — matched by its full key, not just the
+      // item number, because the case this feature is built around is the same base item with a better roll.
+      // Before that, and for the first 500 ms like every town transaction, nothing is trusted and nothing re-sent.
+      if (now() - p.at >= 500 && !gp.inventoryPending && BuffGear.key(gp.inventory?.find(i => i.slot === p.slot)) === p.key) {
         t.pending = null;
         (t.equippedOut ||= []).push(p.oldKey);
         this.remember(p.oldKey);

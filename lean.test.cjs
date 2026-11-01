@@ -4938,6 +4938,48 @@ test('the town trip wears carried armour with better real stats and stores the r
   assert.equal(off.commands.some(c => c.kind === 'inventory-move'), false, 'off by default nothing is worn');
 });
 
+test('a same-item swap with a better roll is confirmed by the slot key, never by the item number', () => {
+  const f = townFixture(), gp = f.World.gp;
+  f.pet.inventory = [];
+  f.Settings.profile.items.autoEquip = true;
+  gp.progression = { ...(gp.progression || {}), level: 30, experience: '100' };
+  const fields = { canRepair: 1, reqLevelType1: 1, requiredLevel: 30,
+    varianceFloatMin1c8: 10, varianceFloatMax1cc: 30, varianceFloatPerPlus1d0: 0,
+    varianceFloatMin1f4: 8, varianceFloatMax1f8: 24, varianceFloatPerPlus1fc: 0 };
+  // Same base item in the slot and the bag: only the roll differs, so refObjId alone cannot tell them apart.
+  const piece = (slot, rolls) => ({ slot, refObjId: 800, typeFlags: 44 | (2 << 7), quantity: 1, plus: 0, magic: [], variance: String(rolls), tooltip: { fields } });
+  const worn = piece(2, 0n), better = piece(16, (31n << 15n) | (31n << 20n));
+  gp.inventory.push(worn, better);
+  f.Town.begin(); f.Town.enter('store'); gp.storage = { npc: 60, phase: 'open', capacity: 30, items: [] }; gp.target = 60;
+  f.Town.store();
+  assert.equal(f.commands.at(-1).kind, 'inventory-move');
+  const moves = () => f.commands.filter(c => c.kind === 'inventory-move').length;
+  f.advance(100); f.Town.store();
+  assert.equal(f.Town.trip.pending?.kind, 'equip', 'within the 500 ms trust window nothing is confirmed');
+  assert.equal(moves(), 1, 'and nothing is sent again');
+  f.advance(1000); f.Town.store();
+  assert.equal(f.Town.trip.pending?.kind, 'equip', 'the game has not acted: the worn slot still holds the old key');
+  assert.equal(moves(), 1, 'no repeat move that could swap the pieces back');
+  better.slot = 2; worn.slot = 16; // the game performs the swap
+  f.advance(1000); f.Town.store();
+  assert.equal(f.Town.trip.pending, null, 'confirmed now that the slot holds the new key');
+  assert.equal(f.Town.trip.equippedOut.length, 1, 'exactly one replaced piece');
+  assert.equal(f.Town.trip.equippedOut[0], f.BuffGear.key(worn), 'the low-rolled piece is the replaced one');
+  for (let n = 0; n < 6 && f.Town.trip?.phase === 'store'; n++) {
+    f.advance(1000); f.Town.store();
+    const c = f.commands.at(-1);
+    if (c?.kind === 'storage-move' && f.Town.trip?.pending?.kind === 'store') {
+      const i = gp.inventory.find(x => x.slot === c.move.source);
+      gp.storage.items.push({ ...i, slot: c.move.destination });
+      gp.inventory = gp.inventory.filter(x => x.slot !== c.move.source);
+    }
+    f.advance(600); f.Town.store();
+  }
+  assert.equal(moves(), 1, 'exactly one move for the whole swap');
+  assert.equal(gp.inventory.find(i => i.slot === 2)?.variance, better.variance, 'the better roll stays worn');
+  assert.equal(gp.storage.items.length, 1, 'the low-rolled copy is stored');
+});
+
 test('weapon swaps follow the worn weapon\'s dominant attack and respect the chosen weapons', () => {
   const weaponFields = (paHi, maHi) => ({ canRepair: 1, reqLevelType1: 1, requiredLevel: 30,
     varianceIntMin240: 10, varianceIntMax244: paHi, varianceIntMin248: 12, varianceIntMax24c: paHi + 4, varianceFloatPerPlus250: 0,
