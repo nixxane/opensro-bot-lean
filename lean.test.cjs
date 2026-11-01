@@ -257,6 +257,32 @@ test('pet chooses the nearest eligible drop to itself inside the configured hunt
   assert.equal(f.Loot.choose()?.gid, nearPet.gid);
   nearPet.groundItem.ownerJid = 999; assert.equal(f.Loot.choose()?.gid, nearPlayer.gid);
 });
+test('seal of Sun, Moon and Star gear is collected before nearer ordinary drops', () => {
+  const f = fixture();
+  f.Items.data.set(900, { name: 'Plain sword', icon: '', code: 'ITEM_CH_SWORD_01' });
+  f.Items.data.set(901, { name: 'Star sword', icon: '', code: 'ITEM_CH_SWORD_01_A_RARE' });
+  f.Items.data.set(903, { name: 'Sun sword', icon: '', code: 'ITEM_CH_SWORD_01_C_RARE' });
+  const gear = (gid, ref, x) => { const e = f.drop(gid, 44); e.refObjId = ref; e.x = x; return e; };
+  const potion = f.drop(20, 2284), plain = gear(21, 900, 210), starNear = gear(22, 901, 220), starFar = gear(23, 901, 260), sun = gear(24, 903, 280);
+  assert.equal(f.Loot.allowed(plain), true, 'plain gear stays eligible, only ranked lower');
+  assert.equal(f.Loot.choose().gid, 24, 'Sun first although it is the farthest');
+  f.World.ents.delete(24);
+  assert.equal(f.Loot.choose().gid, 22, 'of two Stars, the nearest one goes first');
+  f.World.ents.delete(22);
+  assert.equal(f.Loot.choose().gid, 23);
+  f.World.ents.delete(23);
+  assert.equal(f.Loot.choose().gid, 20, 'then the nearest ordinary drop, not the plain sword');
+});
+test('the pickup pet also takes seal gear first; without the catalogue the nearest drop wins', () => {
+  const f = fixture(), P = f.Settings.profile.hunt.pickup;
+  pickupPet(f); P.equipment = true;
+  f.Items.data.set(903, { name: 'Sun sword', icon: '', code: 'ITEM_CH_SWORD_01_C_RARE' });
+  const elixir = f.drop(20, 3436);
+  const sun = f.drop(21, 44); sun.refObjId = 903; sun.x = 280;
+  assert.equal(f.Loot.choose('pet').gid, 21, 'seal gear before the nearer elixir');
+  f.Items.data.clear();
+  assert.equal(f.Loot.choose('pet').gid, 20, 'nearest-first again while the catalogue is empty');
+});
 test('pet yields to actual potion dispatch and pending inventory then collects without interrupting combat', () => {
   const f = fixture(); petFight(f); f.drop(20, 3436);
   f.World.gp.inventory.push({ slot: 16, refObjId: 8, typeFlags: 2284, quantity: 50 });

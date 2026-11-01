@@ -173,11 +173,14 @@ const Loot = {
     this.active = null;
     Hunt.lootGid = 0;
   },
-  // The nearest drop worth taking; `by` ('pet' or 'character') limits it to that collector's drops.
+  // The drop worth taking next; `by` ('pet' or 'character') limits it to that collector's drops.
+  // Star/Moon/Sun gear goes before everything else: a higher seal tier outranks distance,
+  // and the nearest drop only wins within the same tier. Without the catalogue every
+  // tier reads 0, so the choice falls back to nearest-first.
   choose(by = null) {
     const H = Hunt.cfg(), P = H.pickup, pose = World.pose();
     if (!P.enabled || !pose) return null;
-    let chosen = null, best = Infinity;
+    let chosen = null, best = Infinity, tier = 0;
     for (const e of World.ents.values()) {
       if (e.kind !== 'ground-item') continue;
       const skip = this.skips.get(e.gid);
@@ -190,7 +193,8 @@ const Loot = {
       const who = this.collector(e);
       if (by && who !== by) continue;
       const travel = dist2D(who === 'pet' ? this.pet()?.ent : pose, e);
-      if (travel < best) { chosen = e; best = travel; }
+      const seal = this.sox(e);
+      if (seal > tier || (seal === tier && travel < best)) { chosen = e; best = travel; tier = seal; }
     }
     return chosen;
   },

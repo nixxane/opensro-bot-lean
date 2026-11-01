@@ -6267,11 +6267,14 @@ const Loot = {
     this.active = null;
     Hunt.lootGid = 0;
   },
-  // The nearest drop worth taking; `by` ('pet' or 'character') limits it to that collector's drops.
+  // The drop worth taking next; `by` ('pet' or 'character') limits it to that collector's drops.
+  // Star/Moon/Sun gear goes before everything else: a higher seal tier outranks distance,
+  // and the nearest drop only wins within the same tier. Without the catalogue every
+  // tier reads 0, so the choice falls back to nearest-first.
   choose(by = null) {
     const H = Hunt.cfg(), P = H.pickup, pose = World.pose();
     if (!P.enabled || !pose) return null;
-    let chosen = null, best = Infinity;
+    let chosen = null, best = Infinity, tier = 0;
     for (const e of World.ents.values()) {
       if (e.kind !== 'ground-item') continue;
       const skip = this.skips.get(e.gid);
@@ -6284,7 +6287,8 @@ const Loot = {
       const who = this.collector(e);
       if (by && who !== by) continue;
       const travel = dist2D(who === 'pet' ? this.pet()?.ent : pose, e);
-      if (travel < best) { chosen = e; best = travel; }
+      const seal = this.sox(e);
+      if (seal > tier || (seal === tier && travel < best)) { chosen = e; best = travel; tier = seal; }
     }
     return chosen;
   },
@@ -16872,7 +16876,7 @@ const UI = {
         this.number('Retries after first attempt', () => L().retries, v => L().retries = v, 0, 3),
         this.text('Always include names', () => L().include, v => L().include = v),
         this.text('Exclude names', () => L().exclude, v => L().exclude = v),
-        el('p', 'Pets collect during combat regardless of the finish-fight setting, which applies to the character only. Inventory transactions and potion priority can briefly delay pet requests. Equipment: only SoX takes Star, Moon and Sun gear and leaves plain equipment, even when Equipment or an Always include name matches it; other items follow their own switches. It needs the item catalogue, which loads automatically. Presets clear Always include names; exclusions still apply. Other items excludes the separate categories above. Ownership and bag capacity always apply. Failed pickups use a backoff.', 'muted'));
+        el('p', 'Pets collect during combat regardless of the finish-fight setting, which applies to the character only. Inventory transactions and potion priority can briefly delay pet requests. Equipment: only SoX takes Star, Moon and Sun gear and leaves plain equipment, even when Equipment or an Always include name matches it; other items follow their own switches. It needs the item catalogue, which loads automatically. When several drops are eligible, Star, Moon and Sun gear is collected first (Sun before Moon before Star) whatever the distance; without the catalogue the nearest drop goes first. Presets clear Always include names; exclusions still apply. Other items excludes the separate categories above. Ownership and bag capacity always apply. Failed pickups use a backoff.', 'muted'));
       host.append(options);
   },
   section_lootWho(host) {
