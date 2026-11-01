@@ -310,7 +310,7 @@ While chasing a mob the game walks the character straight at it, so a tree or wa
 
 ## Anti-stuck
 
-Under **Settings → Anti-stuck**, the bot watches for progress while hunting: a confirmed kill, XP, gold, a pickup, or damage to your target. If nothing happens for the set time (default 3 minutes), it recovers in steps: first it drops the current target, then it walks back to the saved hunting spot and resumes, and after the set number of failed recoveries (default 3) it stops hunting. Any confirmed gain clears the count. Resting, buffing, looting, shopping, town trips and manual control do not count as stuck.
+Under **Settings → Anti-stuck**, the bot watches for progress while hunting: a confirmed kill, XP, gold, a pickup, or damage to your target. If nothing happens for the set time (default 3 minutes), it recovers in steps: first it drops the current target, then it walks back to the saved hunting spot and resumes, and after the set number of failed recoveries (default 3) it stops hunting. With **Go to town instead of stopping** on (it needs the town cycle) it makes a town trip instead and stays in town, rather than returning to the spot where nothing worked. Any confirmed gain clears the count. Resting, buffing, looting, shopping, town trips and manual control do not count as stuck.
 
 ## SoX alerts
 

@@ -2549,6 +2549,19 @@ test('anti-stuck drops the target, then walks back, then stops after the configu
   idleFor(f, 180000); assert.equal(f.Hunt.running, false);
   assert.ok(f.notices.some(m => /stuck/.test(m)));
 });
+test('anti-stuck can go to town instead of stopping, as a recovery trip, only when the town cycle is on', () => {
+  const f = fixture(); let began = 0;
+  f.Town.begin = () => { began++; f.Town.trip = { phase: 'recall' }; };
+  f.Settings.profile.hunt.antiStuck.recall = true; f.Hunt.start(); idleFor(f, 1000);
+  idleFor(f, 180000 * 3); assert.equal(began, 0, 'the first recoveries stay in the field');
+  idleFor(f, 180000); assert.equal(f.Hunt.running, false, 'the town cycle is off: it still stops');
+  assert.equal(began, 0);
+  const g = fixture(); let trip = null; g.Town.begin = () => { began++; g.Town.trip = trip = { phase: 'recall' }; };
+  g.Settings.profile.hunt.antiStuck.recall = true; g.Settings.profile.potion.restock.town.enabled = true; g.Town.reason = () => ''; let recovers = 0; const rec = g.AntiStuck.recover; g.AntiStuck.recover = function () { recovers++; return rec.apply(this, arguments); }; g.Hunt.start(); idleFor(g, 1000);
+  idleFor(g, 180000 * 4); assert.equal(recovers, 4); assert.equal(began, 1); assert.equal(trip.recovery, true, 'it is marked as a recovery trip');
+  const h = fixture(); h.Settings.profile.potion.restock.town.enabled = true; h.Hunt.start(); idleFor(h, 1000);
+  idleFor(h, 180000 * 4); assert.equal(h.Hunt.running, false, 'with the option off it stops as before');
+});
 test('anti-stuck is cleared by confirmed progress, damage and non-working states', () => {
   const f = fixture(); f.Hunt.start(); idleFor(f, 1000);
   idleFor(f, 150000); f.Stats.session.kills++; idleFor(f, 150000);

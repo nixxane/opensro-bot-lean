@@ -59,7 +59,7 @@ const DEFAULT_PROFILE = {
     pickup: { enabled: true, soxOnly: false, gold: true, potions: true, equipment: true, elixirs: true, powders: true, magicStones: true, attrStones: true, alchemy: true, others: true,
       collector: 'character', by: {}, petFullSound: true, soxSound: true, include: '', exclude: '', radius: 300, afterKillOnly: true, retries: 2 },
     sit: { enabled: true, hpBelow: 35, mpBelow: 20, resumeAt: 90 },
-    antiStuck: { enabled: true, minutes: 3, maxRecoveries: 3 },
+    antiStuck: { enabled: true, minutes: 3, maxRecoveries: 3, recall: false },
     detour: { enabled: true, stallMs: 2500 },
     trap: { enabled: true, seconds: 20, recall: false, diagnostics: false },
     onDeath: 'stop', stopNoHpPotion: false, stopInvFull: false, autoStart: false, retry: false,

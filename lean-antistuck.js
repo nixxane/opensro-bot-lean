@@ -37,6 +37,13 @@ const AntiStuck = {
     this.idleMs = 0; this.recoveries++;
     if (this.recoveries > c.maxRecoveries) {
       this.message = 'No progress after ' + c.maxRecoveries + ' recoveries.';
+      // Optional last resort: a town trip, as the trap recovery does. It ends in town, because reversing would
+      // return to the spot where nothing worked.
+      if (c.recall && Town.cfg().enabled) {
+        Log.warn(this.message + ' Going to town.');
+        Town.begin();
+        if (Town.trip) { Town.trip.recovery = true; this.message += ' Went to town.'; return; }
+      }
       return Hunt.stop('stuck: no progress after ' + c.maxRecoveries + ' recoveries');
     }
     if (Hunt.targetGid) Hunt.ban.set(Hunt.targetGid, now() + 60000);
