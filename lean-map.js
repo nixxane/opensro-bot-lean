@@ -125,6 +125,24 @@ const LeanMap = {
     current.append(UI.field('Current', this.coordinateText), UI.button('Get position', () => this.getCoordinates()), UI.button('Copy', () => { void this.copyCoordinates(); }));
     const coordinates = el('div', null, 'map-position');
     coordinates.append(spotHeader, spotFields, el('p', 'Outdoor X / Y coordinates in metres.', 'muted'), current);
+    const spots = el('div', null, 'level-spots'), spotLevel = el('input');
+    spotLevel.type = 'number'; spotLevel.min = '1'; spotLevel.max = '150'; spotLevel.step = '1';
+    const drawSpots = () => {
+      spots.textContent = '';
+      for (const s of LevelSpot.list()) {
+        const c = this.space(s.center) ? displayCoords(s.center) : null;
+        spots.append(UI.row(el('span', 'From level ' + s.level + (c ? ': ' + c.x + ', ' + c.y : '')), UI.button('Remove', () => { LevelSpot.remove(s.level); drawSpots(); })));
+      }
+    };
+    drawSpots();
+    const levelSpots = UI.group('Spot by level',
+      UI.check('Switch the hunting spot by level', () => Settings.profile.hunt.levelSpots.on, v => { Settings.profile.hunt.levelSpots.on = v; }),
+      el('p', 'Set the hunting spot above, enter the level it is for, and press Save. The highest saved level at or below yours is used; the bot walks there when you level into a new one.', 'muted'),
+      UI.row(UI.field('From level', spotLevel), UI.button('Save current spot', () => {
+        const error = LevelSpot.add(Number(spotLevel.value));
+        if (error) UI.toast(error, 'warn'); else { drawSpots(); UI.toast('Level spot saved.'); }
+      })),
+      spots);
     const area = UI.group('Hunting area',
       coordinates,
       UI.number('Hunt radius (m)', () => H().radius / 10, v => { H().radius = v * 10; this.dirty = true; }, 5, 200),
@@ -135,7 +153,7 @@ const LeanMap = {
       row.append(mark, el('span', label)); legend.append(row);
     }
     legend.append(el('p', 'Yellow circle: hunt radius. Dashed ring: chase distance. Click the map to mark a point, drag to move it, use + and − to zoom.', 'muted'));
-    parent.append(box, area, legend);
+    parent.append(box, area, levelSpots, legend);
     for (const mark of legend.querySelectorAll('i[data-sign]')) this.paintSign(mark, mark.dataset.sign);
     this.bind(); this.dirty = true; this.render();
     clearInterval(this.timer); this.timer = setInterval(() => this.tick(), 200);
