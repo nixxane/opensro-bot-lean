@@ -548,6 +548,33 @@ test('WalkBack.startTo walks to any point, reports arrival inside the wider radi
   assert.match(failed, /Manual control/); assert.equal(f.WalkBack.active, null);
   assert.equal(f.WalkBack.startTo({ regionId: 1, x: 1, y: 0, z: 1 }, { onFail: r => { failed = r; } }) !== undefined, true);
 });
+test('self buffs can be kept up while walking back; hunting-only ones wait for hunting', () => {
+  const f = fixture();
+  f.World.rebuildCatalog([
+    { id: 2004, group: 904, level: 1, name: 'Swift song', targetRequired: false, targets: 1, durationMs: 600000 },
+    { id: 2005, group: 905, level: 1, name: 'Hunt chant', targetRequired: false, targets: 1, durationMs: 600000 },
+  ]);
+  f.World.applyGameplay({ ...f.World.gp, skills: [2004, 2005] });
+  f.Settings.profile.macro.buffs = [
+    { id: 2004, group: 904, enabled: true, mode: 'walk', refreshS: 3 },
+    { id: 2005, group: 905, enabled: true, mode: 'hunt', refreshS: 3 },
+    { id: 2006, group: 906, enabled: true, refreshS: 3 },
+  ];
+  f.advance(600000);
+  f.WalkBack.startTo({ regionId: 1, x: 1000, y: 0, z: 100 }, { label: 'the far stone' });
+  f.WalkBack.tick();
+  assert.deepEqual(f.commands.filter(c => c.kind === 'skill').map(c => c.skillId), [2004],
+    'only the walk-back buff is cast while walking, whatever the old entry lacks');
+  assert.equal(f.WalkBack.active !== null, true, 'the walk itself is untouched');
+  assert.ok(f.commands.some(c => c.kind === 'move'), 'the walk keeps sending movement');
+  // While hunting every enabled buff is kept up: the worn walk-back buff waits for its refresh, the hunting one casts.
+  f.commands.length = 0;
+  f.World.gp.buffSlots = [{ state: 'active', effect: { gid: 1, skill: 2004, remainingMs: 600000, receivedAtMs: f.World.simNow() } }];
+  f.advance(2000);
+  assert.equal(f.Combat.buffs(true), true);
+  assert.deepEqual(f.commands.filter(c => c.kind === 'skill').map(c => c.skillId), [2005],
+    'the hunting buff casts while hunting; the worn walk-back buff is not re-cast');
+});
 function mapFixture() {
   const f = fixture(), map = f.LeanMap;
   const input = () => ({ _value: '', get value() { return this._value; }, set value(v) { this._value = String(v); },
