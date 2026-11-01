@@ -8022,11 +8022,12 @@ test('Only join and accept parties while the bot is running holds party automati
   assert.equal(f.commands.length, 1, 'default: still joins while stopped');
 });
 
-function sellStarRun(f, storageItems, bagCount = 0, x = 150) {
+function sellStarRun(f, storageItems, bagCount = 0, x = 150, bagStars = []) {
   f.Hunt.running = false;
   const gp = f.World.gp, sold = [], moved = [];
   gp.pose = { regionId: 1, x, y: 0, z: 100 };
   gp.inventory = Array.from({ length: bagCount }, (_, n) => ({ slot: 13 + n, refObjId: 5000 + n, typeFlags: 4332, quantity: 1, name: 'Filler' }));
+  gp.inventory.push(...bagStars);
   gp.storageItems = storageItems;
   let handled = 0;
   f.SellStar.start();
@@ -8075,4 +8076,11 @@ test('Sell Star walks to the warehouse and the merchant when they are out of rea
   const r = sellStarRun(f, [starItem(0, 'Star one'), starItem(1, 'Star two')], 0, 500);
   assert.deepEqual(r.sold, ['Star one', 'Star two'], f.SellStar.message);
   assert.equal(f.commands.some(c => c.kind === 'move'), true, 'walked');
+});
+
+test('Sell Star also sells Star gear already in the bag, with a full bag and an empty warehouse', () => {
+  const f = townFixture();
+  const r = sellStarRun(f, [], 0, 150, [starItem(13, 'Left over one'), starItem(14, 'Left over two'), { ...starItem(15, 'Moon left', 'ITEM_EU_M_HEAVY_B_RARE') }]);
+  assert.deepEqual(r.sold, ['Left over one', 'Left over two'], f.SellStar.message);
+  assert.deepEqual(r.gp.inventory.map(i => i.name), ['Moon left']);
 });

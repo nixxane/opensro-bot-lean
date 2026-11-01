@@ -15,6 +15,8 @@ const SellStar = {
     return ItemType.isEquipment(tf) && Items.soxOf(item) === 1 && item.tooltip?.fields?.canSell !== 0 &&
       !ItemRules.guarded(item) && !keep.some(s => name.includes(s));
   },
+  // Star gear already in the bag (left over from an earlier run) is sold too.
+  inBag() { const eq = World.gp?.equipmentSlotCount || 13; return World.items().filter(i => i.slot >= eq && this.isStar(i)); },
   inStorage() { const st = World.gp?.storage; return st && st.phase === 'open' && !st.guild ? st.items.filter(i => this.isStar(i)) : []; },
   bag(slot, ref) { return World.items().find(i => i.slot === slot && i.refObjId === ref); },
   blocked() {
@@ -33,7 +35,7 @@ const SellStar = {
     const error = this.blocked();
     if (error) { this.message = error; UI.toast(error, 'warn'); return; }
     if (World.gp.inventoryPending) { this.message = 'Wait for settled inventory state.'; UI.toast(this.message, 'warn'); return; }
-    this.run = { phase: 'walk-storage', at: now(), sent: false, pending: null, mine: [], sold: 0, round: 0, refused: new Set(), more: false, rev: null };
+    this.run = { phase: 'walk-storage', at: now(), sent: false, pending: null, mine: this.inBag().map(i => ({ slot: i.slot, ref: i.refObjId })), sold: 0, round: 0, refused: new Set(), more: false, rev: null };
     this.message = 'Selling Star gear from the warehouse.';
     Log.info('Sell Star: started.');
   },

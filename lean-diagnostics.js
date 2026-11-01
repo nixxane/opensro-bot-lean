@@ -172,7 +172,7 @@ const Diagnostics = {
   snapshot() {
     const gp = World.gp, c = Settings.profile, pet = Loot.pet(), social = gp?.social, matching = gp?.partyMatching;
     return {
-      action: this.main(), partyStatus: this.party(), petStatus: this.pet(), townStatus: this.town(), townDetail: this.townDetail(), townReason: this.townReason(),
+      action: this.main(), partyStatus: this.party(), petStatus: this.pet(), townStatus: this.town(), townDetail: this.townDetail(), townReason: this.townReason(), sellStarStatus: String(SellStar.message || '').slice(0, 200),
       navigationReady: !!Navigation.scene, navigationError: String(Navigation.error || '').slice(0, 80),
       buffGearStatus: BuffGear.cfg().buffSwap ? String(BuffGear.status()).slice(0, 600) : '', buffGearActive: !!BuffGear.run, buffGearRestoring: !!BuffGear.run?.restoring, buffGearMovePending: !!BuffGear.run?.pending, buffGearRecovery: !!BuffGear.recovery,
       alchemyActive: !!Alchemy.run, alchemyPending: !!Alchemy.pending, alchemyAttempts: this.number(Alchemy.result?.attempts),
