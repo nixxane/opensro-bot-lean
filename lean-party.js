@@ -148,11 +148,15 @@ const Party = {
     if (this.helperNearby()) this.helperSeenAt = now();
     return now() - this.helperSeenAt < 15000;
   },
-  reviveDelay() { return Settings.profile.party.acceptRes && this.helping() ? 20000 : 5000; },
+  reviveDelay() {
+    const wait = Math.min(600, Math.max(5, Number(Settings.profile.party.reviveWaitS) || 20)) * 1000;
+    return Settings.profile.party.acceptRes && this.helping() ? wait : 5000;
+  },
   // One plain sentence for the log when the character dies.
   waitNote() {
     if (!Settings.profile.party.acceptRes) return 'reviving in 5 s (Accept resurrection from party members is off).';
-    return this.reviveDelay() === 20000 ? 'waiting 20 s for a party member to resurrect before reviving.' : 'no party member in view, reviving in 5 s.';
+    const wait = this.reviveDelay();
+    return wait > 5000 ? `waiting ${Math.round(wait / 1000)} s for a party member to resurrect before reviving.` : 'no party member in view, reviving in 5 s.';
   },
   // Never revive while an offer is open or an acceptance was just sent.
   resBusy() { return !!World.gp?.social?.resurrection || now() - this.consentAt < 4000; },

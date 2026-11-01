@@ -286,7 +286,7 @@ When the pickup pet is ready but collects nothing, the status line says why, cou
 
 ## Waiting for a party resurrection
 
-With **Accept resurrection from party members** on, the bot waits 20 seconds after dying before it revives itself whenever a living party member is in view (seen in the last 15 seconds counts), so the member has time to resurrect it. Without a helper in view it revives after 5 seconds. The Activity log says which when the character dies, and an open resurrection offer is always answered first.
+With **Accept resurrection from party members** on, the bot waits **Wait for a party resurrection (s)** (20 seconds by default) after dying before it revives itself whenever a living party member is in view (seen in the last 15 seconds counts), so the member has time to resurrect it. Without a helper in view it revives after 5 seconds. The Activity log says which when the character dies, and an open resurrection offer is always answered first.
 
 ## A character that cannot move
 

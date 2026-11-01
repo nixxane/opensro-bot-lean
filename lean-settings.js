@@ -21,7 +21,7 @@ const DEFAULT_PROFILE = {
   pet: { attack: { on: false, recall: true, radius: 15, timeout: 3, resend: 5 } },
   scroll: { damageInc: false, damageAbs: false },
   mall: { on: false, budgetSilk: 0, hp: { on: false, low: 10, target: 1000 }, mp: { on: false, low: 10, target: 1000 }, damageInc: { on: false, low: 5, target: 20 }, damageAbs: { on: false, low: 5, target: 20 }, reverse: { on: false, low: 10, target: 50 } },
-  party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', leaveIfNotLeader: false, acceptNames: '', autoRes: false, acceptRes: false, resRadius: 300, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
+  party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', leaveIfNotLeader: false, acceptNames: '', autoRes: false, acceptRes: false, reviveWaitS: 20, resRadius: 300, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
     support: { enabled: false, whileStopped: false, range: 30, heal: { id: 0, group: 0, pct: 60, self: false }, group: { id: 0, group: 0, pct: 60, count: 2 }, buffs: [] } },
   wardrobe: { on: true, phantom: true, realAnim: true, hideAvatars: false,
     eq: {}, av: {}, pet: { atk: 0, pick: 0, mount: 0 }, presets: {}, undo: null },

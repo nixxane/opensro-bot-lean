@@ -3916,6 +3916,16 @@ test('with Accept resurrection on and a helper in view the bot waits before revi
   assert.equal(rebirths(t.f), 1, 'a dead helper cannot resurrect us');
   t = deathFixture('revive'); t.f.Settings.profile.party.acceptRes = false; t.die(); t.offer(); t.f.advance(6000); t.f.Controller.tick(); assert.equal(rebirths(t.f), 0, 'an open resurrection offer is never answered by reviving');
 });
+test('the wait for a party resurrection before reviving in town is configurable', () => {
+  const rebirths = f => f.commands.filter(c => c.kind === 'rebirth').length;
+  let t = deathFixture('revive'); t.f.Settings.profile.party.reviveWaitS = 120; t.die();
+  assert.match(t.f.Party.waitNote(), /waiting 120 s/);
+  t.f.advance(21000); t.f.Controller.tick(); assert.equal(rebirths(t.f), 0, 'past the default 20 s the configured window is still open');
+  t.f.advance(100000); t.f.Controller.tick(); assert.equal(rebirths(t.f), 1, 'at the configured wait the bot revives itself');
+  t = deathFixture('revive'); t.f.Settings.profile.party.reviveWaitS = 120; t.f.World.ents.delete(77); t.die();
+  assert.match(t.f.Party.waitNote(), /no party member in view/);
+  t.f.advance(6000); t.f.Controller.tick(); assert.equal(rebirths(t.f), 1, 'nobody around: the short 5 s wait is untouched');
+});
 test('auto mastery is off by default, ignores dead characters and pending training, and backs off after a refusal', () => {
   assert.equal(fixture().Settings.profile.mastery.enabled, false);
   let f = masteryFixture(); f.Settings.profile.mastery.enabled = false; f.Controller.tick(); assert.deepEqual(trains(f), []);
