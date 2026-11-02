@@ -6233,15 +6233,15 @@ const Loot = {
   soxLoadAt: 0,
   // Unknown until the item catalogue loads, so unconfirmed items are never taken.
   ensureCatalogue() {
-    if (Items.data.size || now() < this.soxLoadAt) return;
+    if (Items.filesLoaded || now() < this.soxLoadAt) return;
     this.soxLoadAt = now() + 30000; Items.ready().catch(() => {});
   },
   sox(e) {
     this.ensureCatalogue();
-    return Items.data.size ? Items.sox(e.refObjId) : 0;
+    return Items.filesLoaded || Items.filesMissing ? Items.sox(e.refObjId) : 0;
   },
   // "Don't pick up Star gear": Star equipment only; Moon and Sun still drop in. Unknown until the catalogue is loaded, so it waits.
-  starSkipped(e, P, tf) { return !!P.skipStar && ItemType.isEquipment(tf) && (this.sox(e) === 1 || !Items.data.size); },
+  starSkipped(e, P, tf) { return !!P.skipStar && ItemType.isEquipment(tf) && (this.sox(e) === 1 || !(Items.filesLoaded || Items.filesMissing)); },
   allowed(e) {
     if (!e || e.kind !== 'ground-item' || !this.owned(e)) return false;
     const P = Hunt.cfg().pickup, tf = e.groundItem.typeFlags ?? e.tidWord ?? 0;
@@ -7051,7 +7051,7 @@ const RepairHammer = {
   cfg() { return Settings.profile.potion.repairHammer; },
   // Known by its codename, or by its name when the catalogue is not loaded yet.
   hammer() {
-    if (!Items.data.size) Items.ready().catch(() => {});
+    if (!Items.filesLoaded && !Items.filesMissing) Items.ready().catch(() => {});
     return World.items().find(i => (i.quantity ?? 1) > 0 &&
       (/REPAIR_HAMMER/i.test(i.codename || Items.data.get(i.refObjId)?.code || '') || /repair hammer/i.test(i.name || Items.data.get(i.refObjId)?.name || '')));
   },
@@ -14748,7 +14748,7 @@ const Assets = {
   },
 };
 const Items = {
-  data: new Map(), pending: null,
+  data: new Map(), pending: null, filesLoaded: false, filesMissing: false,
   ready() {
     if (this.pending) return this.pending;
     this.pending = Promise.all([Assets.json('/assets/data/missionPresentation.json'), Assets.texts()]).then(([r, names]) => {
@@ -14759,7 +14759,8 @@ const Items = {
         while (!name && shortened.includes('_')) { shortened = shortened.slice(0, shortened.lastIndexOf('_')); name = names['SN_' + shortened]; }
         this.data.set(Number(id), { name: name || code, icon: v.iconDdjPath || '', code });
       }
-    }).catch(e => { this.pending = null; throw e; });
+      this.filesMissing = false; this.filesLoaded = true; this.wireApply();
+    }).catch(e => { this.pending = null; this.filesMissing = true; throw e; });
     return this.pending;
   },
   name(id) { return this.data.get(id)?.name || WdData.byId.get(id)?.code || '#' + id; },
@@ -17955,7 +17956,7 @@ const UI = {
   // so typing in the search box keeps its focus. 100 rows per page; bulk buttons apply to everything the filters show.
   itemFilter: { query: '', group: 'all', race: '', gender: '', kind: '', sox: '', degrees: new Set(), custom: false, page: 0 },
   drawItems() {
-    if (!Items.data.size) {
+    if (!Items.filesLoaded && !Items.filesMissing) {
       this.pane.append(this.group('Items', el('div', 'Loading the game\u2019s item list…', 'empty')));
       Items.ready().then(() => { if (this.is('Items')) this.draw(); }, () => { if (this.is('Items')) this.toast('The item list could not be loaded; try again in a moment.', 'warn'); });
       return;

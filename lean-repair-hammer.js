@@ -6,7 +6,7 @@ const RepairHammer = {
   cfg() { return Settings.profile.potion.repairHammer; },
   // Known by its codename, or by its name when the catalogue is not loaded yet.
   hammer() {
-    if (!Items.data.size) Items.ready().catch(() => {});
+    if (!Items.filesLoaded && !Items.filesMissing) Items.ready().catch(() => {});
     return World.items().find(i => (i.quantity ?? 1) > 0 &&
       (/REPAIR_HAMMER/i.test(i.codename || Items.data.get(i.refObjId)?.code || '') || /repair hammer/i.test(i.name || Items.data.get(i.refObjId)?.name || '')));
   },

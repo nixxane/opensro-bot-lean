@@ -1306,7 +1306,7 @@ const UI = {
   // so typing in the search box keeps its focus. 100 rows per page; bulk buttons apply to everything the filters show.
   itemFilter: { query: '', group: 'all', race: '', gender: '', kind: '', sox: '', degrees: new Set(), custom: false, page: 0 },
   drawItems() {
-    if (!Items.data.size) {
+    if (!Items.filesLoaded && !Items.filesMissing) {
       this.pane.append(this.group('Items', el('div', 'Loading the game\u2019s item list…', 'empty')));
       Items.ready().then(() => { if (this.is('Items')) this.draw(); }, () => { if (this.is('Items')) this.toast('The item list could not be loaded; try again in a moment.', 'warn'); });
       return;

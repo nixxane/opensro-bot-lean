@@ -21,7 +21,7 @@ const Assets = {
   },
 };
 const Items = {
-  data: new Map(), pending: null,
+  data: new Map(), pending: null, filesLoaded: false, filesMissing: false,
   ready() {
     if (this.pending) return this.pending;
     this.pending = Promise.all([Assets.json('/assets/data/missionPresentation.json'), Assets.texts()]).then(([r, names]) => {
@@ -32,7 +32,8 @@ const Items = {
         while (!name && shortened.includes('_')) { shortened = shortened.slice(0, shortened.lastIndexOf('_')); name = names['SN_' + shortened]; }
         this.data.set(Number(id), { name: name || code, icon: v.iconDdjPath || '', code });
       }
-    }).catch(e => { this.pending = null; throw e; });
+      this.filesMissing = false; this.filesLoaded = true; this.wireApply();
+    }).catch(e => { this.pending = null; this.filesMissing = true; throw e; });
     return this.pending;
   },
   name(id) { return this.data.get(id)?.name || WdData.byId.get(id)?.code || '#' + id; },
