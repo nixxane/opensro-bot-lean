@@ -111,6 +111,8 @@ const Loot = {
     this.ensureCatalogue();
     return Items.data.size ? Items.sox(e.refObjId) : 0;
   },
+  // "Don't pick up Star gear": Star equipment only; Moon and Sun still drop in. Unknown until the catalogue is loaded, so it waits.
+  starSkipped(e, P, tf) { return !!P.skipStar && ItemType.isEquipment(tf) && (this.sox(e) === 1 || !Items.data.size); },
   allowed(e) {
     if (!e || e.kind !== 'ground-item' || !this.owned(e)) return false;
     const P = Hunt.cfg().pickup, tf = e.groundItem.typeFlags ?? e.tidWord ?? 0;
@@ -120,7 +122,7 @@ const Loot = {
     if (rule && (rule.pick === 'no' || rule.act === 'drop')) return false;
     const gold = ItemType.isGold(tf);
     if (rule?.pick !== 'yes') {
-      if (splitList(P.exclude).some(s => name.includes(s))) return false;
+      if (splitList(P.exclude).some(s => name.includes(s)) || this.starSkipped(e, P, tf)) return false;
       const included = splitList(P.include).some(s => name.includes(s));
       // SoX-only narrows equipment to Star/Moon/Sun gear; every other category keeps its own switch.
       if (P.soxOnly && ItemType.isEquipment(tf)) { if (!this.sox(e)) return false; }
@@ -145,7 +147,7 @@ const Loot = {
     const tf = e.groundItem.typeFlags ?? e.tidWord ?? 0, name = (e.name || '').toLowerCase(), rule = ItemRules.get(e.refObjId);
     if (rule && (rule.pick === 'no' || rule.act === 'drop')) return 'rule';
     const included = splitList(P.include).some(s => name.includes(s));
-    const filtered = rule?.pick !== 'yes' && (splitList(P.exclude).some(s => name.includes(s)) ||
+    const filtered = rule?.pick !== 'yes' && (splitList(P.exclude).some(s => name.includes(s)) || this.starSkipped(e, P, tf) ||
       (P.soxOnly && ItemType.isEquipment(tf) ? !this.sox(e) : !included && !P[this.category(tf)]));
     if (filtered) return 'filter';
     if (this.collector(e) === 'pet') {
@@ -159,10 +161,11 @@ const Loot = {
   filterWhy(e) {
     const P = Hunt.cfg().pickup, tf = e.groundItem.typeFlags ?? e.tidWord ?? 0, name = (e.name || '').toLowerCase();
     if (splitList(P.exclude).some(s => name.includes(s))) return 'name';
+    if (this.starSkipped(e, P, tf)) return 'star';
     return P.soxOnly && ItemType.isEquipment(tf) ? 'sox' : this.category(tf);
   },
   filterLabel(key) {
-    return { name: 'excluded by name', sox: 'not Star/Moon/Sun gear (SoX only)', gold: 'gold', potions: 'potions', equipment: 'equipment', elixirs: 'elixirs',
+    return { name: 'excluded by name', sox: 'not Star/Moon/Sun gear (SoX only)', star: 'Star gear (skipped by choice)', gold: 'gold', potions: 'potions', equipment: 'equipment', elixirs: 'elixirs',
       powders: 'lucky powders', magicStones: 'magic stones', attrStones: 'attribute stones', alchemy: 'other alchemy items', others: 'other items' }[key] || key;
   },
   skip(e, reason, inventoryBound = false) {
