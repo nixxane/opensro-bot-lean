@@ -739,6 +739,7 @@ const UI = {
         this.check('Walking back may use teleports and ferries (beta; pays their fee)', () => H().travel !== false, v => H().travel = v),
         el('p', 'Beta: a long walk back is first checked against the game map, and teleports and ferries are used where walking cannot get there. If a route looks wrong, send the log.', 'muted'),
         this.check('Avoid other players’ targets', () => H().avoidKs, v => H().avoidKs = v),
+        this.select('Avoided monsters', () => [['all', 'All monsters'], ['minor', 'Normal & champion only']], () => H().avoidKsScope || 'all', v => H().avoidKsScope = v),
         this.number('Minimum mob level (0 = any)', () => H().levelMin, v => H().levelMin = v, 0, 140),
         this.number('Maximum mob level (0 = any)', () => H().levelMax, v => H().levelMax = v, 0, 140),
         this.text('Only these mobs', () => H().include, v => H().include = v),

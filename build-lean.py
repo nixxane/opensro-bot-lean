@@ -153,6 +153,25 @@ hunt = hunt[:hunt.index('  tick() {')] + hunt[hunt.index('  currentTarget() {'):
 hunt = hunt.replace("    this.state = 'start';", "    Loot.reset();\n    this.state = 'start';")
 hunt = hunt.replace('    this.running = false;', '    Loot.suspend();\n    this.running = false;')
 hunt = hunt.replace('if (Restock.trip && World.inWorld() && !World.isDead()) Cmd.move(World.pose());', 'if (World.inWorld() && !World.isDead()) Cmd.move(World.pose());')
+# Anti-KS with a scope: all monsters, or only normal and champion ones (a high-damage character still
+# takes party/giant/elite/titan/unique monsters another player is fighting). One helper owns the
+# choice, so the quest preference and the diagnostics count the same way as the hunt itself.
+ks_old = "        if (H.avoidKs && sim - (World.hitByOthers.get(e.gid) ?? -Infinity) < 8000 && sim - (World.hitByUs.get(e.gid) ?? -Infinity) > 8000) continue;\n"
+assert hunt.count(ks_old) == 1
+hunt = hunt.replace(ks_old, "        if (this.ksAvoids(e, sim)) continue;\n")
+ks_method_old = "  chooseTarget() {"
+assert hunt.count(ks_method_old) == 1
+hunt = hunt.replace(ks_method_old, """  ksAvoids(e, sim = World.simNow() ?? 0) {
+    const H = this.cfg();
+    if (!H.avoidKs) return false;
+    if (H.avoidKsScope === 'minor') {
+      const cls = monsterClass(e);
+      if (cls !== 'normal' && cls !== 'champion') return false;
+    }
+    return sim - (World.hitByOthers.get(e.gid) ?? -Infinity) < 8000 && sim - (World.hitByUs.get(e.gid) ?? -Infinity) > 8000;
+  },
+
+  chooseTarget() {""")
 restock = (base / 'restock.js').read_text(encoding='utf-8').split('  build() {')[0] + '};'
 restock = restock.replace("    if (distance < t.best - 3) { t.best = distance; t.progressAt = now(); }", "    if (!t.lastPose || dist2D(t.lastPose, World.pose()) > 3) { t.lastPose = { ...World.pose() }; t.progressAt = now(); }")
 restock = restock.replace("    if (World.isSitting()) {", "    const move = Navigation.next(t, dest, true);\n    if (move.error && !move.waiting) return this.fail(move.error);\n    if (move.waiting) return false;\n    if (World.isSitting()) {")

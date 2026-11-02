@@ -124,7 +124,7 @@ const Diagnostics = {
       else if (H.levelMin && level < H.levelMin || H.levelMax && level > H.levelMax) why.level++;
       else if (include.length && !include.some(s => name.includes(s)) || exclude.some(s => name.includes(s))) why.name++;
       else if (!Hunt.inArea(e) || dist2D(pose, e) > H.chase) why.far++;
-      else if (H.avoidKs && sim - (World.hitByOthers.get(e.gid) ?? -Infinity) < 8000 && sim - (World.hitByUs.get(e.gid) ?? -Infinity) > 8000) why.others++;
+      else if (Hunt.ksAvoids(e, sim)) why.others++;
     }
     if (!seen) return 'No monsters in view. Move to a place with monsters and press "Set hunting spot here".';
     const parts = [
