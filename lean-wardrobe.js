@@ -37,6 +37,49 @@ const Items = {
   },
   name(id) { return this.data.get(id)?.name || WdData.byId.get(id)?.code || '#' + id; },
   iconDdj(id) { return this.data.get(id)?.icon || ''; },
+  // Server-fed catalogue rows. The live site serves none of the game's data JSONs, so the file catalogue above can
+  // stay empty there; every item the wire shows carries its name, icon and tooltip key instead, and the codename
+  // follows from that key (SN_ITEM_..._TT_DESC → ITEM_...). Rows seen that way fill the catalogue for rules, names
+  // and sox checks, and stay cached across sessions. The server's own values win over file rows.
+  wireRows: new Map(), wireLoaded: false,
+  wireApply() {
+    for (const [id, row] of this.wireRows) {
+      if (!row?.name) continue;
+      const cur = this.data.get(id);
+      if (cur && cur.name === row.name && (cur.code || '') === (row.code || '') && (cur.icon || '') === (row.icon || '')) continue;
+      this.data.set(id, { name: row.name, code: row.code || cur?.code || '', icon: row.icon || cur?.icon || '' });
+    }
+  },
+  wireLearn(items) {
+    let changed = false;
+    for (const it of items || []) {
+      if (!it || !isNum(it.refObjId) || typeof it.name !== 'string' || !it.name) continue;
+      const key = /^SN_(.+)_TT_DESC$/.exec(it.tooltip?.descriptionSymbol || '');
+      const row = { name: it.name, code: key ? key[1] : '', icon: it.icon || '' };
+      const old = this.wireRows.get(it.refObjId);
+      if (old && old.name === row.name && old.code === row.code && old.icon === row.icon) continue;
+      this.wireRows.set(it.refObjId, row);
+      changed = true;
+    }
+    if (changed) { this.wireApply(); this.wireSave(); }
+    return changed;
+  },
+  wireSave() {
+    try {
+      const out = {}; let n = 0;
+      for (const [id, row] of this.wireRows) { out[id] = row; if (++n >= 4000) break; }
+      W.localStorage.setItem('sroLean:wirecat', JSON.stringify(out));
+    } catch (e) { /* a full store only slows the cache; nothing is lost */ }
+  },
+  wireLoad() {
+    if (this.wireLoaded) return;
+    this.wireLoaded = true;
+    try {
+      const saved = JSON.parse(W.localStorage.getItem('sroLean:wirecat') || '{}');
+      for (const [id, row] of Object.entries(saved)) if (row?.name) this.wireRows.set(Number(id), row);
+    } catch (e) {}
+    this.wireApply();
+  },
   // 0 none | 1 Star | 2 Moon | 3 Sun, from the codename rule _[ABC]_RARE (also MAGIC/LEGEND/MYTH, HONOR).
   // Real inventory/pet items carry tooltip rarity (2 = seal tiers) and a Star/Moon/Sun class; otherwise use the codename rule.
   soxOf(item) {

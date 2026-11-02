@@ -906,6 +906,27 @@ test('item codenames give race, gender, degree, type and the filters', () => {
   assert.deepEqual(ids({ query: 'potion' }), [8]);
   f.ItemRules.set([502], { act: 'sell' }); assert.deepEqual(ids({ custom: true }), [502], 'custom: only items with a rule');
 });
+test('items seen on the wire fill the catalogue when the files are not served', () => {
+  const f = fixture(), gp = f.World.gp;
+  const potion = { slot: 3, refObjId: 8, quantity: 5, name: 'HP recovery potion (X-large)', icon: 'item\\etc\\hp_potion_05.ddj',
+    tooltip: { fields: {}, descriptionSymbol: 'SN_ITEM_ETC_HP_POTION_05_TT_DESC' } };
+  const star = { slot: 4, refObjId: 12041, quantity: 1, name: 'Scorpio Blaze Diadem',
+    tooltip: { fields: {}, descriptionSymbol: 'SN_ITEM_EU_CLOTHES_13_CA_A_RARE_TT_DESC' } };
+  f.World.applyGameplay({ ...gp, inventory: [potion, star] });
+  assert.equal(f.Items.name(8), 'HP recovery potion (X-large)', 'the server name is used');
+  assert.equal(f.Items.iconDdj(8), 'item\\etc\\hp_potion_05.ddj', 'and its icon path');
+  assert.equal(f.ItemRules.info(8).group, 'potion', 'the tooltip key gives the codename the filters read');
+  assert.equal(f.ItemRules.info(12041).sox, 1, 'an _A_RARE tooltip key is Star');
+  // A merchant offer carries only a name; it is still worth caching.
+  f.advance(3000);
+  f.World.applyGameplay({ ...f.World.gp, shop: { npc: 7, offers: [{ refObjId: 57, name: 'Universal Pill (large)', price: '150' }] } });
+  assert.equal(f.Items.name(57), 'Universal Pill (large)', 'shop offers are cached by name');
+  // Unchanged rows are not rewritten, and what one session saw the next one keeps.
+  assert.equal(f.Items.wireLearn([potion]), false, 'the same row again changes nothing');
+  f.Items.wireRows.clear(); f.Items.data.clear(); f.Items.wireLoaded = false;
+  f.Items.wireLoad();
+  assert.equal(f.Items.name(8), 'HP recovery potion (X-large)', 'rows reload from the store with the files still unserved');
+});
 test('stop and manual control prevent further automation', () => {
   const f = fixture(); f.Hunt.start(); f.drop(); f.Hunt.tick(); f.Hunt.stop();
   assert.equal(f.Loot.active, null); assert.equal(f.commands.at(-1).kind, 'move');

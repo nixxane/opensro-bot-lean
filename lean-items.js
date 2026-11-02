@@ -122,6 +122,23 @@ const ItemRules = {
     }
     return out.sort((a, b) => a.id - b.id);
   },
+  // Feed the catalogue from what the character actually sees: worn and bagged items, the pet's bag, warehouse rows,
+  // merchant offers and ground drops all arrive with their name (and most with icon and tooltip key) straight from
+  // the server. On the live site this is the only catalogue source; wherever the files load, the two agree.
+  wireNextAt: 0,
+  learnWorld() {
+    if (now() < this.wireNextAt) return;
+    this.wireNextAt = now() + 3000;
+    const gp = World.gp;
+    if (!gp) return;
+    const seen = [];
+    if (Array.isArray(gp.inventory)) seen.push(...gp.inventory);
+    for (const rec of gp.cosRecords || []) if (Array.isArray(rec.inventory)) seen.push(...rec.inventory);
+    if (Array.isArray(gp.storage?.items)) seen.push(...gp.storage.items);
+    if (Array.isArray(gp.shop?.offers)) seen.push(...gp.shop.offers);
+    for (const e of World.ents.values()) if (e.kind === 'ground-item') seen.push(e);
+    if (Items.wireLearn(seen)) this.infos.clear();
+  },
   // Keep free slots even between the bag and the pickup pet by moving items that have a Sell or Store rule to the side with
   // more room, one at a time, while hunting and outside town service and open windows. Needs two free slots on the side
   // that receives, so loot keeps flowing. Protected gear, supplies the trip needs and worn gear never move.
@@ -177,3 +194,7 @@ const ItemRules = {
     return false;
   },
 };
+
+// The wire catalogue starts with what earlier sessions saw and grows with every gameplay batch.
+Items.wireLoad();
+bus.on('gameplay', () => ItemRules.learnWorld());
