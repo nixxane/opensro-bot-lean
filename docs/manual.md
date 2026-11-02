@@ -51,6 +51,15 @@ While hunting, the primary weapon is the combat weapon. When something else is w
 
 Under **Combat → Berserk when the gauge is full, on**, tick the monster kinds berserk is spent on (only Giants by default; it fires once the gauge is full, so the gauge waits for a ticked kind). **Also berserk when this many monsters attack at once** (0 = off) fires a full gauge whatever the monsters' kind once that many living monsters attack at the same time — the defensive panic button of a luring tank or an over-pulled spot; it also works while luring, where no target kind is ever consulted.
 
+## Wearing better gear
+
+**Loot → Bag and pet space → Wear better gear**: with **On town trips, wear carried gear with better stats; store the replaced piece** on (off by default), the town trip — while the warehouse is open — wears a carried equipment piece whose real stats beat the worn one in the same slot, and deposits the piece it replaces in the warehouse (it is never sold, even if bag selling is on).
+
+- Real stats means what the tooltip shows: each stat rolls inside its own min~max range (the roll quality, the "+x %"), plus adds its share, and known blues (build stats, hit ratio, HP) add a bounded nudge — so a well-rolled ordinary piece can beat a low-rolled Seal one.
+- Weapons are compared on the dominant attack of the worn weapon, so a physical build never swaps to a magical blade. Armour and shields compare physical + magical defence; accessories compare their reinforcement. A swap needs a 2 % edge, so near-ties never churn.
+- Rings and earrings have two slots: a better piece replaces the weaker of the two worn ones.
+- Never touched: the chosen primary/secondary weapon and shield, buff-set gear, the alchemy item, items with a Keep rule, pieces whose tooltip is incomplete or whose level requirement is unknown or unmet, and zero-durability pieces. A swap the game refuses is skipped for the session; nothing here can stop the town trip.
+
 ## Vigor and pet potions
 
 Under **Supplies → Automatic potion use**:

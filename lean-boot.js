@@ -43,7 +43,7 @@ function boot() {
     const key = name ? 'profile:' + name : 'profile:default';
     if (key !== Settings.profileKey) { Town.lastScrollPoint = null; Town.deathPoint = null; stopAll(); Settings.useCharacter(name); }
   });
-  bus.on('profile', () => { PetPotion.reset(); AutoMastery.reset(); StatPoints.reset(); Trace.reset(); BuffGear.reset(); Town.lastScrollPoint = null; Town.deathPoint = null; SpeedScroll.reset(); ScrollBuff.reset(); MallBuyer.reset(); MallBuyer.unpoison(); RepairHammer.reset(); Party.reset(); Resurrect.reset(); Quest.reset(); stopAll(); Restock.cancelRecording(); Restock.unbuyable.clear(); Loot.reset(); Wardrobe.applyNow(); UI.draw(); });
+  bus.on('profile', () => { PetPotion.reset(); AutoMastery.reset(); StatPoints.reset(); Trace.reset(); BuffGear.reset(); Equip.reset(); Town.lastScrollPoint = null; Town.deathPoint = null; SpeedScroll.reset(); ScrollBuff.reset(); MallBuyer.reset(); MallBuyer.unpoison(); RepairHammer.reset(); Party.reset(); Resurrect.reset(); Quest.reset(); stopAll(); Restock.cancelRecording(); Restock.unbuyable.clear(); Loot.reset(); Wardrobe.applyNow(); UI.draw(); });
   bus.on('phase', phase => {
     if (phase !== 'world') {
       BuffGear.interrupt('World transition interrupted buff swaps.', true);

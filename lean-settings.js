@@ -2,7 +2,7 @@ const DISCORD_URL = 'https://discord.gg/Y5H5ZyfQ7u';
 const NOTES_URL = 'https://nixxane.github.io/opensro-bot-lean-site/#patch-notes';
 const CLASS_KEYS = ['normal', 'champion', 'giant', 'party', 'elite', 'unique'];
 const DEFAULT_PROFILE = {
-  items: { rules: {}, balance: false, gear: { primaryWeapon: null, secondaryWeapon: null, shield: null } },
+  items: { rules: {}, balance: false, autoEquip: false, gear: { primaryWeapon: null, secondaryWeapon: null, shield: null } },
   stall: { title: '', greeting: '', network: true, closeWhenEmpty: true, prices: {} },
   alchemy: { target: 3, limit: 20, elixir: 0, powder: false, use: { luck: false, steady: false, immortal: false, astral: false }, stones: { luck: 1, steady: 1, immortal: 1, astral: 1 }, stoneLimit: 0,
     // The plus from which each helper is used: a failure from +5 up can destroy the item (Steady and Immortal matter from there),

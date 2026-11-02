@@ -258,6 +258,8 @@ const Town = {
   sellable(item) {
     // itemdata CanSell 0 (quest and event items): the merchant refuses the sale with inventory code 2.
     if (item.tooltip?.fields?.canSell === 0 || ItemRules.guarded(item)) return false;
+    // A piece auto-equip replaced waits in the bag for its warehouse deposit; it is never sold.
+    if (Equip.replaced(item)) return false;
     // Pet summon scrolls and flutes (TID1 3, TID2 2): the pet itself. The merchant buys every one of them, and players
     // keep other pets' scrolls in the pickup pet, so they are never sold, not even with a Sell rule.
     if (!Number.isInteger(item.typeFlags) || (item.typeFlags & 124) === 76) return false;
@@ -598,6 +600,8 @@ const Town = {
     if (!st || st.guild || st.phase !== 'open' || gp.target !== st.npc) return this.fail('Warehouse closed or selection changed.');
     const pet = Loot.pet();
     if (t.petRef && (!pet || pet.rec.refObjId !== t.petRef)) return this.fail('Pickup pet is missing or changed.');
+    // Better carried gear is worn here, while the warehouse is open, so the replaced piece can be stored at once.
+    if (Equip.step(t)) return;
     if (!this.pendingDone(p => {
       if (p.kind === 'pet') return !pet.rec.inventory.some(i => i.slot === p.source && i.refObjId === p.ref) && World.items().some(i => i.slot === p.destination && i.refObjId === p.ref && (i.quantity ?? 1) === p.quantity);
       return !World.items().some(i => i.slot === p.source && i.refObjId === p.ref) && st.items.some(i => i.slot === p.destination && i.refObjId === p.ref && (i.quantity ?? 1) === p.quantity);
@@ -605,7 +609,7 @@ const Town = {
     const bagItem = t.staged ? World.items().find(i => i.slot === t.staged.slot && i.refObjId === t.staged.ref) : null;
     if (t.staged && !bagItem) return this.fail('Staged pet item changed unexpectedly.');
     // Gear the character picked up is deposited straight from the bag, then pet loot is staged through it.
-    const bagSox = bagItem ? null : World.items().find(i => this.depositItem(i, true) || this.stone(i));
+    const bagSox = bagItem ? null : World.items().find(i => this.depositItem(i, true) || this.stone(i) || t.equippedOut?.includes(BuffGear.key(i)));
     const direct = bagItem || bagSox;
     const item = direct || pet?.rec.inventory.find(i => this.eligible(i));
     if (!item) {
