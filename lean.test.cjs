@@ -3,7 +3,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(__dirname + '/bot.lean.user.js', 'utf8');
 const isolated = source.slice(0, source.lastIndexOf('installWorkerHook();')) +
-  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap};\n})();';
+  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap};\n})();';
 function fixture(document) {
   let time = 100000;
   const storage = new Map(), commands = [], notices = [], intervals = [], timers = [];
@@ -547,6 +547,33 @@ test('WalkBack.startTo walks to any point, reports arrival inside the wider radi
   f.WalkBack.startTo(dest, { label: 'x', onFail: r => { failed = r; } }); f.Manual.lastAt = 123456; f.WalkBack.tick();
   assert.match(failed, /Manual control/); assert.equal(f.WalkBack.active, null);
   assert.equal(f.WalkBack.startTo({ regionId: 1, x: 1, y: 0, z: 1 }, { onFail: r => { failed = r; } }) !== undefined, true);
+});
+test('self buffs can be kept up while walking back; hunting-only ones wait for hunting', () => {
+  const f = fixture();
+  f.World.rebuildCatalog([
+    { id: 2004, group: 904, level: 1, name: 'Swift song', targetRequired: false, targets: 1, durationMs: 600000 },
+    { id: 2005, group: 905, level: 1, name: 'Hunt chant', targetRequired: false, targets: 1, durationMs: 600000 },
+  ]);
+  f.World.applyGameplay({ ...f.World.gp, skills: [2004, 2005] });
+  f.Settings.profile.macro.buffs = [
+    { id: 2004, group: 904, enabled: true, mode: 'walk', refreshS: 3 },
+    { id: 2005, group: 905, enabled: true, mode: 'hunt', refreshS: 3 },
+    { id: 2006, group: 906, enabled: true, refreshS: 3 },
+  ];
+  f.advance(600000);
+  f.WalkBack.startTo({ regionId: 1, x: 1000, y: 0, z: 100 }, { label: 'the far stone' });
+  f.WalkBack.tick();
+  assert.deepEqual(f.commands.filter(c => c.kind === 'skill').map(c => c.skillId), [2004],
+    'only the walk-back buff is cast while walking, whatever the old entry lacks');
+  assert.equal(f.WalkBack.active !== null, true, 'the walk itself is untouched');
+  assert.ok(f.commands.some(c => c.kind === 'move'), 'the walk keeps sending movement');
+  // While hunting every enabled buff is kept up: the worn walk-back buff waits for its refresh, the hunting one casts.
+  f.commands.length = 0;
+  f.World.gp.buffSlots = [{ state: 'active', effect: { gid: 1, skill: 2004, remainingMs: 600000, receivedAtMs: f.World.simNow() } }];
+  f.advance(2000);
+  assert.equal(f.Combat.buffs(true), true);
+  assert.deepEqual(f.commands.filter(c => c.kind === 'skill').map(c => c.skillId), [2005],
+    'the hunting buff casts while hunting; the worn walk-back buff is not re-cast');
 });
 function mapFixture() {
   const f = fixture(), map = f.LeanMap;
@@ -2539,6 +2566,28 @@ test('Attack monsters off also keeps luring from starting fights', () => {
   f.Settings.profile.hunt.attack = false; idleFor(f, 1000); assert.equal(lured, 0);
   f.Settings.profile.hunt.attack = true; idleFor(f, 300); assert.ok(lured > 0);
 });
+test('the lure can stop when other players come near, and after a chosen number of pulls', () => {
+  const f = fixture(); f.Hunt.start();
+  const c = f.Settings.profile.lure;
+  c.enabled = true; c.points = [{ regionId: 1, x: 150, y: 0, z: 100 }];
+  c.stopOnPlayers = 2;
+  f.World.ents.set(50, { gid: 50, kind: 'player', name: 'Stranger', regionId: 1, x: 200, y: 0, z: 100 });
+  f.Lure.tick(); assert.equal(f.Hunt.running, true, 'the character itself and one stranger are below the threshold of two');
+  f.World.gp.social = { members: [{ name: 'Stranger' }] };
+  f.World.ents.set(51, { gid: 51, kind: 'player', name: 'Party mate', regionId: 1, x: 150, y: 0, z: 100 });
+  f.Lure.tick(); assert.equal(f.Hunt.running, true, 'the party member within 30 m does not count');
+  f.World.gp.social = { members: [{ name: 'Party mate' }] };
+  f.World.ents.set(52, { gid: 52, kind: 'player', name: 'Stranger 2', regionId: 1, x: 250, y: 0, z: 100 });
+  f.Lure.tick(); assert.equal(f.Hunt.running, false, 'two strangers within 30 m stop the lure');
+  assert.match(f.Lure.message, /2 players within 30 m/);
+  const g = fixture(); g.Hunt.start();
+  const gc = g.Settings.profile.lure;
+  gc.enabled = true; gc.points = [{ regionId: 1, x: 150, y: 0, z: 100 }]; gc.stopAfter = 1;
+  g.Lure.tick(); assert.equal(g.Hunt.running, true, 'nothing pulled yet: the pull budget is not spent');
+  g.Lure.pulled = true; g.Lure.next(); assert.equal(g.Lure.pulls, 1, 'a completed pull counts once');
+  g.Lure.tick(); assert.equal(g.Hunt.running, false, 'the pull budget stops the lure');
+  assert.match(g.Lure.message, /1 pulls? done/);
+});
 test('anti-stuck drops the target, then walks back, then stops after the configured recoveries', () => {
   const f = fixture(); f.Hunt.start(); idleFor(f, 1000);
   assert.equal(f.Hunt.state, 'search');
@@ -4436,6 +4485,26 @@ test('party members and their pets do not make a monster another player\'s targe
   f.Hunt.running = true; f.Hunt.state = 'search'; f.World.hitByOthers.clear(); cast(5);
   assert.equal(f.Hunt.chooseTarget()?.gid, 30, 'the monster the party is fighting can be chosen');
 });
+test('the anti-KS scope can spare every monster but normal and champion', () => {
+  const f = fixture();
+  f.Settings.profile.hunt.classes.party = true; f.Settings.profile.hunt.classes.elite = true;
+  const mob = (gid, rarity, aux = 0) => f.World.ents.set(gid, { gid, kind: 'monster', name: 'Mob' + gid, regionId: 1, x: 100 + gid, y: 0, z: 100, rarity, rarityAuxIcon: aux, level: 5, attackFlags: 16, appearanceState: [0] }).get(gid);
+  mob(30, 0); mob(31, 1); mob(32, 4); mob(33, 0, 1); mob(34, 6);
+  for (const gid of [30, 31, 32, 33, 34]) f.World.hitByOthers.set(gid, f.World.simNow());
+  f.Hunt.running = true; f.Hunt.state = 'search';
+  assert.equal(f.Hunt.chooseTarget(), null, 'the default scope skips every monster another player fights');
+  f.Settings.profile.hunt.avoidKsScope = 'minor';
+  assert.equal(f.Hunt.chooseTarget()?.gid, 32, 'the giant is taken even while someone else fights it');
+  f.World.ents.delete(32);
+  assert.equal(f.Hunt.chooseTarget()?.gid, 33, 'a party monster too');
+  f.World.ents.delete(33);
+  assert.equal(f.Hunt.chooseTarget()?.gid, 34, 'an elite too');
+  f.World.ents.delete(34);
+  assert.equal(f.Hunt.chooseTarget(), null, 'normal and champion monsters stay skipped');
+  assert.match(f.Diagnostics.noTarget(), /2: another player is fighting it/, 'the skipped count still explains it');
+  f.Settings.profile.hunt.avoidKs = false;
+  assert.equal(f.Hunt.chooseTarget()?.gid, 30, 'the switch off still disables the filter entirely');
+});
 test('the imbue is renewed as it runs out, ahead of skills and normal attacks', () => {
   const setup = (change = {}) => {
     const f = combatFixture();
@@ -4566,6 +4635,40 @@ test('Berserk fires only on ticked classes, with a full gauge', () => {
   f.advance(2000); f.World.berserkGauge = 4; assert.equal(f.Combat.berserk('giant'), false);
   f.World.berserkGauge = 5; f.Settings.profile.macro.berserkClasses.champion = true; assert.equal(f.Combat.berserk('champion'), true);
   f.advance(2000); f.Settings.profile.macro.berserkClasses.giant = false; assert.equal(f.Combat.berserk('giant'), false);
+});
+test('cornered berserk: a full gauge fires when enough living monsters attack at once, whatever their class', () => {
+  const f = fixture(), kinds = () => f.commands.filter(c => c.kind === 'berserk').length;
+  const mob = (gid, alive = true) => ({ gid, kind: 'monster', rarity: 0, x: 100, y: 0, z: 100, appearanceState: alive ? [0] : [2, 0, 0] });
+  const attack = (gid, alive = true) => { f.World.ents.set(gid, mob(gid, alive)); f.World.attackers.set(gid, f.World.simNow()); };
+  f.Settings.profile.macro.berserkCornered = 3;
+  f.Hunt.start();
+  f.World.berserkGauge = 5;
+  attack(30); attack(31);
+  assert.equal(f.Combat.corneredBerserk(), false, 'two attackers are below the threshold of three');
+  attack(32);
+  assert.equal(f.Combat.corneredBerserk(), true, 'three living attackers fire it whatever their class');
+  assert.equal(kinds(), 1);
+  f.advance(2000); f.World.berserkGauge = 4;
+  assert.equal(f.Combat.corneredBerserk(), false, 'an empty gauge never fires');
+  f.World.berserkGauge = 5; f.World.ents.get(1).appearanceState = [0, 0, 1];
+  assert.equal(f.Combat.corneredBerserk(), false, 'already in berserk form');
+  f.World.ents.get(1).appearanceState = [0, 0, 0];
+  f.advance(6000);
+  assert.equal(f.Combat.corneredBerserk(), false, 'old attacks expire');
+  attack(33, false);
+  assert.equal(f.Combat.corneredBerserk(), false, 'dead attackers do not count');
+  const g = fixture(); g.Hunt.start(); g.World.berserkGauge = 5;
+  for (const gid of [40, 41, 42]) { g.World.ents.set(gid, mob(gid)); g.World.attackers.set(gid, g.World.simNow()); }
+  assert.equal(g.Settings.profile.macro.berserkCornered, 0, 'off by default');
+  assert.equal(g.Combat.corneredBerserk(), false);
+  // The hunt tick fires it before luring, where no target class is ever consulted.
+  const h = fixture(); h.Settings.profile.macro.berserkCornered = 2; h.World.berserkGauge = 5;
+  h.Settings.profile.lure.enabled = true; h.Settings.profile.lure.points = [{ regionId: 1, x: 130, y: 0, z: 100 }];
+  h.Hunt.start();
+  for (const gid of [50, 51]) { h.World.ents.set(gid, mob(gid)); h.World.attackers.set(gid, h.World.simNow()); }
+  const before = h.commands.filter(c => c.kind === 'berserk').length;
+  h.Controller.tick();
+  assert.equal(h.commands.filter(c => c.kind === 'berserk').length, before + 1, 'the hunt tick fires the cornered berserk before luring');
 });
 test('Berserk on party Giants follows its own switch', () => {
   const f = fixture(), kinds = () => f.commands.filter(c => c.kind === 'berserk').length, B = f.Settings.profile.macro.berserkClasses;
@@ -4954,6 +5057,170 @@ test('town keeps sealed equipment and unknown rarity while allowing plus and blu
   }
 });
 
+test('the town trip wears carried armour with better real stats and stores the replaced piece', () => {
+  const f = townFixture(), gp = f.World.gp;
+  f.pet.inventory = [];
+  f.Settings.profile.items.autoEquip = true;
+  gp.progression = { ...(gp.progression || {}), level: 30, experience: '100' };
+  const fields = (pdHi, mdHi) => ({ canRepair: 1, canSell: 1, reqLevelType1: 1, requiredLevel: 30,
+    varianceFloatMin1c8: 10, varianceFloatMax1cc: pdHi, varianceFloatPerPlus1d0: 0,
+    varianceFloatMin1f4: 8, varianceFloatMax1f8: mdHi, varianceFloatPerPlus1fc: 0 });
+  const rolls = String((31n << 15n) | (31n << 20n)); // perfect defence rolls (stat indexes 3 and 4)
+  const piece = (slot, ref, pd, md) => ({ slot, refObjId: ref, typeFlags: 44 | (2 << 7), quantity: 1, plus: 0, magic: [], variance: rolls, tooltip: { fields: fields(pd, md) } });
+  gp.inventory.push(piece(2, 800, 20, 16), piece(16, 801, 30, 24), piece(17, 802, 12, 10));
+  f.Town.begin(); f.Town.enter('store'); gp.storage = { npc: 60, phase: 'open', capacity: 30, items: [] }; gp.target = 60;
+  const stored = [];
+  for (let n = 0; n < 12 && f.Town.trip?.phase === 'store'; n++) {
+    f.advance(1000); f.Town.store();
+    const c = f.commands.at(-1);
+    if (c?.kind === 'inventory-move' && c.source === 16) {
+      const candidate = gp.inventory.find(i => i.slot === 16), worn = gp.inventory.find(i => i.slot === 2);
+      candidate.slot = 2; worn.slot = 16; // the game swaps the two slots
+    } else if (c?.kind === 'storage-move' && f.Town.trip?.pending?.kind === 'store') {
+      const i = gp.inventory.find(x => x.slot === c.move.source);
+      stored.push(i.refObjId); gp.storage.items.push({ ...i, slot: c.move.destination });
+      gp.inventory = gp.inventory.filter(x => x.slot !== c.move.source);
+    }
+    f.advance(600); f.Town.store();
+  }
+  assert.equal(f.commands.filter(c => c.kind === 'inventory-move').length, 1, 'only the clearly better piece is worn');
+  assert.equal(gp.inventory.find(i => i.slot === 2)?.refObjId, 801, 'the better piece is worn');
+  assert.deepEqual(stored, [800], 'the replaced piece is deposited');
+  assert.ok(gp.inventory.some(i => i.refObjId === 802), 'the worse piece stays in the bag');
+  assert.equal(f.Equip.replaced({ ...gp.storage.items[0] }), true, 'the replaced piece is marked never-sell');
+  assert.equal(f.Town.sellable({ ...gp.storage.items[0], tooltip: { fields: { canSell: 1 } } }), false, 'not even with bag selling on');
+  assert.equal(f.Town.trip.phase, 'close-storage');
+  const off = townFixture(); off.Settings.profile.items.autoEquip = false; off.pet.inventory = [];
+  off.World.gp.inventory.push(piece(16, 801, 30, 24));
+  off.Town.begin(); off.Town.enter('store'); off.World.gp.storage = { npc: 60, phase: 'open', capacity: 30, items: [] }; off.World.gp.target = 60;
+  off.Town.store();
+  assert.equal(off.commands.some(c => c.kind === 'inventory-move'), false, 'off by default nothing is worn');
+});
+
+test('no equip move is sent while a warehouse deposit is still unconfirmed', () => {
+  const f = townFixture(), gp = f.World.gp;
+  f.pet.inventory = [];
+  f.Settings.profile.items.autoEquip = true;
+  gp.progression = { ...(gp.progression || {}), level: 30, experience: '100' };
+  const fields = (pdHi, mdHi) => ({ canRepair: 1, canSell: 1, reqLevelType1: 1, requiredLevel: 30,
+    varianceFloatMin1c8: 10, varianceFloatMax1cc: pdHi, varianceFloatPerPlus1d0: 0,
+    varianceFloatMin1f4: 8, varianceFloatMax1f8: mdHi, varianceFloatPerPlus1fc: 0 });
+  const rolls = String((31n << 15n) | (31n << 20n));
+  const piece = (slot, ref, pd, md, family = 2) => ({ slot, refObjId: ref, typeFlags: 44 | (family << 7), quantity: 1, plus: 0, magic: [], variance: rolls, tooltip: { fields: fields(pd, md) } });
+  gp.inventory.push(piece(2, 800, 20, 16), piece(16, 801, 30, 24), piece(17, 803, 40, 30),
+    piece(3, 810, 20, 16, 9), piece(18, 811, 30, 24, 9));
+  f.Town.begin(); f.Town.enter('store'); gp.storage = { npc: 60, phase: 'open', capacity: 30, items: [] }; gp.target = 60;
+  const moves = () => f.commands.filter(c => c.kind === 'inventory-move').length;
+  const apply = c => { const a = gp.inventory.find(i => i.slot === c.source), b = gp.inventory.find(i => i.slot === c.destination); a.slot = c.destination; b.slot = c.source; };
+  f.Town.store(); assert.equal(moves(), 1, 'the best piece is worn first');
+  apply(f.commands.find(c => c.kind === 'inventory-move'));
+  f.advance(1000); f.Town.store(); assert.equal(f.Town.trip.pending, null, 'the swap is confirmed');
+  // The second family would swap now, but a busy game inventory admits no new move.
+  gp.inventoryPending = true; f.advance(600); f.Town.store();
+  assert.equal(moves(), 1, 'a busy game inventory blocks the next swap');
+  gp.inventoryPending = false; f.advance(1000); f.Town.store();
+  assert.equal(moves(), 2, 'the second family swaps once the inventory settles');
+  apply(f.commands.filter(c => c.kind === 'inventory-move')[1]);
+  f.advance(1000); f.Town.store(); assert.equal(f.Town.trip.pending, null, 'the second swap is confirmed');
+  // A warehouse deposit still in flight owns the trip: a further swap candidate waits for it.
+  f.Town.trip.pending = { kind: 'store', source: 99, destination: 5, ref: 800, quantity: 1, at: f.Town.trip.started };
+  gp.inventory.push(piece(19, 812, 60, 50, 9));
+  f.advance(600); f.Town.store();
+  assert.equal(moves(), 2, 'the unconfirmed deposit blocks the next swap');
+  assert.equal(f.Town.trip.pending?.kind, 'store', 'the deposit pending is untouched');
+});
+
+test('a same-item swap with a better roll is confirmed by the slot key, never by the item number', () => {
+  const f = townFixture(), gp = f.World.gp;
+  f.pet.inventory = [];
+  f.Settings.profile.items.autoEquip = true;
+  gp.progression = { ...(gp.progression || {}), level: 30, experience: '100' };
+  const fields = { canRepair: 1, reqLevelType1: 1, requiredLevel: 30,
+    varianceFloatMin1c8: 10, varianceFloatMax1cc: 30, varianceFloatPerPlus1d0: 0,
+    varianceFloatMin1f4: 8, varianceFloatMax1f8: 24, varianceFloatPerPlus1fc: 0 };
+  // Same base item in the slot and the bag: only the roll differs, so refObjId alone cannot tell them apart.
+  const piece = (slot, rolls) => ({ slot, refObjId: 800, typeFlags: 44 | (2 << 7), quantity: 1, plus: 0, magic: [], variance: String(rolls), tooltip: { fields } });
+  const worn = piece(2, 0n), better = piece(16, (31n << 15n) | (31n << 20n));
+  gp.inventory.push(worn, better);
+  f.Town.begin(); f.Town.enter('store'); gp.storage = { npc: 60, phase: 'open', capacity: 30, items: [] }; gp.target = 60;
+  f.Town.store();
+  assert.equal(f.commands.at(-1).kind, 'inventory-move');
+  const moves = () => f.commands.filter(c => c.kind === 'inventory-move').length;
+  f.advance(100); f.Town.store();
+  assert.equal(f.Town.trip.pending?.kind, 'equip', 'within the 500 ms trust window nothing is confirmed');
+  assert.equal(moves(), 1, 'and nothing is sent again');
+  f.advance(1000); f.Town.store();
+  assert.equal(f.Town.trip.pending?.kind, 'equip', 'the game has not acted: the worn slot still holds the old key');
+  assert.equal(moves(), 1, 'no repeat move that could swap the pieces back');
+  better.slot = 2; worn.slot = 16; // the game performs the swap
+  f.advance(1000); f.Town.store();
+  assert.equal(f.Town.trip.pending, null, 'confirmed now that the slot holds the new key');
+  assert.equal(f.Town.trip.equippedOut.length, 1, 'exactly one replaced piece');
+  assert.equal(f.Town.trip.equippedOut[0], f.BuffGear.key(worn), 'the low-rolled piece is the replaced one');
+  for (let n = 0; n < 6 && f.Town.trip?.phase === 'store'; n++) {
+    f.advance(1000); f.Town.store();
+    const c = f.commands.at(-1);
+    if (c?.kind === 'storage-move' && f.Town.trip?.pending?.kind === 'store') {
+      const i = gp.inventory.find(x => x.slot === c.move.source);
+      gp.storage.items.push({ ...i, slot: c.move.destination });
+      gp.inventory = gp.inventory.filter(x => x.slot !== c.move.source);
+    }
+    f.advance(600); f.Town.store();
+  }
+  assert.equal(moves(), 1, 'exactly one move for the whole swap');
+  assert.equal(gp.inventory.find(i => i.slot === 2)?.variance, better.variance, 'the better roll stays worn');
+  assert.equal(gp.storage.items.length, 1, 'the low-rolled copy is stored');
+});
+
+test('weapon swaps follow the worn weapon\'s dominant attack and respect the chosen weapons', () => {
+  const weaponFields = (paHi, maHi) => ({ canRepair: 1, reqLevelType1: 1, requiredLevel: 30,
+    varianceIntMin240: 10, varianceIntMax244: paHi, varianceIntMin248: 12, varianceIntMax24c: paHi + 4, varianceFloatPerPlus250: 0,
+    varianceIntMin254: 5, varianceIntMax258: maHi, varianceIntMin25c: 5, varianceIntMax260: maHi + 2, varianceFloatPerPlus264: 0 });
+  const rolls = String((31n << 20n) | (31n << 25n)); // perfect attack rolls (stat indexes 4 and 5)
+  const weapon = (slot, ref, pa, ma) => ({ slot, refObjId: ref, typeFlags: 44 | (6 << 7), quantity: 1, plus: 0, magic: [], variance: rolls, tooltip: { fields: weaponFields(pa, ma) } });
+  const drive = fixtureIn => {
+    const f = fixtureIn, gp = f.World.gp;
+    f.pet.inventory = [];
+    f.Settings.profile.items.autoEquip = true;
+    gp.progression = { ...(gp.progression || {}), level: 30, experience: '100' };
+    f.Town.begin(); f.Town.enter('store'); gp.storage = { npc: 60, phase: 'open', capacity: 30, items: [] }; gp.target = 60;
+    for (let n = 0; n < 6 && f.Town.trip?.phase === 'store'; n++) {
+      f.advance(1000); f.Town.store();
+      const c = f.commands.at(-1);
+      if (c?.kind === 'inventory-move') {
+        const candidate = gp.inventory.find(i => i.slot === c.source), worn = gp.inventory.find(i => i.slot === c.destination);
+        candidate.slot = c.destination; worn.slot = c.source;
+      }
+      f.advance(600); f.Town.store();
+    }
+    return f;
+  };
+  // A physical worn weapon: a magical blade with far better MA but worse PA never swaps in.
+  let f = townFixture();
+  const gp0 = f.World.gp;
+  gp0.inventory = gp0.inventory.filter(i => i.slot !== 6);
+  gp0.inventory.push(weapon(6, 900, 20, 8), weapon(16, 901, 12, 40));
+  f = drive(f);
+  assert.equal(f.commands.some(c => c.kind === 'inventory-move'), false, 'a physical build keeps the physical weapon');
+  // A strictly better physical blade does swap in — while the worn one is not the chosen primary weapon.
+  f = drive(townFixture());
+  const gp1 = f.World.gp;
+  gp1.inventory = gp1.inventory.filter(i => i.slot !== 6);
+  const worn1 = weapon(6, 900, 20, 8); gp1.inventory.push(worn1, weapon(16, 902, 30, 10));
+  f = drive(f);
+  assert.deepEqual(f.commands.filter(c => c.kind === 'inventory-move').map(c => c.source), [16], 'the better physical weapon is worn');
+  assert.equal(f.World.gp.inventory.find(i => i.slot === 6)?.refObjId, 902);
+  // The chosen primary weapon is protected: nothing swaps.
+  f = drive(townFixture());
+  const gp2 = f.World.gp;
+  gp2.inventory = gp2.inventory.filter(i => i.slot !== 6);
+  const worn2 = weapon(6, 900, 20, 8);
+  gp2.inventory.push(worn2, weapon(16, 902, 30, 10));
+  f.Settings.profile.items.gear.primaryWeapon = f.BuffGear.key(worn2);
+  f = drive(f);
+  assert.equal(f.commands.some(c => c.kind === 'inventory-move'), false, 'the chosen primary weapon is never replaced');
+});
+
 test('town deposits Star, Moon and Sun gear from the character bag and the pet, and nothing else', () => {
   const f = townFixture(), gp = f.World.gp;
   const gear = (slot, ref, tooltip) => ({ slot, refObjId: ref, typeFlags: 44 | (6 << 7), quantity: 1, name: 'Gear', tooltip });
@@ -5008,6 +5275,46 @@ test('town never sells items the game marks unsellable, and skips a refused sale
   gp.error = null; f.pet.inventory = [quest, refused]; f.advance(1000); f.Town.tick();
   assert.equal(f.Town.trip.phase, 'repair');
   assert.equal(f.commands.filter(c => c.kind === 'cos-shop-sell').length, 2, 'the refused item is not offered again');
+});
+
+test('the surplus of restocked potions above the refill amount is sold, down to the target', () => {
+  const f = townFixture(), gp = f.World.gp;
+  f.Town.cfg().sellExcess = true;
+  f.pet.inventory = [];
+  gp.inventory.push({ slot: 16, refObjId: 15, typeFlags: 4332, quantity: 80 });
+  f.Town.begin(); f.Town.enter('sell'); gp.target = 62; gp.shop = { npc: 62 };
+  f.Town.tick();
+  assert.equal(f.commands.at(-1).kind, 'shop-sell', 'the surplus stack is sold from the character bag');
+  assert.equal(f.commands.at(-1).slot, 16);
+  assert.equal(f.commands.at(-1).quantity, 31, '81 picked-up MP potions above a target of 50 sell exactly 31');
+  gp.inventory.find(i => i.slot === 16).quantity -= 31;
+  f.advance(1000); f.Town.tick();
+  assert.equal(f.Town.trip.phase, 'repair', 'at the target the trip moves on');
+  assert.equal(gp.inventory.filter(i => i.refObjId === 15).reduce((n, i) => n + i.quantity, 0), 50);
+});
+
+test('a refused surplus sale is skipped without ending the trip, and sellExcess off leaves picked-up potions alone', () => {
+  const f = townFixture(), gp = f.World.gp;
+  f.Town.cfg().sellExcess = true;
+  f.pet.inventory = [];
+  gp.inventory = gp.inventory.filter(i => i.slot !== 15);
+  gp.inventory.push({ slot: 16, refObjId: 15, typeFlags: 4332, quantity: 80 }, { slot: 17, refObjId: 15, typeFlags: 4332, quantity: 10 });
+  f.Town.begin(); f.Town.enter('sell'); gp.target = 62; gp.shop = { npc: 62 };
+  f.Town.tick(); assert.equal(f.commands.at(-1).slot, 16); assert.equal(f.commands.at(-1).quantity, 40);
+  gp.error = 'Inventory rejected: 2'; f.advance(1000); f.Town.tick();
+  assert.equal(f.Town.trip?.phase, 'sell', 'a refused surplus sale does not end the trip');
+  gp.error = null; f.advance(1000); f.Town.tick();
+  assert.equal(f.commands.filter(c => c.kind === 'shop-sell').length, 2, 'the refused stack is not offered again');
+  assert.equal(f.commands.at(-1).slot, 17); assert.equal(f.commands.at(-1).quantity, 10, 'another stack still sells its surplus');
+  gp.inventory = gp.inventory.filter(i => i.slot !== 17); f.advance(1000); f.Town.tick();
+  assert.equal(f.Town.trip.phase, 'repair', 'with only the refused stack left the trip moves on');
+  assert.equal(gp.inventory.find(i => i.slot === 16).quantity, 80, 'the refused stack is kept whole');
+  const off = townFixture(); off.Town.cfg().sellExcess = false; off.pet.inventory = [];
+  off.World.gp.inventory.push({ slot: 16, refObjId: 15, typeFlags: 4332, quantity: 80 });
+  off.Town.begin(); off.Town.enter('sell'); off.World.gp.target = 62; off.World.gp.shop = { npc: 62 };
+  off.Town.tick();
+  assert.equal(off.commands.some(c => c.kind === 'shop-sell'), false, 'off by default nothing is sold');
+  assert.equal(off.Town.trip.phase, 'repair');
 });
 
 function stalledSale() {
@@ -7972,4 +8279,104 @@ test('the Abandon button sends the command once and settles on the journal answe
   assert.match(f.Quest.message, /abandoned/);
   f.Quest.abandon(512);
   assert.equal(f.commands.filter(c => c.kind === 'quest-abandon').length, 1, 'an inactive quest is never abandoned');
+});
+
+
+test('Only join and accept parties while the bot is running holds party automation until Start', () => {
+  let f = joinMainFixture({ rows: [{ id: 7, name: 'mainchar', members: 1, type: 1, min: 1, max: 90 }] });
+  f.Settings.profile.party.onlyWhileRunning = true; f.Hunt.running = false;
+  f.Party.tick(); assert.equal(f.commands.length, 0, 'stopped: nothing is sent');
+  f.Hunt.running = true; f.advance(5000); f.Party.tick();
+  assert.deepEqual(jm(f.commands[0]), { kind: 'party-match-join', id: 7 }, 'running: joins');
+  f = fixture(); partyApplication(f); f.Settings.profile.party.onlyWhileRunning = true; f.Hunt.running = false; f.Party.tick();
+  assert.equal(f.commands.filter(c => c.kind === 'party-match-answer').length, 0, 'stopped: applicant left unanswered');
+  f.Hunt.running = true; f.Party.tick();
+  assert.equal(f.commands.filter(c => c.kind === 'party-match-answer').length, 1, 'running: accepted');
+  f = joinMainFixture({ rows: [{ id: 7, name: 'mainchar', members: 1, type: 1, min: 1, max: 90 }] }); f.Hunt.running = false; f.Party.tick();
+  assert.equal(f.commands.length, 1, 'default: still joins while stopped');
+});
+
+function sellStarRun(f, storageItems, bagCount = 0, x = 150, bagStars = []) {
+  f.Hunt.running = false;
+  const gp = f.World.gp, sold = [], moved = [];
+  gp.pose = { regionId: 1, x, y: 0, z: 100 };
+  gp.inventory = Array.from({ length: bagCount }, (_, n) => ({ slot: 13 + n, refObjId: 5000 + n, typeFlags: 4332, quantity: 1, name: 'Filler' }));
+  gp.inventory.push(...bagStars);
+  gp.storageItems = storageItems;
+  let handled = 0;
+  f.SellStar.start();
+  for (let n = 0; n < 400 && f.SellStar.run; n++) {
+    f.SellStar.tick();
+    while (handled < f.commands.length) {
+      const c = f.commands[handled++];
+      if (c.kind === 'move') gp.pose = { ...c.destination };
+      else if (c.kind === 'select') { assert.equal(Math.abs(gp.pose.x - f.World.ents.get(c.gid).x) <= 200, true, 'selected from service range'); gp.target = c.gid; gp.targetCapabilities = { 60: 4, 62: 9 }[c.gid]; }
+      else if (c.kind === 'storage-open') gp.storage = { npc: c.gid, phase: 'open', capacity: 30, items: gp.storageItems };
+      else if (c.kind === 'storage-move') {
+        assert.equal(c.move.type, 3);
+        const i = gp.storage.items.find(i => i.slot === c.move.source);
+        gp.storage.items = gp.storageItems = gp.storage.items.filter(x => x !== i); gp.inventory.push({ ...i, slot: c.move.destination + (f.landShift || 0) * (moved.length + 1) }); moved.push(i.name);
+      } else if (c.kind === 'shop-open') { gp.shop = { npc: c.gid, offers: [] }; gp.shopCompletionRevision++; }
+      else if (c.kind === 'shop-sell') { const i = gp.inventory.find(i => i.slot === c.slot); sold.push(i.name); gp.inventory = gp.inventory.filter(x => x !== i); }
+      else if (c.kind === 'npc-close') { gp.target = 0; gp.shop = null; gp.storage = null; }
+    }
+    f.advance(600);
+  }
+  return { sold, moved, gp };
+}
+const starItem = (slot, name, code = 'ITEM_EU_M_HEAVY_A_RARE') => ({ slot, refObjId: 7000 + slot, typeFlags: 44 | (6 << 7), name, codename: code, quantity: 1, tooltip: { fields: { rarity: 2, itemClass: /_A_/.test(code) ? 1 : /_B_/.test(code) ? 2 : 3 } } });
+test('Sell Star takes only Star gear out of the warehouse and sells it', () => {
+  const f = townFixture();
+  const r = sellStarRun(f, [starItem(0, 'Star one'), starItem(1, 'Moon one', 'ITEM_EU_M_HEAVY_B_RARE'), starItem(2, 'Star two'), starItem(3, 'Sun one', 'ITEM_EU_M_HEAVY_C_RARE'), starItem(4, 'Favorite star')]);
+  assert.deepEqual(r.sold, ['Star one', 'Star two'], f.SellStar.message); assert.deepEqual(r.moved, r.sold);
+  assert.deepEqual(r.gp.inventory.filter(i => i.slot >= 13).map(i => i.name), [], 'nothing left in the bag');
+  assert.equal(f.SellStar.run, null); assert.match(f.SellStar.message, /Sold 2 Star items/);
+  assert.equal(f.commands.filter(c => c.kind === 'storage-move' && c.move.type !== 3).length, 0, 'never deposits');
+});
+test('Sell Star works in batches when the bag is nearly full and refuses to start unsafe', () => {
+  const f = townFixture();
+  const stars = Array.from({ length: 6 }, (_, n) => starItem(n, 'Star ' + n));
+  const r = sellStarRun(f, stars, 14);
+  assert.equal(r.sold.length, 6, f.SellStar.message); assert.equal(r.gp.inventory.length, 14, 'the filler is untouched');
+  assert.equal(f.commands.filter(c => c.kind === 'storage-open').length > 1, true, 'came back for the next batch');
+  const g = townFixture(); g.Hunt.running = true; g.SellStar.start();
+  assert.equal(g.SellStar.run, null); assert.match(g.SellStar.message, /Stop hunting/);
+  const h = townFixture(); h.Town.cfg().smith = null; h.SellStar.start(); assert.equal(h.SellStar.run, null); assert.match(h.SellStar.message, /Save the warehouse/);
+});
+
+test('Sell Star walks to the warehouse and the merchant when they are out of reach', () => {
+  const f = townFixture(), c = f.Town.cfg();
+  f.World.ents.get(62).x = c.smith.x = 900; c.smith.npc = undefined;
+  const r = sellStarRun(f, [starItem(0, 'Star one'), starItem(1, 'Star two')], 0, 500);
+  assert.deepEqual(r.sold, ['Star one', 'Star two'], f.SellStar.message);
+  assert.equal(f.commands.some(c => c.kind === 'move'), true, 'walked');
+});
+
+test('Sell Star also sells Star gear already in the bag, with a full bag and an empty warehouse', () => {
+  const f = townFixture();
+  const r = sellStarRun(f, [], 0, 150, [starItem(13, 'Left over one'), starItem(14, 'Left over two'), { ...starItem(15, 'Moon left', 'ITEM_EU_M_HEAVY_B_RARE') }]);
+  assert.deepEqual(r.sold, ['Left over one', 'Left over two'], f.SellStar.message);
+  assert.deepEqual(r.gp.inventory.map(i => i.name), ['Moon left']);
+});
+
+test('Sell Star finds a withdrawn item that lands in another bag slot and does not walk when already near the NPC', () => {
+  const f = townFixture(); f.landShift = 3;
+  const r = sellStarRun(f, [starItem(0, 'Star one'), starItem(1, 'Star two')], 0, 120);
+  assert.deepEqual(r.sold, ['Star one', 'Star two'], f.SellStar.message);
+  assert.equal(f.commands.some(c => c.kind === 'move'), false, 'near the NPCs: no walking');
+});
+
+test("Don't pick up Star gear skips only Star equipment and is off by default", () => {
+  const f = fixture(), P = f.Settings.profile.hunt.pickup;
+  const star = f.drop(41, 44), moon = f.drop(42, 44), sun = f.drop(43, 44), plain = f.drop(44, 44), potion = f.drop(45, 2284);
+  star.refObjId = 901; moon.refObjId = 902; sun.refObjId = 903; plain.refObjId = 900;
+  f.Items.data.set(900, { name: 'Plain', icon: '', code: 'ITEM_CH_SWORD_01_A' });
+  f.Items.data.set(901, { name: 'Star', icon: '', code: 'ITEM_CH_SWORD_01_A_RARE' });
+  f.Items.data.set(902, { name: 'Moon', icon: '', code: 'ITEM_CH_SWORD_01_B_RARE_HONOR' });
+  f.Items.data.set(903, { name: 'Sun', icon: '', code: 'ITEM_CH_SWORD_01_C_LEGEND' });
+  assert.equal(P.skipStar, false); assert.deepEqual([star, moon, sun, plain, potion].map(e => f.Loot.allowed(e)), [true, true, true, true, true]);
+  P.skipStar = true;
+  assert.deepEqual([star, moon, sun, plain, potion].map(e => f.Loot.allowed(e)), [false, true, true, true, true]);
+  assert.equal(f.Loot.filterWhy(star), 'star');
+  P.soxOnly = true; assert.deepEqual([star, moon, sun, plain].map(e => f.Loot.allowed(e)), [false, true, true, false], 'with SoX only: Moon and Sun');
 });

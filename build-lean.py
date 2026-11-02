@@ -153,6 +153,25 @@ hunt = hunt[:hunt.index('  tick() {')] + hunt[hunt.index('  currentTarget() {'):
 hunt = hunt.replace("    this.state = 'start';", "    Loot.reset();\n    this.state = 'start';")
 hunt = hunt.replace('    this.running = false;', '    Loot.suspend();\n    this.running = false;')
 hunt = hunt.replace('if (Restock.trip && World.inWorld() && !World.isDead()) Cmd.move(World.pose());', 'if (World.inWorld() && !World.isDead()) Cmd.move(World.pose());')
+# Anti-KS with a scope: all monsters, or only normal and champion ones (a high-damage character still
+# takes party/giant/elite/titan/unique monsters another player is fighting). One helper owns the
+# choice, so the quest preference and the diagnostics count the same way as the hunt itself.
+ks_old = "        if (H.avoidKs && sim - (World.hitByOthers.get(e.gid) ?? -Infinity) < 8000 && sim - (World.hitByUs.get(e.gid) ?? -Infinity) > 8000) continue;\n"
+assert hunt.count(ks_old) == 1
+hunt = hunt.replace(ks_old, "        if (this.ksAvoids(e, sim)) continue;\n")
+ks_method_old = "  chooseTarget() {"
+assert hunt.count(ks_method_old) == 1
+hunt = hunt.replace(ks_method_old, """  ksAvoids(e, sim = World.simNow() ?? 0) {
+    const H = this.cfg();
+    if (!H.avoidKs) return false;
+    if (H.avoidKsScope === 'minor') {
+      const cls = monsterClass(e);
+      if (cls !== 'normal' && cls !== 'champion') return false;
+    }
+    return sim - (World.hitByOthers.get(e.gid) ?? -Infinity) < 8000 && sim - (World.hitByUs.get(e.gid) ?? -Infinity) > 8000;
+  },
+
+  chooseTarget() {""")
 restock = (base / 'restock.js').read_text(encoding='utf-8').split('  build() {')[0] + '};'
 restock = restock.replace("    if (distance < t.best - 3) { t.best = distance; t.progressAt = now(); }", "    if (!t.lastPose || dist2D(t.lastPose, World.pose()) > 3) { t.lastPose = { ...World.pose() }; t.progressAt = now(); }")
 restock = restock.replace("    if (World.isSitting()) {", "    const move = Navigation.next(t, dest, true);\n    if (move.error && !move.waiting) return this.fail(move.error);\n    if (move.waiting) return false;\n    if (World.isSitting()) {")
@@ -211,7 +230,7 @@ skin += '\nconst LEAN_CSS = ' + __import__('json').dumps((base / 'lean-skin.css'
 header = '''// ==UserScript==
 // @name         nixxane bot
 // @namespace    https://opensro.online/
-// @version      1.2.203
+// @version      1.2.214
 // @updateURL    https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.meta.js
 // @downloadURL  https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -232,7 +251,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[NIX] Another SRO assistant is active. Disable it and reload to use NIX.');
   return;
 }
-const VERSION = '1.2.203';
+const VERSION = '1.2.214';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -276,6 +295,7 @@ parts = [header, utils, (base / 'lean-settings.js').read_text(encoding='utf-8'),
          (base / 'lean-quest-data.js').read_text(encoding='utf-8'),
          (base / 'lean-quest.js').read_text(encoding='utf-8'),
          (base / 'lean-stall.js').read_text(encoding='utf-8'),
+         (base / 'lean-sell-star.js').read_text(encoding='utf-8'),
          (base / 'lean-travel-data.js').read_text(encoding='utf-8'),
          (base / 'lean-travel.js').read_text(encoding='utf-8'),
          (base / 'lean-buff-gear.js').read_text(encoding='utf-8'),
@@ -307,6 +327,7 @@ parts = [header, utils, (base / 'lean-settings.js').read_text(encoding='utf-8'),
          (base / 'lean-diagnostics.js').read_text(encoding='utf-8'),
          (base / 'lean-reports.js').read_text(encoding='utf-8'),
          (base / 'lean-items.js').read_text(encoding='utf-8'),
+         (base / 'lean-equip.js').read_text(encoding='utf-8'),
          (base / 'lean-map.js').read_text(encoding='utf-8'),
          (base / 'lean-render.js').read_text(encoding='utf-8'),
          (base / 'lean-ui.js').read_text(encoding='utf-8'),

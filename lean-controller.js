@@ -5,6 +5,7 @@ Hunt.start = function (...args) {
   if (Alchemy.run || Alchemy.pending) return UI.toast('Stop alchemy and wait for its result before hunting.', 'warn');
   if (Trade.run) return UI.toast('Stop auto trade before hunting.', 'warn');
   if (Stall.run) return UI.toast('Stop the stall session before hunting.', 'warn');
+  if (SellStar.run) return UI.toast('Wait for Sell Star to finish (or stop the bot).', 'warn');
   if (Quest.trip) return UI.toast('Wait for the quest visit to finish (or stop the bot).', 'warn');
   if (World.gp?.stall?.phase && World.gp.stall.phase !== 'none') return UI.toast('Close the stall before hunting.', 'warn');
   Lure.reset();
@@ -60,7 +61,7 @@ Hunt.chooseTarget = function (...args) {
     if (H.levelMin && (e.level ?? 0) < H.levelMin || H.levelMax && (e.level ?? 0) > H.levelMax) continue;
     const name = (e.name || '').toLowerCase();
     if (inc.length && !inc.some(s => name.includes(s)) || exc.some(s => name.includes(s))) continue;
-    if (H.avoidKs && sim - (World.hitByOthers.get(e.gid) ?? -Infinity) < 8000 && sim - (World.hitByUs.get(e.gid) ?? -Infinity) > 8000) continue;
+    if (this.ksAvoids(e, sim)) continue;
     if (!best || dist2D(pose, e) < dist2D(pose, best)) best = e;
   }
   return best || target;
@@ -114,6 +115,8 @@ Hunt.tick = function () {
     this.state = 'resting'; return;
   }
   if (Combat.buffs(true)) { this.state = 'buff'; return; }
+  // Cornered berserk runs before the attack and lure branches, so it also covers a luring tank with no target.
+  if (Combat.corneredBerserk()) return;
   // A support character (Attack monsters off) never starts a fight, not even with what hits it: it keeps looting,
   // its own buffs and party support, at its hunting spot or beside the member it follows.
   const attack = H.attack !== false;
@@ -137,6 +140,7 @@ function stopAll() {
   Alchemy.stop();
   Trade.cancel();
   Stall.stop();
+  SellStar.stop('Sell Star stopped.');
   BuffGear.cancel();
   Quest.cancel();
   const townActive = !!Town.trip;
@@ -180,6 +184,16 @@ Combat.fight = function (target) {
     now() - this.lastCastAt >= (M.castGapMs ?? 250) && this.imbue()) return;
   return fightBetweenCasts.call(this, target);
 };
+// A buff can also be kept up while walking back (speed or stealth skills). The buff loop only knows "hunt", and an
+// entry saved before the choice existed has no mode, so the walk-back call sees exactly the entries that opted in
+// and the hunting call is untouched.
+const combatBuffs = Combat.buffs;
+Combat.buffs = function (hunting) {
+  if (hunting) return combatBuffs.call(this, hunting);
+  const M = Settings.profile.macro, all = M.buffs;
+  M.buffs = all.filter(b => b.enabled && b.mode === 'walk');
+  try { return combatBuffs.call(this, false); } finally { M.buffs = all; }
+};
 // Berserk fires when the gauge is full and the target's class is ticked in Combat options.
 // A party Giant has its own switch; other party monsters share the Party monsters one.
 Combat.berserk = function (cls) {
@@ -187,6 +201,22 @@ Combat.berserk = function (cls) {
   if (!Settings.profile.macro.berserkClasses?.[key] || World.berserkGauge < 5) return false;
   if (World.local()?.appearanceState?.[2] === 1) return false;
   return Cmd.berserk();
+};
+// SBot-style cornered berserk: with the switch on, a full gauge also fires when enough living monsters attack
+// at once, whatever their class — the defensive panic button of a luring tank or an over-pulled spot. The gauge,
+// berserk-form and attacker-expiry rules are the combat ones.
+Combat.corneredBerserk = function () {
+  const need = Number(Settings.profile.macro.berserkCornered) || 0;
+  if (need <= 0 || !Hunt.running || World.isDead() || World.berserkGauge < 5) return false;
+  if (World.local()?.appearanceState?.[2] === 1) return false;
+  const sim = World.simNow();
+  let count = 0;
+  for (const [gid, at] of World.attackers) {
+    if (sim == null || sim - at > 5000) continue;
+    const e = World.ents.get(gid);
+    if (e && World.isAlive(e) && ++count >= need) return Cmd.berserk();
+  }
+  return false;
 };
 const Controller = {
   mode: 'idle', lastErrorAt: -Infinity, resumeAfterRevive: false, guardAt: {},
@@ -249,6 +279,7 @@ const Controller = {
       }
       if (Alchemy.run || Alchemy.pending) { this.mode = 'alchemy'; return; }
       if (Stall.run) { if (World.inWorld()) Potion.tick(); Stall.tick(); this.mode = 'stall'; return; }
+      if (SellStar.run) { SellStar.tick(); this.mode = 'sell star'; return; }
       if (World.inWorld() && World.isDead() && Hunt.running) {
         Town.cancel(); Resurrect.cancelTrip(); Resurrect.holdUntil = 0;
         Hunt.tick(); this.mode = Hunt.state; return;
