@@ -5708,6 +5708,16 @@ test('town buys what the gold covers and moves on instead of failing in the poti
   assert.ok(f.Town.trip, 'trip continues'); assert.equal(f.commands.filter(c => c.kind === 'shop-buy').length, 1);
   assert.ok(f.Town.trip.buySkipped.includes(15));
 });
+test('a supply skipped in the shop does not fail the final checks and strand the character at the smith', () => {
+  const f = townFixture(), gp = f.World.gp;
+  gp.inventory.find(i => i.refObjId === 15).quantity = 50; gp.inventory.find(i => i.slot === 6).durability = 10;
+  gp.inventory = gp.inventory.filter(i => i.slot !== 14); gp.pose.x = 100;
+  f.Town.begin(); f.Town.enter('leave');
+  const short = f.Town.trip.supplies[0]; gp.inventory.find(i => i.refObjId === short.refObjId).quantity = 1;
+  assert.equal(f.Town.supplyShort(f.Town.trip), true, 'a short supply the shop could have filled still blocks');
+  f.Town.trip.buySkipped = [short.refObjId];
+  assert.equal(f.Town.supplyShort(f.Town.trip), false, 'a skipped supply does not');
+});
 test('town repairs require restored durability and reverse return requires all final checks', () => {
   const f = townFixture(), gp = f.World.gp;
   f.Town.begin(); f.Town.enter('repair'); gp.target = 62; gp.shop = { npc: 62 };

@@ -428,6 +428,8 @@ const Town = {
     const order = this.trip?.order || this.order(false), role = phase.replace(/^close-/, ''), next = order[order.indexOf(role) + 1] || 'gate';
     return next === 'gate' && !this.reverses() ? 'leave' : 'walk-' + next;
   },
+  // A supply the merchant does not sell, or the gold did not cover, was skipped on purpose and is not a reason to stop.
+  supplyShort(t) { return t.supplies.some(s => !t.buySkipped?.includes(s.refObjId) && Restock.count(s.refObjId) < s.target); },
   // Walk back instead of reversing: the trip ends here and WalkBack, which resumes hunting on arrival, takes over.
   // A trapped-character recovery trip stops in town instead, as it does before a reverse (lean-trap.js).
   leave() {
@@ -438,7 +440,7 @@ const Town = {
       return;
     }
     if (gp.inventoryPending || World.isCasting()) return;
-    if (t.supplies.some(s => Restock.count(s.refObjId) < s.target) || this.damaged().length || !t.revival && !this.scroll(0x09ec)) return this.fail('Final supply, repair or travel-scroll check failed.');
+    if (this.supplyShort(t) || this.damaged().length || !t.revival && !this.scroll(0x09ec)) return this.fail('Final supply, repair or travel-scroll check failed.');
     if (World.freeBagSlots() <= 1) return this.fail('Returned to town; free at least two character bag slots before hunting again.');
     if (!Hunt.cfg().center) return this.fail('No saved hunting spot to walk back to.');
     this.trip = null; Hunt.targetGid = Hunt.lootGid = 0; this.restartClocks();
@@ -942,7 +944,7 @@ const Town = {
         return true;
       }
       if (gp.inventoryPending || World.isCasting()) return true;
-      if (t.supplies.some(s => Restock.count(s.refObjId) < s.target) || this.damaged().length || !t.revival && !this.scroll(0x09ec) || !this.scroll(0x19ec)) { this.fail('Final supply, repair or travel-scroll check failed.'); return true; }
+      if (this.supplyShort(t) || this.damaged().length || !t.revival && !this.scroll(0x09ec) || !this.scroll(0x19ec)) { this.fail('Final supply, repair or travel-scroll check failed.'); return true; }
       if (World.freeBagSlots() <= 1) { this.fail('Returned to town; free at least two character bag slots before hunting again.'); return true; }
       const npc = this.npc('gate');
       if (!npc || gp.target !== npc.gid || !(gp.targetCapabilities & 0x20000000)) { this.fail('Reverse-return teleport NPC unavailable.'); return true; }
