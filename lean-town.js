@@ -656,19 +656,41 @@ const Town = {
     if (t.petRef && (!pet || pet.rec.refObjId !== t.petRef)) return this.fail('Pickup pet is missing or changed.');
     if (t.salePetGid && pet?.rec.gid !== t.salePetGid) return this.fail('Pickup pet changed during selling.');
     // A refused sale leaves the item where it was. Skip it and sell the rest: one item the merchant will not take
-    // must not end the trip.
+    // must not end the trip. A refused pet-to-bag move leaves the item in the pet, handled the same way.
     const p = t.pending;
     if (p && gp.error && !gp.inventoryPending && now() - p.at >= 500 &&
         (p.bag ? World.items() : pet?.rec.inventory || []).some(i => i.slot === p.source && i.refObjId === p.ref)) {
       (t.unsold ||= []).push((p.bag ? 'bag:' : 'pet:') + p.source + ':' + p.ref);
       Activity.emit({ category: 'town', code: 'sale-refused', level: 'warn', text: 'Town sell: merchant refused an item (' + gp.error + '); skipped.', userText: 'The merchant refused one item; it was kept and selling continued.', outcome: 'refused', operationId: Activity.contexts.town?.id });
       t.pending = null;
+      if (p.stage) t.staged = null;
     }
-    if (!this.pendingDone(p => p.excess ? Restock.count(p.ref) <= p.before - p.quantity : p.bag ? !World.items().some(i => i.slot === p.source && i.refObjId === p.ref) : !pet.rec.inventory.some(i => i.slot === p.source && i.refObjId === p.ref)) || !this.trip || gp.inventoryPending) return;
+    if (!this.pendingDone(p => p.excess ? Restock.count(p.ref) <= p.before - p.quantity
+      : p.stage ? World.items().some(i => i.slot === p.destination && i.refObjId === p.ref) && !(pet?.rec.inventory || []).some(i => i.slot === p.source && i.refObjId === p.ref)
+      : !World.items().some(i => i.slot === p.source && i.refObjId === p.ref)) || !this.trip || gp.inventoryPending) return;
     const unsold = (where, i) => t.unsold?.includes(where + i.slot + ':' + i.refObjId);
+    // The server refuses selling straight from the pet inventory (native notice UIIT_MSG_COSPETERR_CANT_TRADE):
+    // pet loot moves to a free bag slot first, then sells from the bag like any other item.
+    const staged = t.staged ? World.items().find(i => i.slot === t.staged.slot && i.refObjId === t.staged.ref) : null;
+    if (t.staged && !staged) return this.fail('Staged pet item changed unexpectedly.');
     const petItem = pet?.rec.inventory.find(i => this.sellable(i) && !unsold('pet:', i));
-    const bagItem = !petItem && t.sellFirst ? World.items().find(i => this.sellableBag(i) && !unsold('bag:', i)) : null;
-    const item = petItem || bagItem;
+    const bagItem = staged || (!petItem && t.sellFirst ? World.items().find(i => this.sellableBag(i) && !unsold('bag:', i)) : null);
+    const item = bagItem || null;
+    if (petItem && !item) {
+      const slot = this.free(gp.inventory, gp.equipmentSlotCount || 13, gp.inventorySlotCount);
+      if (slot === null) {
+        // Like protected items: no bag room to bring pet loot through is not a failure; the trip carries on.
+        this.message = 'Town sell: no free bag slot for pet loot; it stays in the pet for now.';
+        Log.warn(this.message);
+        this.enter(this.ammoSupplies().length ? 'ammo' : 'repair'); return;
+      }
+      if (Cmd.raw({ kind: 'cos-transfer', gid: pet.rec.gid, toCos: false, source: petItem.slot, destination: slot }, 'Town: move pet loot to the bag for selling')) {
+        t.salePetGid = pet.rec.gid;
+        t.pending = { stage: true, source: petItem.slot, destination: slot, ref: petItem.refObjId, quantity: petItem.quantity ?? 1, at: now() };
+        t.staged = { slot, ref: petItem.refObjId };
+      }
+      return;
+    }
     if (!item) {
       // Picked-up or overbought supplies crowd the bag: with the switch on, their surplus above the refill
       // target sells here. Only items this profile restocks are ever touched, so nothing else is at risk.
@@ -684,13 +706,9 @@ const Town = {
     }
     const quantity = item.quantity ?? 1;
     if (!Number.isInteger(quantity) || quantity < 1 || quantity > 65535) return this.fail('Invalid item sale quantity.');
-    if (bagItem) {
-      if (Cmd.raw({ kind: 'shop-sell', slot: item.slot, quantity }, 'Town: sell bag item at weapon merchant')) t.pending = { bag: true, source: item.slot, ref: item.refObjId, quantity, at: now() };
-      return;
-    }
-    if (Cmd.raw({ kind: 'cos-shop-sell', gid: pet.rec.gid, slot: item.slot, quantity }, 'Town: sell pet loot at weapon merchant')) {
-      t.salePetGid = pet.rec.gid;
-      t.pending = { source: item.slot, ref: item.refObjId, quantity, at: now() };
+    if (Cmd.raw({ kind: 'shop-sell', slot: item.slot, quantity }, staged ? 'Town: sell pet loot from the bag' : 'Town: sell bag item at weapon merchant')) {
+      t.pending = { bag: true, source: item.slot, ref: item.refObjId, quantity, at: now() };
+      if (staged) t.staged = null;
     }
   },
   // Tops up arrows and bolts at the weapon merchant. A shortfall here (not sold, no bag room, no gold) is reported and
