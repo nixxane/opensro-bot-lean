@@ -246,7 +246,7 @@ const UI = {
     // Busy comes from the live trips, not from Controller.mode: that label lags a tick behind (it still says
     // "returning" for up to 100 ms after Stop all ended a walk-back).
     const busy = Town.trip ? 'Town trip' : WalkBack.active ? 'Returning' : Reconnect.active() ? 'Reconnecting' : Restock.trip ? 'Shopping'
-      : Resurrect.trip ? 'Resurrecting' : BuffGear.run ? 'Buff gear' : Trade.run ? 'Trading' : Alchemy.run || Alchemy.pending ? 'Alchemy' : Stall.run ? 'Stall' : '';
+      : Resurrect.trip ? 'Resurrecting' : BuffGear.run ? 'Buff gear' : Trade.run ? 'Trading' : Alchemy.run || Alchemy.pending ? 'Alchemy' : Stall.run ? 'Stall' : SellStar.run ? 'Sell Star' : '';
     const label = dead ? 'Dead' : error ? 'Error' : busy || (Hunt.running ? 'Hunting' : 'Stopped');
     // `note` is what only the state can say; the icon falls back to the first wait reason, which the wide window shows below the strip.
     const note = Town.trip ? Town.status() : Travel.active ? Travel.status() : WalkBack.active ? WalkBack.status() : Reconnect.active() && Reconnect.message ? Reconnect.message
@@ -501,6 +501,9 @@ const UI = {
       up.className = down.className = remove.className = 'mini';
       up.setAttribute('aria-label', 'Move up ' + World.skillName(id)); down.setAttribute('aria-label', 'Move down ' + World.skillName(id)); remove.setAttribute('aria-label', 'Delete ' + World.skillName(id));
       row.append(this.skillSlot(id, () => {}, World.skillName(id)), info, up, down, remove); parent.append(row);
+      if (buff) parent.append(this.select('Keep ' + World.skillName(id) + ' up',
+        () => [['hunt', 'While hunting'], ['walk', 'Hunting and walk-back']],
+        () => entry.mode || 'hunt', value => entry.mode = value));
       if (buff) parent.append(this.select('Gear for ' + World.skillName(id),
         () => [[0, BuffGear.auto() ? 'Automatic: the weapon the skill needs' : 'Current combat gear'], ['primary', 'Primary weapon'], ['secondary', 'Secondary weapon'],
           ['shield', 'Shield (with a one-handed weapon)'], ...Settings.profile.macro.buffSets.map(s => [s.id, s.name])],
@@ -736,6 +739,7 @@ const UI = {
         this.check('Walking back may use teleports and ferries (beta; pays their fee)', () => H().travel !== false, v => H().travel = v),
         el('p', 'Beta: a long walk back is first checked against the game map, and teleports and ferries are used where walking cannot get there. If a route looks wrong, send the log.', 'muted'),
         this.check('Avoid other players’ targets', () => H().avoidKs, v => H().avoidKs = v),
+        this.select('Avoided monsters', () => [['all', 'All monsters'], ['minor', 'Normal & champion only']], () => H().avoidKsScope || 'all', v => H().avoidKsScope = v),
         this.number('Minimum mob level (0 = any)', () => H().levelMin, v => H().levelMin = v, 0, 140),
         this.number('Maximum mob level (0 = any)', () => H().levelMax, v => H().levelMax = v, 0, 140),
         this.text('Only these mobs', () => H().include, v => H().include = v),
@@ -772,7 +776,8 @@ const UI = {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
       host.append(this.group('Berserk when the gauge is full, on',
         ...[['giant', 'Giants'], ['giantParty', 'Giant party'], ['titan', 'Titans'], ['unique', 'Uniques'], ['elite', 'Elites'], ['party', 'Party monsters'], ['champion', 'Champions'], ['normal', 'Normal monsters']]
-          .map(([key, label]) => this.check(label, () => M().berserkClasses[key], v => M().berserkClasses[key] = v))));
+          .map(([key, label]) => this.check(label, () => M().berserkClasses[key], v => M().berserkClasses[key] = v)),
+        this.number('Also berserk when this many monsters attack at once (0 = off)', () => M().berserkCornered, v => M().berserkCornered = v, 0, 8)));
   },
   section_combatGear(host) {
     const pick = (title, slot) => this.select(title, () => ItemRules.gearOptions(slot), () => ItemRules.cfg().gear?.[slot] || '', v => ItemRules.setGear(slot, v));
@@ -800,7 +805,7 @@ const UI = {
         this.check('Chime and notice when a SoX item is picked up', () => L().soxSound, v => L().soxSound = v), this.button('Test SoX chime', () => Sound.test('sox')));
       this.petNote = el('p', '', 'muted pet-note'); options.append(this.petNote);
       options.append(this.row(...[['Elixirs only','elixirs'],['Elixirs + gold','elixirs-gold'],['All items','all']].map(([label,mode]) => this.button(label, () => { Loot.preset(mode); this.draw(); }))));
-      for (const [key, label] of [['enabled', 'Collect drops'], ['soxOnly', 'Equipment: only SoX (Star / Moon / Sun)'], ['afterKillOnly', 'Character: finish the current fight before picking up']]) options.append(this.check(label, () => L()[key], v => L()[key] = v));
+      for (const [key, label] of [['enabled', 'Collect drops'], ['soxOnly', 'Equipment: only SoX (Star / Moon / Sun)'], ['skipStar', "Equipment: don't pick up Star gear (Moon and Sun still are)"], ['afterKillOnly', 'Character: finish the current fight before picking up']]) options.append(this.check(label, () => L()[key], v => L()[key] = v));
       options.append(this.number('Pickup radius (m)', () => L().radius / 10, v => L().radius = v * 10, 3, 100),
         this.number('Retries after first attempt', () => L().retries, v => L().retries = v, 0, 3),
         this.text('Always include names', () => L().include, v => L().include = v),
@@ -828,7 +833,10 @@ const UI = {
   section_lootBalance(host) {
     host.append(this.group('Bag and pet space',
       this.check('Balance free slots with the pickup pet', () => ItemRules.cfg().balance, v => ItemRules.cfg().balance = v),
-      el('p', 'While hunting, items with a Sell or Store rule move to the bag or pet, whichever has more free slots. Supplies and the weapons and shield chosen under Combat never move.', 'muted')));
+      el('p', 'While hunting, items with a Sell or Store rule move to the bag or pet, whichever has more free slots. Supplies and the weapons and shield chosen under Combat never move.', 'muted')),
+      this.group('Wear better gear',
+        this.check('On town trips, wear carried gear with better stats; store the replaced piece', () => Settings.profile.items.autoEquip, v => Settings.profile.items.autoEquip = v),
+        el('p', 'At the warehouse, a carried equipment piece whose real stats (attack rolls, plus, defence, known blues) beat the worn one in the same slot is worn, and the piece it replaces is deposited, never sold. Weapons follow the worn weapon\'s dominant attack. The chosen weapons and shield, buff-set gear, the alchemy item, Keep-rule items and pieces with an incomplete tooltip or an unmet level requirement are never touched. A swap the game refuses is skipped for the session.', 'muted')));
   },
   section_suppliesPotions(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
@@ -952,6 +960,7 @@ const UI = {
         this.number('Gear durability below (%)', () => town().wear.pct, v => town().wear.pct = v, 1, 90),
         this.check('No XP for a while', () => town().noXp.on, v => town().noXp.on = v),
         this.number('No XP for (minutes)', () => town().noXp.minutes, v => town().noXp.minutes = v, 1, 120),
+        this.select('When there is no XP', [['town', 'Return to town'], ['nextSpot', 'Move to the next level spot']], () => town().noXp.action, v => town().noXp.action = v),
         this.check('On a timer', () => town().every.on, v => town().every.on = v),
         this.number('Every (minutes)', () => town().every.minutes, v => town().every.minutes = v, 5, 600),
         this.check('Revive in town and go back to the hunting spot', () => town().revive, v => town().revive = v),
@@ -970,6 +979,7 @@ const UI = {
         this.check('Deposit SoX gear in the warehouse (character and pet bags)', () => town().storeSox, v => town().storeSox = v),
         this.check('Sell Star gear too (instead of depositing it)', () => town().sellStar, v => town().sellStar = v),
         this.check('Sell ordinary gear from the character bag too', () => town().sellBag, v => town().sellBag = v),
+        this.check('Sell surplus restocked potions above the refill amounts', () => town().sellExcess, v => town().sellExcess = v),
         this.text('Also deposit gear requiring level', () => town().storeLevels, v => town().storeLevels = v, 'e.g. 85 or 80-90, 100'),
         this.number('Town arrival tolerance (m)', () => town().arrivalRadius / 10, v => town().arrivalRadius = v * 10, 10, 150),
         el('p', 'Bind your recall to Hotan, Jangan, Donwhang, Constantinople or Samarkand in the game. Quickest: pick your town and press Set up this town; the arrival point is where its return scroll always lands, so you do not have to be in town. It fills the arrival point and the four services. To do it by hand instead, save the arrival point where a return scroll places you, then stand near, select and save the warehouse, potion merchant, repair merchant and world statue / teleport. Open the potion shop before saving its merchant. Saves your standing position for each approach. Uses collision-aware walking between services. Overrides the recorded walking restock while enabled.', 'muted'));
@@ -983,6 +993,11 @@ const UI = {
       services.append(el('p', 'Pet loot: store elixirs, and Star / Moon / Sun gear when SoX deposit is on (needs the saved warehouse; SoX gear in your own bag goes in too, all other character items stay). Nothing is deposited right after pickup, only on the next town trip. Gear requiring one of the levels you list above (for example 85) is deposited the same way and never sold. SoX gear that is part of a saved buff set, the weapon chosen for alchemy, or matches the Keep names stays in your bag. Sell other unprotected pet items at the saved weapon / repair merchant before repairing. Other seal/rare equipment and equipment with unknown rarity stays in the pet. Ordinary equipment is sold regardless of + or blue options. With Sell Star gear too, Star gear (not Moon or Sun) is sold like ordinary gear instead of deposited (Keep names, buff-set gear, the alchemy weapon and the level list above still protect it). With the switch above, ordinary weapons, armour, shields and accessories in the character bag are sold too; other bag items only with a Sell rule. Never sold from the bag: potions, scrolls, supplies, pet summons, avatars, devil spirits, job suits, item mall items, Keep names, buff-set gear or the alchemy weapon.', 'muted'));
       services.append(this.text('Keep in pet (names)', () => town().keep, v => town().keep = v),
         el('p', 'Town buys X-Large potions using the Buy HP/MP switches, low-stock thresholds and refill counts above. Keep each low-stock threshold below its refill target. Potion selections apply to walking-route restock. Returns when the character bag has at most one free slot. Free at least two slots before hunting again; existing character items stay protected. Revival uses the saved town services without a return scroll in town, then reverses or walks back. Pet loot passes through one reserved character bag slot. Potions, return/reverse scrolls, beginner speed scrolls and matching Keep names are protected. Refills travel scrolls to two where sold for gold; otherwise carry spares. F8 cancels.', 'muted'));
+      // One click, never automatic: stand by the saved warehouse and repair merchant. Only Star gear; Moon and Sun stay.
+      this.sellStarNote = el('p', SellStar.message, 'muted');
+      this.sellStarButton = this.button('Sell all Star gear in warehouse', () => SellStar.run ? SellStar.stop() : SellStar.start());
+      services.append(this.row(this.sellStarButton, this.sellStarNote),
+        el('p', 'Takes every Star (Seal of Star) piece out of the warehouse and sells it at the saved repair merchant, then stops. Stand where both are in reach. Moon and Sun gear, buff-set gear and Keep names stay. Sold gear is gone for good.', 'muted'));
       this.townNote = el('p', Town.status(), 'muted'); services.append(this.townNote); host.append(services);
   },
   section_townAmmo(host) {
@@ -1167,8 +1182,11 @@ const UI = {
         this.check("Leave someone else's party when the party leader is back", () => party().leaveIfNotLeader, v => { party().leaveIfNotLeader = v; Party.reset(); }),
         el('p', 'For your other accounts. While you are not in a party, the bot accepts a party invitation from that character, or finds their party listing on the party-matching board and applies to it. The main account needs Auto-recruit and Auto-accept party-matching joins ticked. It also rejoins after a disconnect, once the character is back in the game. Leave this off on the main account.', 'muted'),
         el('p', 'With the leave option on, a party led by someone else is left only once the party leader is in view near your hunting spot. If the party leader disconnects, the party the game hands to another member stays together until they are back.', 'muted'),
+        this.check('Only join and accept parties while the bot is running', () => party().onlyWhileRunning, v => { party().onlyWhileRunning = v; Party.reset(); }),
+        el('p', 'Off by default: Auto-recruit, Auto-accept and joining the party leader also work while hunting is stopped. Turn this on to make all of them wait until you press Start. Resurrection is not affected.', 'muted'),
         this.check('Accept resurrection from party members', () => party().acceptRes, v => party().acceptRes = v),
-        el('p', 'When you are dead and a party member casts Rebirth on you, the bot answers Yes. Works during hunting and while stopped; resurrection offers from other players are left to you.', 'muted'),
+        this.number('Wait for a party resurrection (s)', () => party().reviveWaitS, v => party().reviveWaitS = v, 5, 600),
+        el('p', 'When you are dead and a party member casts Rebirth on you, the bot answers Yes. Works during hunting and while stopped; resurrection offers from other players are left to you. With a living party member in view it waits this long after dying before reviving itself in town (20 s by default).', 'muted'),
         this.check('Auto-resurrect party members', () => party().autoRes, v => { party().autoRes = v; Resurrect.reset(); }),
         this.number('Maximum res distance from hunt spot (m)', () => party().resRadius / 10, v => party().resRadius = v * 10, 1, 100),
         el('p', 'Works during hunting and while stopped. Walks into skill range for visible dead members within the maximum radius, casts Rebirth, then returns. During hunting the radius is measured from the saved hunt spot; while stopped it uses your starting position. Collision data is required for walking. Travel stops after 30 seconds or 12 seconds without progress per leg. The member must accept the revival. Travel, shopping and manual control take priority.', 'muted')));
@@ -1404,6 +1422,7 @@ const UI = {
     if (this.waitNote) this.waitNote.textContent = this.waitNote.title = Diagnostics.lines(diagnosticState);
     this.updateOrb(); this.updateWide(); this.updateRunLed();
     if (this.townNote) this.townNote.textContent = Town.status();
+    if (this.sellStarNote?.isConnected) { this.sellStarNote.textContent = SellStar.message; this.sellStarButton.textContent = SellStar.run ? 'Stop selling' : 'Sell all Star gear in warehouse'; }
     if (this.is('Settings') && AutoMastery.note) AutoMastery.note.textContent = AutoMastery.status();
     if (this.is('Settings') && AutoMastery.maxNote) AutoMastery.maxNote.textContent = AutoMastery.maxMessage;
     if (this.is('Settings') && StatPoints.note) StatPoints.note.textContent = StatPoints.status();
