@@ -238,7 +238,7 @@ const DEFAULT_PROFILE = {
     levelSpots: { on: false, list: [] },
     center: null, radius: 400, chase: 700, returnToCenter: true, travel: true, attack: true,
     classes: { normal: true, champion: true, giant: true, party: false, elite: false, unique: false, titan: false },
-    levelMin: 0, levelMax: 0, include: '', exclude: '', priority: 'attackers', avoidKs: true,
+    levelMin: 0, levelMax: 0, include: '', exclude: '', priority: 'attackers', avoidKs: true, avoidKsScope: 'all',
     targetTimeoutS: 25,
     pickup: { enabled: true, soxOnly: false, skipStar: false, gold: true, potions: true, equipment: true, elixirs: true, powders: true, magicStones: true, attrStones: true, alchemy: true, others: true,
       collector: 'character', by: {}, petFullSound: true, soxSound: true, include: '', exclude: '', radius: 300, afterKillOnly: true, retries: 2 },
@@ -273,6 +273,8 @@ function botProfile(input) {
   if (!Number.isInteger(result.potion.delayMs) || result.potion.delayMs < 0 || result.potion.delayMs > 60000) result.potion.delayMs = DEFAULT_PROFILE.potion.delayMs;
   if (!['death', 'recall'].includes(result.potion.restock.town.deathReturn)) result.potion.restock.town.deathReturn = 'recall';
   if (!['reverse', 'walk'].includes(result.potion.restock.town.returnBy)) result.potion.restock.town.returnBy = 'reverse';
+  // The anti-KS scope only has the two meanings; anything else is the old full behavior.
+  if (result.hunt.avoidKsScope !== 'minor') result.hunt.avoidKsScope = 'all';
   // New categories inherit the old Other items switch, preserving existing selection.
   const pickup = input.hunt?.pickup;
   for (const key of ['elixirs', 'powders', 'alchemy']) {
@@ -1749,6 +1751,16 @@ const Hunt = {
     return !!this.cfg().classes[cls];
   },
 
+  ksAvoids(e, sim = World.simNow() ?? 0) {
+    const H = this.cfg();
+    if (!H.avoidKs) return false;
+    if (H.avoidKsScope === 'minor') {
+      const cls = monsterClass(e);
+      if (cls !== 'normal' && cls !== 'champion') return false;
+    }
+    return sim - (World.hitByOthers.get(e.gid) ?? -Infinity) < 8000 && sim - (World.hitByUs.get(e.gid) ?? -Infinity) > 8000;
+  },
+
   chooseTarget() {
     const H = this.cfg();
     const pose = World.pose();
@@ -1770,7 +1782,7 @@ const Hunt = {
         if (inc.length && !inc.some((s) => name.includes(s))) continue;
         if (exc.some((s) => name.includes(s))) continue;
         if (!this.inArea(e) || d > H.chase) continue;
-        if (H.avoidKs && sim - (World.hitByOthers.get(e.gid) ?? -Infinity) < 8000 && sim - (World.hitByUs.get(e.gid) ?? -Infinity) > 8000) continue;
+        if (this.ksAvoids(e, sim)) continue;
       } else if (d > H.chase * 1.5) continue;
       let score = d;
       if (H.priority === 'attackers' && attacking) score -= 100000;
@@ -10478,7 +10490,7 @@ Hunt.chooseTarget = function (...args) {
     if (H.levelMin && (e.level ?? 0) < H.levelMin || H.levelMax && (e.level ?? 0) > H.levelMax) continue;
     const name = (e.name || '').toLowerCase();
     if (inc.length && !inc.some(s => name.includes(s)) || exc.some(s => name.includes(s))) continue;
-    if (H.avoidKs && sim - (World.hitByOthers.get(e.gid) ?? -Infinity) < 8000 && sim - (World.hitByUs.get(e.gid) ?? -Infinity) > 8000) continue;
+    if (this.ksAvoids(e, sim)) continue;
     if (!best || dist2D(pose, e) < dist2D(pose, best)) best = e;
   }
   return best || target;
@@ -15514,7 +15526,7 @@ const Diagnostics = {
       else if (H.levelMin && level < H.levelMin || H.levelMax && level > H.levelMax) why.level++;
       else if (include.length && !include.some(s => name.includes(s)) || exclude.some(s => name.includes(s))) why.name++;
       else if (!Hunt.inArea(e) || dist2D(pose, e) > H.chase) why.far++;
-      else if (H.avoidKs && sim - (World.hitByOthers.get(e.gid) ?? -Infinity) < 8000 && sim - (World.hitByUs.get(e.gid) ?? -Infinity) > 8000) why.others++;
+      else if (Hunt.ksAvoids(e, sim)) why.others++;
     }
     if (!seen) return 'No monsters in view. Move to a place with monsters and press "Set hunting spot here".';
     const parts = [
@@ -17098,6 +17110,7 @@ const UI = {
         this.check('Walking back may use teleports and ferries (beta; pays their fee)', () => H().travel !== false, v => H().travel = v),
         el('p', 'Beta: a long walk back is first checked against the game map, and teleports and ferries are used where walking cannot get there. If a route looks wrong, send the log.', 'muted'),
         this.check('Avoid other players’ targets', () => H().avoidKs, v => H().avoidKs = v),
+        this.select('Avoided monsters', () => [['all', 'All monsters'], ['minor', 'Normal & champion only']], () => H().avoidKsScope || 'all', v => H().avoidKsScope = v),
         this.number('Minimum mob level (0 = any)', () => H().levelMin, v => H().levelMin = v, 0, 140),
         this.number('Maximum mob level (0 = any)', () => H().levelMax, v => H().levelMax = v, 0, 140),
         this.text('Only these mobs', () => H().include, v => H().include = v),

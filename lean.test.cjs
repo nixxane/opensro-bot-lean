@@ -4485,6 +4485,26 @@ test('party members and their pets do not make a monster another player\'s targe
   f.Hunt.running = true; f.Hunt.state = 'search'; f.World.hitByOthers.clear(); cast(5);
   assert.equal(f.Hunt.chooseTarget()?.gid, 30, 'the monster the party is fighting can be chosen');
 });
+test('the anti-KS scope can spare every monster but normal and champion', () => {
+  const f = fixture();
+  f.Settings.profile.hunt.classes.party = true; f.Settings.profile.hunt.classes.elite = true;
+  const mob = (gid, rarity, aux = 0) => f.World.ents.set(gid, { gid, kind: 'monster', name: 'Mob' + gid, regionId: 1, x: 100 + gid, y: 0, z: 100, rarity, rarityAuxIcon: aux, level: 5, attackFlags: 16, appearanceState: [0] }).get(gid);
+  mob(30, 0); mob(31, 1); mob(32, 4); mob(33, 0, 1); mob(34, 6);
+  for (const gid of [30, 31, 32, 33, 34]) f.World.hitByOthers.set(gid, f.World.simNow());
+  f.Hunt.running = true; f.Hunt.state = 'search';
+  assert.equal(f.Hunt.chooseTarget(), null, 'the default scope skips every monster another player fights');
+  f.Settings.profile.hunt.avoidKsScope = 'minor';
+  assert.equal(f.Hunt.chooseTarget()?.gid, 32, 'the giant is taken even while someone else fights it');
+  f.World.ents.delete(32);
+  assert.equal(f.Hunt.chooseTarget()?.gid, 33, 'a party monster too');
+  f.World.ents.delete(33);
+  assert.equal(f.Hunt.chooseTarget()?.gid, 34, 'an elite too');
+  f.World.ents.delete(34);
+  assert.equal(f.Hunt.chooseTarget(), null, 'normal and champion monsters stay skipped');
+  assert.match(f.Diagnostics.noTarget(), /2: another player is fighting it/, 'the skipped count still explains it');
+  f.Settings.profile.hunt.avoidKs = false;
+  assert.equal(f.Hunt.chooseTarget()?.gid, 30, 'the switch off still disables the filter entirely');
+});
 test('the imbue is renewed as it runs out, ahead of skills and normal attacks', () => {
   const setup = (change = {}) => {
     const f = combatFixture();

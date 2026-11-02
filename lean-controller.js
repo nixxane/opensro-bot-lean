@@ -61,7 +61,7 @@ Hunt.chooseTarget = function (...args) {
     if (H.levelMin && (e.level ?? 0) < H.levelMin || H.levelMax && (e.level ?? 0) > H.levelMax) continue;
     const name = (e.name || '').toLowerCase();
     if (inc.length && !inc.some(s => name.includes(s)) || exc.some(s => name.includes(s))) continue;
-    if (H.avoidKs && sim - (World.hitByOthers.get(e.gid) ?? -Infinity) < 8000 && sim - (World.hitByUs.get(e.gid) ?? -Infinity) > 8000) continue;
+    if (this.ksAvoids(e, sim)) continue;
     if (!best || dist2D(pose, e) < dist2D(pose, best)) best = e;
   }
   return best || target;
