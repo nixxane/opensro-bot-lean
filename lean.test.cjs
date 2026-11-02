@@ -262,6 +262,7 @@ test('seal of Sun, Moon and Star gear is collected before nearer ordinary drops'
   f.Items.data.set(900, { name: 'Plain sword', icon: '', code: 'ITEM_CH_SWORD_01' });
   f.Items.data.set(901, { name: 'Star sword', icon: '', code: 'ITEM_CH_SWORD_01_A_RARE' });
   f.Items.data.set(903, { name: 'Sun sword', icon: '', code: 'ITEM_CH_SWORD_01_C_RARE' });
+  f.Items.filesLoaded = true;
   const gear = (gid, ref, x) => { const e = f.drop(gid, 44); e.refObjId = ref; e.x = x; return e; };
   const potion = f.drop(20, 2284), plain = gear(21, 900, 210), starNear = gear(22, 901, 220), starFar = gear(23, 901, 260), sun = gear(24, 903, 280);
   assert.equal(f.Loot.allowed(plain), true, 'plain gear stays eligible, only ranked lower');
@@ -277,10 +278,11 @@ test('the pickup pet also takes seal gear first; without the catalogue the neare
   const f = fixture(), P = f.Settings.profile.hunt.pickup;
   pickupPet(f); P.equipment = true;
   f.Items.data.set(903, { name: 'Sun sword', icon: '', code: 'ITEM_CH_SWORD_01_C_RARE' });
+  f.Items.filesLoaded = true;
   const elixir = f.drop(20, 3436);
   const sun = f.drop(21, 44); sun.refObjId = 903; sun.x = 280;
   assert.equal(f.Loot.choose('pet').gid, 21, 'seal gear before the nearer elixir');
-  f.Items.data.clear();
+  f.Items.data.clear(); f.Items.filesLoaded = false;
   assert.equal(f.Loot.choose('pet').gid, 20, 'nearest-first again while the catalogue is empty');
 });
 test('pet yields to actual potion dispatch and pending inventory then collects without interrupting combat', () => {
@@ -913,6 +915,50 @@ test('item codenames give race, gender, degree, type and the filters', () => {
   assert.deepEqual(ids({ race: 'EU', kind: 'Protector' }), [500]);
   assert.deepEqual(ids({ query: 'potion' }), [8]);
   f.ItemRules.set([502], { act: 'sell' }); assert.deepEqual(ids({ custom: true }), [502], 'custom: only items with a rule');
+});
+test('items seen on the wire fill the catalogue when the files are not served', () => {
+  const f = fixture(), gp = f.World.gp;
+  const potion = { slot: 3, refObjId: 8, quantity: 5, name: 'HP recovery potion (X-large)', icon: 'item\\etc\\hp_potion_05.ddj',
+    tooltip: { fields: {}, descriptionSymbol: 'SN_ITEM_ETC_HP_POTION_05_TT_DESC' } };
+  const star = { slot: 4, refObjId: 12041, quantity: 1, name: 'Scorpio Blaze Diadem',
+    tooltip: { fields: {}, descriptionSymbol: 'SN_ITEM_EU_CLOTHES_13_CA_A_RARE_TT_DESC' } };
+  f.World.applyGameplay({ ...gp, inventory: [potion, star] });
+  assert.equal(f.Items.name(8), 'HP recovery potion (X-large)', 'the server name is used');
+  assert.equal(f.Items.iconDdj(8), 'item\\etc\\hp_potion_05.ddj', 'and its icon path');
+  assert.equal(f.ItemRules.info(8).group, 'potion', 'the tooltip key gives the codename the filters read');
+  assert.equal(f.ItemRules.info(12041).sox, 1, 'an _A_RARE tooltip key is Star');
+  // A merchant offer carries only a name; it is still worth caching.
+  f.advance(3000);
+  f.World.applyGameplay({ ...f.World.gp, shop: { npc: 7, offers: [{ refObjId: 57, name: 'Universal Pill (large)', price: '150' }] } });
+  assert.equal(f.Items.name(57), 'Universal Pill (large)', 'shop offers are cached by name');
+  // A name-only sighting never erases what a full row already taught (no row flipping while a shop is open).
+  assert.equal(f.Items.wireLearn([{ refObjId: 8, name: 'HP recovery potion (X-large)' }]), false, 'a sparse row changes nothing once a rich one is cached');
+  assert.equal(f.Items.wireRows.get(8).code, 'ITEM_ETC_HP_POTION_05', 'the codename is kept');
+  assert.equal(f.Items.iconDdj(8), 'item\\etc\\hp_potion_05.ddj', 'the icon is kept');
+  assert.equal(f.ItemRules.info(8).group, 'potion', 'so the codename filters keep working');
+  // Unchanged rows are not rewritten, and what one session saw the next one keeps.
+  assert.equal(f.Items.wireLearn([potion]), false, 'the same row again changes nothing');
+  f.Items.wireRows.clear(); f.Items.data.clear(); f.Items.wireLoaded = false;
+  f.Items.wireLoad();
+  assert.equal(f.Items.name(8), 'HP recovery potion (X-large)', 'rows reload from the store with the files still unserved');
+});
+test('wire rows never stop the file catalogue from loading, and the server rows still win', async () => {
+  const f = fixture();
+  const potion = { slot: 3, refObjId: 8, quantity: 5, name: 'HP recovery potion (X-large)', icon: 'item\\etc\\hp_potion_05.ddj',
+    tooltip: { fields: {}, descriptionSymbol: 'SN_ITEM_ETC_HP_POTION_05_TT_DESC' } };
+  f.World.applyGameplay({ ...f.World.gp, inventory: [potion] });
+  assert.ok(f.Items.data.size > 0, 'wire rows fill the catalogue within seconds');
+  assert.equal(f.Items.filesLoaded, false, 'that alone does not count as the file catalogue');
+  f.Icons.request = async (path, op) => op === 'json'
+    ? (path.endsWith('missionPresentation.json')
+      ? { itemsByRefObjId: { 8: { codename: 'ITEM_ETC_HP_POTION_05' }, 4040: { codename: 'ITEM_CH_W_13A_A_RARE' } } }
+      : { entries: {} })
+    : new Blob();
+  await f.Items.ready();
+  assert.equal(f.Items.filesLoaded, true, 'the file catalogue still loads when the files are served');
+  assert.equal(f.Items.data.get(4040).code, 'ITEM_CH_W_13A_A_RARE', 'and the list carries the full catalogue');
+  assert.equal(f.Items.name(8), 'HP recovery potion (X-large)', 'the server row wins over the file row');
+  assert.equal(f.Items.iconDdj(8), 'item\\etc\\hp_potion_05.ddj', 'including its icon');
 });
 test('stop and manual control prevent further automation', () => {
   const f = fixture(); f.Hunt.start(); f.drop(); f.Hunt.tick(); f.Hunt.stop();
@@ -2665,6 +2711,7 @@ test('SoX-only filters equipment to Star, Moon and Sun gear and leaves other cat
   f.Items.data.set(901, { name: 'Star', icon: '', code: 'ITEM_CH_SWORD_01_A_RARE' });
   f.Items.data.set(902, { name: 'Moon', icon: '', code: 'ITEM_CH_SWORD_01_B_RARE_HONOR' });
   f.Items.data.set(903, { name: 'Sun', icon: '', code: 'ITEM_CH_SWORD_01_C_LEGEND' });
+  f.Items.filesLoaded = true;
   assert.equal(f.Loot.allowed(plain), true); assert.equal(f.Loot.allowed(potion), true); assert.equal(f.Loot.allowed(gold), true);
   P.soxOnly = true;
   assert.deepEqual([plain, star, moon, sun, potion, gold].map(e => f.Loot.allowed(e)), [false, true, true, true, true, true]);
@@ -8417,9 +8464,20 @@ test("Don't pick up Star gear skips only Star equipment and is off by default", 
   f.Items.data.set(901, { name: 'Star', icon: '', code: 'ITEM_CH_SWORD_01_A_RARE' });
   f.Items.data.set(902, { name: 'Moon', icon: '', code: 'ITEM_CH_SWORD_01_B_RARE_HONOR' });
   f.Items.data.set(903, { name: 'Sun', icon: '', code: 'ITEM_CH_SWORD_01_C_LEGEND' });
+  f.Items.filesLoaded = true;
   assert.equal(P.skipStar, false); assert.deepEqual([star, moon, sun, plain, potion].map(e => f.Loot.allowed(e)), [true, true, true, true, true]);
   P.skipStar = true;
   assert.deepEqual([star, moon, sun, plain, potion].map(e => f.Loot.allowed(e)), [false, true, true, true, true]);
   assert.equal(f.Loot.filterWhy(star), 'star');
   P.soxOnly = true; assert.deepEqual([star, moon, sun, plain].map(e => f.Loot.allowed(e)), [false, true, true, false], 'with SoX only: Moon and Sun');
+});
+test('skipStar waits for an equipment drop the catalogue has never seen', () => {
+  const f = fixture(), P = f.Settings.profile.hunt.pickup;
+  f.Items.filesMissing = true; P.skipStar = true;
+  const unseen = f.drop(41, 44); unseen.refObjId = 901;
+  assert.equal(f.Loot.allowed(unseen), false, 'with the files unserved and no wire row, it is not guessed');
+  f.Items.data.set(901, { name: 'Star sword', icon: '', code: 'ITEM_CH_SWORD_01_A_RARE' });
+  assert.equal(f.Loot.allowed(unseen), false, 'once the wire teaches it and it is Star, still skipped');
+  f.Items.data.set(901, { name: 'Plain sword', icon: '', code: 'ITEM_CH_SWORD_01' });
+  assert.equal(f.Loot.allowed(unseen), true, 'a seen plain sword is picked up');
 });

@@ -104,15 +104,15 @@ const Loot = {
   soxLoadAt: 0,
   // Unknown until the item catalogue loads, so unconfirmed items are never taken.
   ensureCatalogue() {
-    if (Items.data.size || now() < this.soxLoadAt) return;
+    if (Items.filesLoaded || now() < this.soxLoadAt) return;
     this.soxLoadAt = now() + 30000; Items.ready().catch(() => {});
   },
   sox(e) {
     this.ensureCatalogue();
-    return Items.data.size ? Items.sox(e.refObjId) : 0;
+    return Items.filesLoaded || Items.filesMissing ? Items.sox(e.refObjId) : 0;
   },
   // "Don't pick up Star gear": Star equipment only; Moon and Sun still drop in. Unknown until the catalogue is loaded, so it waits.
-  starSkipped(e, P, tf) { return !!P.skipStar && ItemType.isEquipment(tf) && (this.sox(e) === 1 || !Items.data.size); },
+  starSkipped(e, P, tf) { return !!P.skipStar && ItemType.isEquipment(tf) && (this.sox(e) === 1 || !Items.data.has(e.refObjId)); },
   allowed(e) {
     if (!e || e.kind !== 'ground-item' || !this.owned(e)) return false;
     const P = Hunt.cfg().pickup, tf = e.groundItem.typeFlags ?? e.tidWord ?? 0;

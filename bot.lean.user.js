@@ -6233,15 +6233,15 @@ const Loot = {
   soxLoadAt: 0,
   // Unknown until the item catalogue loads, so unconfirmed items are never taken.
   ensureCatalogue() {
-    if (Items.data.size || now() < this.soxLoadAt) return;
+    if (Items.filesLoaded || now() < this.soxLoadAt) return;
     this.soxLoadAt = now() + 30000; Items.ready().catch(() => {});
   },
   sox(e) {
     this.ensureCatalogue();
-    return Items.data.size ? Items.sox(e.refObjId) : 0;
+    return Items.filesLoaded || Items.filesMissing ? Items.sox(e.refObjId) : 0;
   },
   // "Don't pick up Star gear": Star equipment only; Moon and Sun still drop in. Unknown until the catalogue is loaded, so it waits.
-  starSkipped(e, P, tf) { return !!P.skipStar && ItemType.isEquipment(tf) && (this.sox(e) === 1 || !Items.data.size); },
+  starSkipped(e, P, tf) { return !!P.skipStar && ItemType.isEquipment(tf) && (this.sox(e) === 1 || !Items.data.has(e.refObjId)); },
   allowed(e) {
     if (!e || e.kind !== 'ground-item' || !this.owned(e)) return false;
     const P = Hunt.cfg().pickup, tf = e.groundItem.typeFlags ?? e.tidWord ?? 0;
@@ -7051,7 +7051,7 @@ const RepairHammer = {
   cfg() { return Settings.profile.potion.repairHammer; },
   // Known by its codename, or by its name when the catalogue is not loaded yet.
   hammer() {
-    if (!Items.data.size) Items.ready().catch(() => {});
+    if (!Items.filesLoaded && !Items.filesMissing) Items.ready().catch(() => {});
     return World.items().find(i => (i.quantity ?? 1) > 0 &&
       (/REPAIR_HAMMER/i.test(i.codename || Items.data.get(i.refObjId)?.code || '') || /repair hammer/i.test(i.name || Items.data.get(i.refObjId)?.name || '')));
   },
@@ -14748,7 +14748,7 @@ const Assets = {
   },
 };
 const Items = {
-  data: new Map(), pending: null,
+  data: new Map(), pending: null, filesLoaded: false, filesMissing: false,
   ready() {
     if (this.pending) return this.pending;
     this.pending = Promise.all([Assets.json('/assets/data/missionPresentation.json'), Assets.texts()]).then(([r, names]) => {
@@ -14759,11 +14759,56 @@ const Items = {
         while (!name && shortened.includes('_')) { shortened = shortened.slice(0, shortened.lastIndexOf('_')); name = names['SN_' + shortened]; }
         this.data.set(Number(id), { name: name || code, icon: v.iconDdjPath || '', code });
       }
-    }).catch(e => { this.pending = null; throw e; });
+      this.filesMissing = false; this.filesLoaded = true; this.wireApply();
+    }).catch(e => { this.pending = null; this.filesMissing = true; throw e; });
     return this.pending;
   },
   name(id) { return this.data.get(id)?.name || WdData.byId.get(id)?.code || '#' + id; },
   iconDdj(id) { return this.data.get(id)?.icon || ''; },
+  // Server-fed catalogue rows. The live site serves none of the game's data JSONs, so the file catalogue above can
+  // stay empty there; every item the wire shows carries its name, icon and tooltip key instead, and the codename
+  // follows from that key (SN_ITEM_..._TT_DESC → ITEM_...). Rows seen that way fill the catalogue for rules, names
+  // and sox checks, and stay cached across sessions. The server's own values win over file rows.
+  wireRows: new Map(), wireLoaded: false,
+  wireApply() {
+    for (const [id, row] of this.wireRows) {
+      if (!row?.name) continue;
+      const cur = this.data.get(id);
+      if (cur && cur.name === row.name && (cur.code || '') === (row.code || '') && (cur.icon || '') === (row.icon || '')) continue;
+      this.data.set(id, { name: row.name, code: row.code || cur?.code || '', icon: row.icon || cur?.icon || '' });
+    }
+  },
+  wireLearn(items) {
+    let changed = false;
+    for (const it of items || []) {
+      if (!it || !isNum(it.refObjId) || typeof it.name !== 'string' || !it.name) continue;
+      const key = /^SN_(.+)_TT_DESC$/.exec(it.tooltip?.descriptionSymbol || '');
+      // Shop offers carry a name only: a sparse sighting keeps the richer cached fields instead of erasing them.
+      const old = this.wireRows.get(it.refObjId);
+      const row = { name: it.name, code: key ? key[1] : (old?.code || ''), icon: it.icon || old?.icon || '' };
+      if (old && old.name === row.name && old.code === row.code && old.icon === row.icon) continue;
+      this.wireRows.set(it.refObjId, row);
+      changed = true;
+    }
+    if (changed) { this.wireApply(); this.wireSave(); }
+    return changed;
+  },
+  wireSave() {
+    try {
+      const out = {}; let n = 0;
+      for (const [id, row] of this.wireRows) { out[id] = row; if (++n >= 4000) break; }
+      W.localStorage.setItem('sroLean:wirecat', JSON.stringify(out));
+    } catch (e) { /* a full store only slows the cache; nothing is lost */ }
+  },
+  wireLoad() {
+    if (this.wireLoaded) return;
+    this.wireLoaded = true;
+    try {
+      const saved = JSON.parse(W.localStorage.getItem('sroLean:wirecat') || '{}');
+      for (const [id, row] of Object.entries(saved)) if (row?.name) this.wireRows.set(Number(id), row);
+    } catch (e) {}
+    this.wireApply();
+  },
   // 0 none | 1 Star | 2 Moon | 3 Sun, from the codename rule _[ABC]_RARE (also MAGIC/LEGEND/MYTH, HONOR).
   // Real inventory/pet items carry tooltip rarity (2 = seal tiers) and a Star/Moon/Sun class; otherwise use the codename rule.
   soxOf(item) {
@@ -15972,6 +16017,23 @@ const ItemRules = {
     }
     return out.sort((a, b) => a.id - b.id);
   },
+  // Feed the catalogue from what the character actually sees: worn and bagged items, the pet's bag, warehouse rows,
+  // merchant offers and ground drops all arrive with their name (and most with icon and tooltip key) straight from
+  // the server. On the live site this is the only catalogue source; wherever the files load, the two agree.
+  wireNextAt: 0,
+  learnWorld() {
+    if (now() < this.wireNextAt) return;
+    this.wireNextAt = now() + 3000;
+    const gp = World.gp;
+    if (!gp) return;
+    const seen = [];
+    if (Array.isArray(gp.inventory)) seen.push(...gp.inventory);
+    for (const rec of gp.cosRecords || []) if (Array.isArray(rec.inventory)) seen.push(...rec.inventory);
+    if (Array.isArray(gp.storage?.items)) seen.push(...gp.storage.items);
+    if (Array.isArray(gp.shop?.offers)) seen.push(...gp.shop.offers);
+    for (const e of World.ents.values()) if (e.kind === 'ground-item') seen.push(e);
+    if (Items.wireLearn(seen)) this.infos.clear();
+  },
   // Keep free slots even between the bag and the pickup pet by moving items that have a Sell or Store rule to the side with
   // more room, one at a time, while hunting and outside town service and open windows. Needs two free slots on the side
   // that receives, so loot keeps flowing. Protected gear, supplies the trip needs and worn gear never move.
@@ -16027,6 +16089,10 @@ const ItemRules = {
     return false;
   },
 };
+
+// The wire catalogue starts with what earlier sessions saw and grows with every gameplay batch.
+Items.wireLoad();
+bus.on('gameplay', () => ItemRules.learnWorld());
 
 
 // Auto-equip, phBot-style but scored on the game's own stat model: on a town trip, a carried equipment piece
@@ -17890,7 +17956,7 @@ const UI = {
   // so typing in the search box keeps its focus. 100 rows per page; bulk buttons apply to everything the filters show.
   itemFilter: { query: '', group: 'all', race: '', gender: '', kind: '', sox: '', degrees: new Set(), custom: false, page: 0 },
   drawItems() {
-    if (!Items.data.size) {
+    if (!Items.filesLoaded && !Items.filesMissing) {
       this.pane.append(this.group('Items', el('div', 'Loading the game\u2019s item list…', 'empty')));
       Items.ready().then(() => { if (this.is('Items')) this.draw(); }, () => { if (this.is('Items')) this.toast('The item list could not be loaded; try again in a moment.', 'warn'); });
       return;
