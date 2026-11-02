@@ -4121,6 +4121,17 @@ function townFixture() {
   c.deathReturn = 'death'; f.Town.deathPoint = { ...f.Settings.profile.hunt.center };
   return { ...f, pet };
 }
+test('a reverse phase whose game state never settles stops the trip instead of hanging', () => {
+  const f = townFixture(), gp = f.World.gp;
+  f.Town.begin(); f.Town.enter('reverse');
+  gp.inventoryPending = true;
+  f.Town.tick(); assert.ok(f.Town.trip, 'a short busy state is waited out');
+  f.advance(30000); f.Town.tick();
+  assert.ok(f.Town.trip, 'still waiting after half a minute'); assert.match(f.Town.message, /settle before the return scroll/);
+  f.advance(31000); f.Town.tick();
+  assert.equal(f.Town.trip, null, f.Town.message); assert.equal(f.Hunt.running, false);
+  assert.match(f.Town.message, /stayed busy for a full minute/);
+});
 test('a wrong saved arrival point is replaced by where the return scroll actually lands', () => {
   const f = townFixture(), c = f.Town.cfg(), gp = f.World.gp;
   f.Town.detect = () => ({ key: 'KT' });

@@ -68,7 +68,7 @@ const Town = {
       this.message = 'Scroll not confirmed; waiting for fresh, settled game state.'; return true;
     }
     if (t.scrollAttempts >= 3) {
-      this.fail('Return request was not accepted after three attempts. ' + (gp.error || 'Check game travel restrictions.')); return true;
+      this.fail('Return request was not accepted after three attempts. ' + (gp.error || 'The game itself may be refusing this scroll — try using it by hand.')); return true;
     }
     const next = t.phase === 'recall-wait' ? 'recall' : 'reverse';
     this.enter(next); t.scrollRequest = null;
@@ -962,7 +962,14 @@ const Town = {
         Hunt.stop('Recovery town services completed. Check the hunting spot before returning.');
         return true;
       }
-      if (gp.inventoryPending || World.isCasting()) return true;
+      // A pending inventory or cast that the game never resolves (seen live after a server update) would
+      // freeze the trip here forever. Wait it out like the other phases, then stop cleanly — nothing is
+      // ever sent twice over an unresolved game state.
+      if (gp.inventoryPending || World.isCasting()) {
+        if (now() - t.at > 60000) { this.fail('The game stayed busy for a full minute before the return scroll; nothing was sent twice. Reload the game and check the character.'); return true; }
+        this.message = 'Waiting for the game to settle before the return scroll.';
+        return true;
+      }
       if (this.supplyShort(t) || this.damaged().length || !t.revival && !this.scroll(0x09ec) || !this.scroll(0x19ec)) { this.fail('Final supply, repair or travel-scroll check failed.'); return true; }
       if (World.freeBagSlots() <= 1) { this.fail('Returned to town; free at least two character bag slots before hunting again.'); return true; }
       const npc = this.npc('gate');
