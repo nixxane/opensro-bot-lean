@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         nixxane bot
 // @namespace    https://opensro.online/
-// @version      1.2.212
+// @version      1.2.217
 // @updateURL    https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.meta.js
 // @downloadURL  https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -22,7 +22,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[NIX] Another SRO assistant is active. Disable it and reload to use NIX.');
   return;
 }
-const VERSION = '1.2.212';
+const VERSION = '1.2.217';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -186,7 +186,8 @@ const DISCORD_URL = 'https://discord.gg/Y5H5ZyfQ7u';
 const NOTES_URL = 'https://nixxane.github.io/opensro-bot-lean-site/#patch-notes';
 const CLASS_KEYS = ['normal', 'champion', 'giant', 'party', 'elite', 'unique'];
 const DEFAULT_PROFILE = {
-  items: { rules: {}, balance: false, gear: { primaryWeapon: null, secondaryWeapon: null, shield: null } },
+  items: { rules: {}, balance: false, autoEquip: false, gear: { primaryWeapon: null, secondaryWeapon: null, shield: null } },
+  sounds: { player: false, died: false, levelUp: false, unique: false },
   stall: { title: '', greeting: '', network: true, closeWhenEmpty: true, prices: {} },
   alchemy: { target: 3, limit: 20, elixir: 0, powder: false, use: { luck: false, steady: false, immortal: false, astral: false }, stones: { luck: 1, steady: 1, immortal: 1, astral: 1 }, stoneLimit: 0,
     // The plus from which each helper is used: a failure from +5 up can destroy the item (Steady and Immortal matter from there),
@@ -205,7 +206,7 @@ const DEFAULT_PROFILE = {
   pet: { attack: { on: false, recall: true, radius: 15, timeout: 3, resend: 5 } },
   scroll: { damageInc: false, damageAbs: false },
   mall: { on: false, budgetSilk: 0, hp: { on: false, low: 10, target: 1000 }, mp: { on: false, low: 10, target: 1000 }, damageInc: { on: false, low: 5, target: 20 }, damageAbs: { on: false, low: 5, target: 20 }, reverse: { on: false, low: 10, target: 50 } },
-  party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', leaveIfNotLeader: false, onlyWhileRunning: false, acceptNames: '', autoRes: false, acceptRes: false, resRadius: 300, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
+  party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', leaveIfNotLeader: false, onlyWhileRunning: false, acceptNames: '', autoRes: false, acceptRes: false, reviveWaitS: 20, resRadius: 300, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
     support: { enabled: false, whileStopped: false, range: 30, heal: { id: 0, group: 0, pct: 60, self: false }, group: { id: 0, group: 0, pct: 60, count: 2 }, buffs: [] } },
   wardrobe: { on: true, phantom: true, realAnim: true, hideAvatars: false,
     eq: {}, av: {}, pet: { atk: 0, pick: 0, mount: 0 }, presets: {}, undo: null },
@@ -222,7 +223,7 @@ const DEFAULT_PROFILE = {
     restock: {
       enabled: false, vendor: null, route: [], offers: [],
       town: { enabled: false, revive: true, revivePet: false, deathReturn: 'recall', returnBy: 'reverse', storeSox: true, sellStar: false, sellBag: false, sellExcess: false, storeLevels: '', petFull: true, petFree: 1, arrivalRadius: 500,
-        broken: true, wear: { on: false, pct: 15 }, noXp: { on: false, minutes: 10 }, every: { on: false, minutes: 60 }, arrival: null, storage: null, vendor: null, smith: null, gate: null,
+        broken: true, wear: { on: false, pct: 15 }, noXp: { on: false, minutes: 10, action: 'town' }, every: { on: false, minutes: 60 }, arrival: null, storage: null, vendor: null, smith: null, gate: null,
         keep: '', store: { equipment: true, elixirs: true, powders: true, alchemy: true, others: false } },
       hp: { on: true, refObjId: 0, low: 20, target: 100 },
       mp: { on: true, refObjId: 0, low: 20, target: 300 },
@@ -238,7 +239,7 @@ const DEFAULT_PROFILE = {
     levelSpots: { on: false, list: [] },
     center: null, radius: 400, chase: 700, returnToCenter: true, travel: true, attack: true,
     classes: { normal: true, champion: true, giant: true, party: false, elite: false, unique: false, titan: false },
-    levelMin: 0, levelMax: 0, include: '', exclude: '', priority: 'attackers', avoidKs: true,
+    levelMin: 0, levelMax: 0, include: '', exclude: '', priority: 'attackers', avoidKs: true, avoidKsScope: 'all',
     targetTimeoutS: 25,
     pickup: { enabled: true, soxOnly: false, skipStar: false, gold: true, potions: true, equipment: true, elixirs: true, powders: true, magicStones: true, attrStones: true, alchemy: true, others: true,
       collector: 'character', by: {}, petFullSound: true, soxSound: true, include: '', exclude: '', radius: 300, afterKillOnly: true, retries: 2 },
@@ -254,7 +255,7 @@ const DEFAULT_PROFILE = {
 function botProfile(input) {
   const result = deepMerge(DEFAULT_PROFILE, {});
   if (!input || typeof input !== 'object') return result;
-  for (const key of ['macro', 'potion', 'hunt', 'lure', 'pet', 'scroll', 'mall', 'wardrobe', 'party', 'alchemy', 'mastery', 'statPoints', 'trace', 'items', 'trade', 'stall', 'quest']) {
+  for (const key of ['macro', 'potion', 'hunt', 'lure', 'pet', 'scroll', 'mall', 'wardrobe', 'party', 'alchemy', 'mastery', 'statPoints', 'trace', 'items', 'trade', 'stall', 'quest', 'sounds']) {
     if (!input[key] || typeof input[key] !== 'object') continue;
     for (const field of Object.keys(DEFAULT_PROFILE[key])) {
       if (field in input[key]) result[key][field] = deepMerge(DEFAULT_PROFILE[key][field], input[key][field]);
@@ -273,6 +274,8 @@ function botProfile(input) {
   if (!Number.isInteger(result.potion.delayMs) || result.potion.delayMs < 0 || result.potion.delayMs > 60000) result.potion.delayMs = DEFAULT_PROFILE.potion.delayMs;
   if (!['death', 'recall'].includes(result.potion.restock.town.deathReturn)) result.potion.restock.town.deathReturn = 'recall';
   if (!['reverse', 'walk'].includes(result.potion.restock.town.returnBy)) result.potion.restock.town.returnBy = 'reverse';
+  // The anti-KS scope only has the two meanings; anything else is the old full behavior.
+  if (result.hunt.avoidKsScope !== 'minor') result.hunt.avoidKsScope = 'all';
   // New categories inherit the old Other items switch, preserving existing selection.
   const pickup = input.hunt?.pickup;
   for (const key of ['elixirs', 'powders', 'alchemy']) {
@@ -337,7 +340,26 @@ const Sound = {
     } catch {}
   },
   // Only these alerts are audible; existing combat/UI calls stay silent.
-  tones: { 'pet-full': { notes: [659.25, 830.61, 987.77], gap: 0.18 }, sox: { notes: [783.99, 987.77, 1174.66, 1567.98], gap: 0.11 } },
+  tones: { 'pet-full': { notes: [659.25, 830.61, 987.77], gap: 0.18 }, sox: { notes: [783.99, 987.77, 1174.66, 1567.98], gap: 0.11 },
+    player: { notes: [392, 329.63], gap: 0.25 }, died: { notes: [523.25, 415.3, 329.63], gap: 0.2 },
+    levelUp: { notes: [523.25, 659.25, 783.99, 1046.5], gap: 0.12 }, unique: { notes: [880, 1108.73, 880, 1108.73], gap: 0.15 } },
+  // Alert chimes for events the bus already carries (SBot-style alarms); every switch is off by default.
+  level: null,
+  anyOn() { const s = Settings.profile.sounds; return !!(s && (s.player || s.died || s.levelUp || s.unique)); },
+  init() {
+    bus.on('alert', (kind, e) => { if (kind === 'player' && e && Settings.profile.sounds?.player) this.play('player'); });
+    bus.on('death', e => { if (e?.gid === World.localGid() && Settings.profile.sounds?.died) this.play('died'); });
+    bus.on('spawn', e => { if (Settings.profile.sounds?.unique && e?.kind === 'monster' && RARITY[e.rarity] === 'unique') this.play('unique'); });
+    // The first snapshot only learns the level; a chime needs a rise, and a character switch resets it.
+    bus.on('gameplay', () => {
+      if (!Settings.profile.sounds?.levelUp) { this.level = null; return; }
+      const level = World.gp?.progression?.level;
+      if (!Number.isInteger(level)) return;
+      if (this.level !== null && level > this.level) this.play('levelUp');
+      this.level = level;
+    });
+    bus.on('profile', () => { this.level = null; });
+  },
   play(kind) {
     const tone = this.tones[kind];
     if (!tone) return false;
@@ -1749,6 +1771,16 @@ const Hunt = {
     return !!this.cfg().classes[cls];
   },
 
+  ksAvoids(e, sim = World.simNow() ?? 0) {
+    const H = this.cfg();
+    if (!H.avoidKs) return false;
+    if (H.avoidKsScope === 'minor') {
+      const cls = monsterClass(e);
+      if (cls !== 'normal' && cls !== 'champion') return false;
+    }
+    return sim - (World.hitByOthers.get(e.gid) ?? -Infinity) < 8000 && sim - (World.hitByUs.get(e.gid) ?? -Infinity) > 8000;
+  },
+
   chooseTarget() {
     const H = this.cfg();
     const pose = World.pose();
@@ -1770,7 +1802,7 @@ const Hunt = {
         if (inc.length && !inc.some((s) => name.includes(s))) continue;
         if (exc.some((s) => name.includes(s))) continue;
         if (!this.inArea(e) || d > H.chase) continue;
-        if (H.avoidKs && sim - (World.hitByOthers.get(e.gid) ?? -Infinity) < 8000 && sim - (World.hitByUs.get(e.gid) ?? -Infinity) > 8000) continue;
+        if (this.ksAvoids(e, sim)) continue;
       } else if (d > H.chase * 1.5) continue;
       let score = d;
       if (H.priority === 'attackers' && attacking) score -= 100000;
@@ -6708,11 +6740,15 @@ const Party = {
     if (this.helperNearby()) this.helperSeenAt = now();
     return now() - this.helperSeenAt < 15000;
   },
-  reviveDelay() { return Settings.profile.party.acceptRes && this.helping() ? 20000 : 5000; },
+  reviveDelay() {
+    const wait = Math.min(600, Math.max(5, Number(Settings.profile.party.reviveWaitS) || 20)) * 1000;
+    return Settings.profile.party.acceptRes && this.helping() ? wait : 5000;
+  },
   // One plain sentence for the log when the character dies.
   waitNote() {
     if (!Settings.profile.party.acceptRes) return 'reviving in 5 s (Accept resurrection from party members is off).';
-    return this.reviveDelay() === 20000 ? 'waiting 20 s for a party member to resurrect before reviving.' : 'no party member in view, reviving in 5 s.';
+    const wait = this.reviveDelay();
+    return wait > 5000 ? `waiting ${Math.round(wait / 1000)} s for a party member to resurrect before reviving.` : 'no party member in view, reviving in 5 s.';
   },
   // Never revive while an offer is open or an acceptance was just sent.
   resBusy() { return !!World.gp?.social?.resurrection || now() - this.consentAt < 4000; },
@@ -7376,6 +7412,8 @@ const Town = {
   sellable(item) {
     // itemdata CanSell 0 (quest and event items): the merchant refuses the sale with inventory code 2.
     if (item.tooltip?.fields?.canSell === 0 || ItemRules.guarded(item)) return false;
+    // A piece auto-equip replaced waits in the bag for its warehouse deposit; it is never sold.
+    if (Equip.replaced(item)) return false;
     // Pet summon scrolls and flutes (TID1 3, TID2 2): the pet itself. The merchant buys every one of them, and players
     // keep other pets' scrolls in the pickup pet, so they are never sold, not even with a Sell rule.
     if (!Number.isInteger(item.typeFlags) || (item.typeFlags & 124) === 76) return false;
@@ -7411,6 +7449,7 @@ const Town = {
   // (revival item) brings it back. Both are needed before the town trip is worth starting for this.
   deadCollar() { return World.items().find(i => i.slot >= 13 && i.summon?.state === 4) || null; },
   grass() { return World.items().find(i => ItemType.useTarget((i.typeFlags ?? 0) >>> 0) === 'revival' && (i.quantity ?? 1) > 0) || null; },
+  noXpDue() { const c = this.cfg(); return !!(c.noXp?.on && this.lastXpAt && now() - this.lastXpAt >= c.noXp.minutes * 60000); },
   reason() {
     const c = this.cfg(), pet = Loot.pet();
     if (World.freeBagSlots() <= 1) return 'character bag nearly full';
@@ -7421,7 +7460,7 @@ const Town = {
     if (c.broken && this.weaponBroken()) return 'weapon broken';
     const worn = c.wear?.on ? this.wear() : null;
     if (worn && worn.pct < c.wear.pct) return `gear durability low (${worn.name} at ${Math.floor(worn.pct)}%)`;
-    if (c.noXp?.on && this.lastXpAt && now() - this.lastXpAt >= c.noXp.minutes * 60000) return `no XP for ${c.noXp.minutes} minutes`;
+    if (this.noXpDue()) return `no XP for ${c.noXp.minutes} minutes`;
     if (c.every?.on && this.cycleFrom && now() - this.cycleFrom >= c.every.minutes * 60000) return `every ${c.every.minutes} minutes`;
     return '';
   },
@@ -7716,6 +7755,8 @@ const Town = {
     if (!st || st.guild || st.phase !== 'open' || gp.target !== st.npc) return this.fail('Warehouse closed or selection changed.');
     const pet = Loot.pet();
     if (t.petRef && (!pet || pet.rec.refObjId !== t.petRef)) return this.fail('Pickup pet is missing or changed.');
+    // Better carried gear is worn here, while the warehouse is open, so the replaced piece can be stored at once.
+    if (Equip.step(t)) return;
     if (!this.pendingDone(p => {
       if (p.kind === 'pet') return !pet.rec.inventory.some(i => i.slot === p.source && i.refObjId === p.ref) && World.items().some(i => i.slot === p.destination && i.refObjId === p.ref && (i.quantity ?? 1) === p.quantity);
       return !World.items().some(i => i.slot === p.source && i.refObjId === p.ref) && st.items.some(i => i.slot === p.destination && i.refObjId === p.ref && (i.quantity ?? 1) === p.quantity);
@@ -7723,7 +7764,7 @@ const Town = {
     const bagItem = t.staged ? World.items().find(i => i.slot === t.staged.slot && i.refObjId === t.staged.ref) : null;
     if (t.staged && !bagItem) return this.fail('Staged pet item changed unexpectedly.');
     // Gear the character picked up is deposited straight from the bag, then pet loot is staged through it.
-    const bagSox = bagItem ? null : World.items().find(i => this.depositItem(i, true) || this.stone(i));
+    const bagSox = bagItem ? null : World.items().find(i => this.depositItem(i, true) || this.stone(i) || t.equippedOut?.includes(BuffGear.key(i)));
     const direct = bagItem || bagSox;
     const item = direct || pet?.rec.inventory.find(i => this.eligible(i));
     if (!item) {
@@ -7955,7 +7996,11 @@ const Town = {
     const c = this.cfg();
     this.watch();
     if (!this.trip) {
-      if (this.blocked() || !this.reason()) return false;
+      const why = this.blocked() ? '' : this.reason();
+      if (!why) return false;
+      // With the action set to "next spot", a spot that gives no XP moves hunting to the next level spot instead
+      // of starting a town trip; town stays the fallback when the level list has no higher spot left.
+      if (c.noXp?.action === 'nextSpot' && why === `no XP for ${c.noXp.minutes} minutes` && LevelSpot.advanceOnNoXp()) { this.restartClocks(); return false; }
       this.begin();
       if (!this.trip) return true;
     }
@@ -10478,7 +10523,7 @@ Hunt.chooseTarget = function (...args) {
     if (H.levelMin && (e.level ?? 0) < H.levelMin || H.levelMax && (e.level ?? 0) > H.levelMax) continue;
     const name = (e.name || '').toLowerCase();
     if (inc.length && !inc.some(s => name.includes(s)) || exc.some(s => name.includes(s))) continue;
-    if (H.avoidKs && sim - (World.hitByOthers.get(e.gid) ?? -Infinity) < 8000 && sim - (World.hitByUs.get(e.gid) ?? -Infinity) > 8000) continue;
+    if (this.ksAvoids(e, sim)) continue;
     if (!best || dist2D(pose, e) < dist2D(pose, best)) best = e;
   }
   return best || target;
@@ -11039,11 +11084,40 @@ bus.on('hunt', running => { if (running) { const poison = MallBuyer.poison; Mall
 // and the bot walks there. Off by default; it only acts while the bot is hunting and nothing else owns the character.
 const LevelSpot = {
   nextAt: 0, message: '',
+  // Session state: a no-XP move can put hunting on a spot above the character's level gate; the level rule alone
+  // must not pull it back while the character is still below that gate. Kept per character, never saved.
+  heldLevel: 0, heldFor: '',
   cfg() { return Settings.profile.hunt.levelSpots; },
   list() { return (this.cfg().list || []).filter(s => Number.isInteger(s?.level) && s.center).sort((a, b) => a.level - b.level); },
   // The spot that applies at this level, or null below the lowest one.
   spotFor(level) { return this.list().filter(s => s.level <= level).pop() || null; },
+  // The hold ends the moment the character reaches the held spot's level: from there the level rule alone
+  // picks the spot, so it moves on to a higher entry instead of staying pinned until a reload.
+  heldSpot() {
+    if (!this.heldLevel || this.heldFor !== World.charName) return null;
+    const level = World.gp?.progression?.level;
+    if (Number.isInteger(level) && level >= this.heldLevel) { this.heldLevel = 0; return null; }
+    return this.list().find(s => s.level === this.heldLevel) || null;
+  },
   same(a, b) { return !!a && !!b && a.regionId === b.regionId && a.x === b.x && a.z === b.z; },
+  // The town "no XP" action can ask for the next spot above the applied one. Returns false when the list has no
+  // higher entry left, so the caller falls back to its normal behaviour.
+  advanceOnNoXp() {
+    const level = World.gp?.progression?.level;
+    if (!Number.isInteger(level)) return false;
+    const current = this.heldSpot() || this.spotFor(level);
+    const next = this.list().find(s => s.level > (current?.level ?? 0));
+    if (!next) return false;
+    this.heldLevel = next.level; this.heldFor = World.charName;
+    const H = Hunt.cfg();
+    H.center = { ...next.center };
+    Settings.saveProfile(); bus.emit('center');
+    this.message = 'No XP: hunting moved to the spot from level ' + next.level + '.';
+    Log.info('Level spot: ' + this.message); UI.toast(this.message, 'info', 5000);
+    const pose = World.pose();
+    if (pose && dist2D(pose, H.center) > Math.max(H.radius, 100)) WalkBack.start(true);
+    return true;
+  },
   // Add (or replace the entry of) a level with the current hunting spot.
   add(level) {
     const center = Settings.profile.hunt.center;
@@ -11062,7 +11136,7 @@ const LevelSpot = {
     const level = World.gp?.progression?.level;
     if (!World.inWorld() || World.isDead() || !Hunt.running || !Number.isInteger(level)) return false;
     if (Town.trip || Restock.trip || WalkBack.active || Travel.active || Quest.trip || Resurrect.trip || Controller.resumeAfterRevive) return false;
-    const spot = this.spotFor(level), H = Hunt.cfg();
+    const spot = this.heldSpot() || this.spotFor(level), H = Hunt.cfg();
     if (!spot || this.same(spot.center, H.center)) return false;
     H.center = { ...spot.center };
     Settings.saveProfile(); bus.emit('center');
@@ -15335,7 +15409,7 @@ const Alchemy = {
 };
 
 
-const RELEASE_NOTES = [{"version": "1.2.212", "title": "Option to not pick up Star gear", "items": ["New option under the Loot settings: Equipment: don't pick up Star gear (Moon and Sun still are). When it is on, the bot and the pet leave Star (Seal of Star) equipment on the ground and keep picking up everything else, including Moon and Sun gear.", "It is off by default, so nothing changes unless you turn it on. A Pick rule on an item still takes that item.", "Only tested in simulation, not on the live server."]}, {"version": "1.2.211", "title": "Sell Star: withdrawals and walking fixed", "items": ["Fixes Sell all Star gear stopping with \"a withdrawal did not reach the bag\". It now waits for the gear to show up in the bag, in whatever slot the game puts it.", "It no longer insists on reaching the exact saved standing spot: close enough to the warehouse or merchant is enough, and if it cannot find a way it tries from where it stands.", "Only tested in simulation, not on the live server."]}, {"version": "1.2.210", "title": "Sell Star also sells Star gear already in the bag", "items": ["Fixes Sell all Star gear doing nothing when Star gear from an earlier run was still in your bag. Star gear in the bag is now sold along with what comes out of the warehouse.", "When it stops, the reason now shows in the bug report (Diagnostics), so a failed run can be diagnosed.", "Only tested in simulation, not on the live server."]}, {"version": "1.2.209", "title": "Sell Star walks to the warehouse and merchant", "items": ["Fixes the Sell all Star gear button taking the gear out and then not selling it. It now walks to the saved warehouse and then to the saved repair merchant itself, instead of needing you to stand in reach of both.", "If it stops, it now says why in a message.", "Only tested in simulation, not on the live server."]}, {"version": "1.2.208", "title": "Sell all Star gear from the warehouse", "items": ["New button on the Town page: Sell all Star gear in warehouse. One click takes every Seal of Star piece out of the warehouse and sells it at your saved repair merchant, in batches that fit your bag, then stops. It never runs on its own.", "Needs the warehouse and repair merchant saved on the Town page, and you standing where both are in reach. Moon and Sun gear, buff-set gear and Keep names stay in the warehouse.", "Only tested in simulation, not on the live server."]}, {"version": "1.2.207", "title": "Party joining can wait for Start", "items": ["New option under Settings > Party: Only join and accept parties while the bot is running. When it is on, Auto-recruit, Auto-accept party-matching joins and joining the party leader's party all wait until you press Start. This fixes the bot joining a party after it was stopped.", "It is off by default, so nothing changes unless you turn it on. Accept resurrection is not affected."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.206", "title": "Lure stops near players or after set pulls", "items": ["Two new lure options under Combat > Hunt area > Lure: Stop when this many other players are within 30 m, and Stop after this many completed pulls. Both are 0 (off) by default, so nothing changes unless you set them.", "The player option stops the lure when that many strangers are within 30 m of your character. You and your party members never count.", "The pull option stops the lure after the chosen number of pulls. A round where nothing was pulled does not use up a pull, and the count starts again each time you start."], "note": "Contributed by duan78 (#85). Tested in simulation only, not in a live game."}, {"version": "1.2.205", "title": "Keep self buffs up while walking back", "items": ["Each buff in Combat > Buffs & imbue now has a Keep (skill) up choice: While hunting, or Hunting and walk-back. The default is While hunting, so nothing changes unless you pick the other one.", "Buffs set to Hunting and walk-back are also cast while the bot walks back to the hunting spot or between towns, so speed or stealth skills stay on for the whole trip.", "Buffs saved before this choice existed keep working only while hunting."], "note": "Contributed by duan78 (#84). Tested in simulation only, not in a live game."}];
+const RELEASE_NOTES = [{"version": "1.2.217", "title": "Alert chimes for players, death and more", "items": ["New \"Alert sounds\" group on the Loot page with four short chimes: another player comes near, your character dies, you level up, and a unique monster comes into view.", "Each chime has its own switch and all of them are off by default, so nothing changes unless you turn one on.", "The player chime uses the same detection as the player alert. If the browser blocks sound, one click in the game unlocks it.", "The switches are saved per character like your other settings."], "note": "Contributed by duan78 (#88). Tested in simulation only, not in a live game; the sounds themselves were not heard in a real browser."}, {"version": "1.2.216", "title": "Choose how long to wait for a party revive", "items": ["New option \"Wait for a party resurrection (s)\" in the Party settings, right under \"Accept resurrection from party members\". It sets how long the bot waits after dying before it revives itself in town, from 5 to 600 seconds.", "The wait only applies when \"Accept resurrection from party members\" is on and a living party member is in view. With nobody around, the bot still revives after 5 seconds.", "The default is 20 seconds, the same as before, so nothing changes unless you pick another value. The Activity log now shows the wait you chose."], "note": "Contributed by duan78 (#87). Tested in simulation only, not in a live game."}, {"version": "1.2.215", "title": "No XP can move hunting to the next spot", "items": ["New option \"When there is no XP\" on the Town page, next to \"No XP for (minutes)\". \"Return to town\" is the old behavior. \"Move to the next level spot\" moves hunting to the next entry in your level spot list and restarts the no-XP timer.", "If there is no higher level spot left, the bot makes the normal town trip. Other reasons (supplies, bag, gear wear) still send the bot to town.", "The default is \"Return to town\", so nothing changes unless you pick the other choice. It needs \"No XP for a while\" and the town cycle turned on."], "note": "Contributed by duan78 (#83). Tested in simulation only, not in a live game."}, {"version": "1.2.214", "title": "Town trips can wear better gear you carry", "items": ["New option under Loot, in \"Bag and pet space\": \"On town trips, wear carried gear with better stats; store the replaced piece\". At the warehouse, a carried piece whose real stats beat the worn one in the same slot is worn, and the replaced piece is deposited in the warehouse, never sold.", "Stats are compared the way the game's item tooltip shows them (rolls, plus level and known blues), so a well-rolled ordinary piece can beat a poorly rolled Seal piece. Weapons are judged on the attack type of the weapon you wear now.", "Your chosen weapons and shield, buff-set gear, the alchemy item and Keep-rule items are never swapped. Pieces with an incomplete tooltip or an unmet level requirement are skipped, and a swap the game refuses is skipped for the session.", "It is off by default, so nothing changes unless you turn it on."], "note": "Contributed by duan78 (#86). Tested in simulation only, not in a live game; the gear swap itself was not checked on the live server."}, {"version": "1.2.213", "title": "Choose which monsters to avoid for kill-stealing", "items": ["New option \"Avoided monsters\" under \"Avoid other players' targets\" in the hunting settings. \"All monsters\" is the old behavior. \"Normal & champion only\" still leaves alone normal and champion monsters another player is fighting, but takes giant, party, elite and other strong monsters even if someone else is fighting them.", "The default is \"All monsters\", so nothing changes unless you pick the other choice. If \"Avoid other players' targets\" is off, the new option has no effect.", "The \"no target\" explanation in the bug report counts monsters by the same rule."], "note": "Contributed by duan78 (#91). Tested in simulation only, not in a live game."}, {"version": "1.2.212", "title": "Option to not pick up Star gear", "items": ["New option under the Loot settings: Equipment: don't pick up Star gear (Moon and Sun still are). When it is on, the bot and the pet leave Star (Seal of Star) equipment on the ground and keep picking up everything else, including Moon and Sun gear.", "It is off by default, so nothing changes unless you turn it on. A Pick rule on an item still takes that item.", "Only tested in simulation, not on the live server."]}, {"version": "1.2.211", "title": "Sell Star: withdrawals and walking fixed", "items": ["Fixes Sell all Star gear stopping with \"a withdrawal did not reach the bag\". It now waits for the gear to show up in the bag, in whatever slot the game puts it.", "It no longer insists on reaching the exact saved standing spot: close enough to the warehouse or merchant is enough, and if it cannot find a way it tries from where it stands.", "Only tested in simulation, not on the live server."]}, {"version": "1.2.210", "title": "Sell Star also sells Star gear already in the bag", "items": ["Fixes Sell all Star gear doing nothing when Star gear from an earlier run was still in your bag. Star gear in the bag is now sold along with what comes out of the warehouse.", "When it stops, the reason now shows in the bug report (Diagnostics), so a failed run can be diagnosed.", "Only tested in simulation, not on the live server."]}];
 
 // Check trusted repository metadata; never execute downloaded update code.
 const Updates = {
@@ -15557,7 +15631,7 @@ const Diagnostics = {
       else if (H.levelMin && level < H.levelMin || H.levelMax && level > H.levelMax) why.level++;
       else if (include.length && !include.some(s => name.includes(s)) || exclude.some(s => name.includes(s))) why.name++;
       else if (!Hunt.inArea(e) || dist2D(pose, e) > H.chase) why.far++;
-      else if (H.avoidKs && sim - (World.hitByOthers.get(e.gid) ?? -Infinity) < 8000 && sim - (World.hitByUs.get(e.gid) ?? -Infinity) > 8000) why.others++;
+      else if (Hunt.ksAvoids(e, sim)) why.others++;
     }
     if (!seen) return 'No monsters in view. Move to a place with monsters and press "Set hunting spot here".';
     const parts = [
@@ -16017,6 +16091,157 @@ const ItemRules = {
 // The wire catalogue starts with what earlier sessions saw and grows with every gameplay batch.
 Items.wireLoad();
 bus.on('gameplay', () => ItemRules.learnWorld());
+
+
+// Auto-equip, phBot-style but scored on the game's own stat model: on a town trip, a carried equipment piece
+// whose real stats beat the worn one in the same slot family is worn there, and the piece it replaces is
+// deposited in the warehouse. Stats are computed the way the client tooltip does it: every stat rolls inside a
+// [min, max] field pair (the roll is 5 bits of the item's variance bitfield), plus adds its per-plus share, and
+// known blues add a bounded nudge on top — so a well-rolled ordinary piece can beat a low-rolled Seal one.
+// Weapons are compared on the dominant attack of the worn weapon (a physical build never swaps to a magical
+// blade, however good); armour and shields on physical + magical defence; accessories on reinforcement.
+// Never touched: the chosen primary/secondary/shield, buff-set gear, the alchemy item, items with a Keep rule,
+// pieces with an incomplete tooltip or an unknown level requirement, and anything the game refuses to equip.
+const EQUIP_MARGIN = 1.02;
+// Blue weights are a judgment call, kept small so real stats dominate the comparison: half a point per build
+// stat (STR on a physical weapon, INT on a magical one), a quarter per hit-ratio point, a tenth per raw HP.
+const Equip = {
+  bad: new Set(), out: new Set(), outOwner: '', message: 'Auto-equip off.',
+  reset() { this.bad.clear(); this.out.clear(); this.outOwner = ''; this.message = 'Auto-equip off.'; },
+  on() { return !!Settings.profile.items.autoEquip; },
+  family(item) { return (item.typeFlags >>> 7) & 15; },
+  // The stats an item really carries, or null when its tooltip does not hold them all (never guessed).
+  stats(item) {
+    const f = item.tooltip?.fields;
+    if (!f || item.variance === undefined || item.variance === null) return null;
+    let bits; try { bits = BigInt(item.variance); } catch { return null; }
+    const roll = i => Number(bits >> BigInt(i * 5) & 31n);
+    const real = (lo, hi, i, perPlus) => {
+      if (!Number.isFinite(f[lo]) || !Number.isFinite(f[hi]) || !Number.isFinite(f[perPlus])) return null;
+      return (f[hi] - f[lo]) * roll(i) / 31 + f[lo] + f[perPlus] * (item.plus ?? 0);
+    };
+    const tid = this.family(item);
+    if (tid === 6) {
+      const paMin = real('varianceIntMin240', 'varianceIntMax244', 4, 'varianceFloatPerPlus250');
+      const paMax = real('varianceIntMin248', 'varianceIntMax24c', 4, 'varianceFloatPerPlus250');
+      const maMin = real('varianceIntMin254', 'varianceIntMax258', 5, 'varianceFloatPerPlus264');
+      const maMax = real('varianceIntMin25c', 'varianceIntMax260', 5, 'varianceFloatPerPlus264');
+      if (paMin === null || paMax === null || maMin === null || maMax === null) return null;
+      return { weapon: true, pa: (paMin + paMax) / 2, ma: (maMin + maMax) / 2 };
+    }
+    if (tid === 5 || tid === 12) {
+      const pr = real('varianceFloatMin1e0', 'varianceFloatMax1e4', 0, 'varianceFloatPerPlus1e8');
+      const mr = real('varianceFloatMin200', 'varianceFloatMax204', 1, 'varianceFloatPerPlus208');
+      if (pr === null || mr === null) return null;
+      return { accessory: true, pr, mr };
+    }
+    if ([1, 2, 3, 4, 9, 10, 11].includes(tid)) {
+      const shield = tid === 4;
+      const pd = real('varianceFloatMin1c8', 'varianceFloatMax1cc', shield ? 4 : 3, 'varianceFloatPerPlus1d0');
+      const md = real('varianceFloatMin1f4', 'varianceFloatMax1f8', shield ? 5 : 4, 'varianceFloatPerPlus1fc');
+      if (pd === null || md === null) return null;
+      return { armour: true, pd, md };
+    }
+    return null;
+  },
+  // Blues decoded as the client does: paramId in the low 16 bits, amount in the high 32.
+  blues(item, phys) {
+    let bonus = 0;
+    for (const encoded of item.magic || []) {
+      let bits; try { bits = BigInt(encoded); } catch { continue; }
+      const ref = (item.magicReferences || []).find(r => r.paramId === Number(bits & 65535n));
+      if (!ref) continue;
+      const amount = Number(bits >> 32n) & 0xffffffff;
+      if (ref.optionName === 'MATTR_STR') bonus += amount * (phys === false ? 0 : 0.5);
+      else if (ref.optionName === 'MATTR_INT') bonus += amount * (phys === true ? 0 : 0.5);
+      else if (ref.optionName === 'MATTR_HR') bonus += amount * 0.25;
+      else if (ref.optionName === 'MATTR_HP') bonus += amount * 0.1;
+    }
+    return bonus;
+  },
+  score(item, stats, phys) {
+    if (stats.weapon) { const attack = phys === undefined ? stats.pa >= stats.ma : phys; return (attack ? stats.pa : stats.ma) + this.blues(item, attack); }
+    if (stats.armour) return stats.pd + stats.md + this.blues(item);
+    return (stats.pr + stats.mr) * 100 + this.blues(item);
+  },
+  protected(item) {
+    if (ItemRules.guarded(item)) return true;
+    const key = BuffGear.key(item);
+    if (Settings.profile.macro.buffSets?.some(s => s.weapon === key || s.shield === key)) return true;
+    if (Alchemy.selected && Alchemy.item()?.slot === item.slot) return true;
+    return ItemRules.get(item.refObjId)?.act === 'keep';
+  },
+  // The next swap worth making. Rings and earrings have two slots: the weaker worn piece is the target, so a
+  // better piece replaces it instead of being compared against the stronger one.
+  pick() {
+    const gp = World.gp, equipped = gp.equipmentSlotCount || 13, level = gp.progression?.level;
+    if (!Number.isInteger(level)) return null;
+    const worn = (gp.inventory || []).filter(i => i.slot < equipped && this.stats(i) && !this.protected(i));
+    if (!worn.length) return null;
+    let best = null;
+    for (const item of World.items()) {
+      if (item.slot < equipped || !ItemType.isEquipment(item.typeFlags) || (item.durability ?? 1) <= 0) continue;
+      if (this.protected(item) || this.bad.has(BuffGear.key(item))) continue;
+      const stats = this.stats(item);
+      if (!stats) continue;
+      const need = Town.requiredLevel(item);
+      if (!Number.isInteger(need) || need > level) continue;
+      const family = worn.filter(w => this.family(w) === this.family(item));
+      if (!family.length) continue;
+      let target = null, targetStats = null, targetScore = 0;
+      for (const w of family) {
+        const ws = this.stats(w), s = this.score(w, ws, stats.weapon ? ws.pa >= ws.ma : undefined);
+        if (!target || s < targetScore) { target = w; targetStats = ws; targetScore = s; }
+      }
+      const score = this.score(item, stats, stats.weapon ? targetStats.pa >= targetStats.ma : undefined);
+      if (targetScore <= 0 || score < targetScore * EQUIP_MARGIN) continue;
+      if (!best || score - targetScore > best.score - best.targetScore) best = { item, worn: target, score, targetScore };
+    }
+    return best;
+  },
+  remember(key) {
+    const owner = Settings.profileKey + '|' + World.charName;
+    if (owner !== this.outOwner) { this.outOwner = owner; this.out.clear(); }
+    this.out.add(key);
+  },
+  // Replaced pieces are never sold from the bag, even on later trips, until they are stored.
+  replaced(item) { return this.outOwner === Settings.profileKey + '|' + World.charName && this.out.has(BuffGear.key(item)); },
+  // Runs from Town.store() while the warehouse is open: one swap at a time, each confirmed by the game state
+  // before the next. A swap the game refuses (or never confirms) is skipped for the session; nothing here can
+  // fail the town trip.
+  step(t) {
+    if (!this.on() || !World.inWorld()) return false;
+    const p = t.pending, gp = World.gp;
+    // A warehouse transaction still in flight owns the trip — an equip move is never sent beside it — and a
+    // busy game inventory admits no new one either: the same one-confirmed-transaction-at-a-time rule as Town.
+    if (p && p.kind !== 'equip') return false;
+    if (!p && gp.inventoryPending) return false;
+    if (p?.kind === 'equip') {
+      // A swap counts only once the worn slot really holds the new piece — matched by its full key, not just the
+      // item number, because the case this feature is built around is the same base item with a better roll.
+      // Before that, and for the first 500 ms like every town transaction, nothing is trusted and nothing re-sent.
+      if (now() - p.at >= 500 && !gp.inventoryPending && BuffGear.key(gp.inventory?.find(i => i.slot === p.slot)) === p.key) {
+        t.pending = null;
+        (t.equippedOut ||= []).push(p.oldKey);
+        this.remember(p.oldKey);
+        this.message = 'Wore ' + (p.name || 'better gear') + '; the replaced piece goes to the warehouse.';
+        Log.info('Equip: ' + this.message); UI.toast(this.message, 'info', 4000);
+        return true;
+      }
+      if (gp.error && !gp.inventoryPending && now() - p.at >= 500) { this.bad.add(p.key); t.pending = null; }
+      else if (now() - p.at > 15000) { this.bad.add(p.key); t.pending = null; }
+      return true;
+    }
+    const pick = this.pick();
+    if (!pick) return false;
+    const name = Items.name(pick.item.refObjId);
+    if (Cmd.raw({ kind: 'inventory-move', source: pick.item.slot, destination: pick.worn.slot, quantity: 0 }, 'Equip: wear ' + name)) {
+      t.pending = { kind: 'equip', slot: pick.worn.slot, ref: pick.item.refObjId, key: BuffGear.key(pick.item), oldKey: BuffGear.key(pick.worn), name, at: now() };
+      this.message = 'Wearing ' + name + '.';
+    }
+    return true;
+  },
+};
 
 
 // Map page: the game's own minimap tiles on a canvas, with the hunting area, monsters, party and players.
@@ -17162,6 +17387,7 @@ const UI = {
         this.check('Walking back may use teleports and ferries (beta; pays their fee)', () => H().travel !== false, v => H().travel = v),
         el('p', 'Beta: a long walk back is first checked against the game map, and teleports and ferries are used where walking cannot get there. If a route looks wrong, send the log.', 'muted'),
         this.check('Avoid other players’ targets', () => H().avoidKs, v => H().avoidKs = v),
+        this.select('Avoided monsters', () => [['all', 'All monsters'], ['minor', 'Normal & champion only']], () => H().avoidKsScope || 'all', v => H().avoidKsScope = v),
         this.number('Minimum mob level (0 = any)', () => H().levelMin, v => H().levelMin = v, 0, 140),
         this.number('Maximum mob level (0 = any)', () => H().levelMax, v => H().levelMax = v, 0, 140),
         this.text('Only these mobs', () => H().include, v => H().include = v),
@@ -17234,6 +17460,12 @@ const UI = {
         this.text('Exclude names', () => L().exclude, v => L().exclude = v),
         el('p', 'Pets collect during combat regardless of the finish-fight setting, which applies to the character only. Inventory transactions and potion priority can briefly delay pet requests. Equipment: only SoX takes Star, Moon and Sun gear and leaves plain equipment, even when Equipment or an Always include name matches it; other items follow their own switches. It needs the item catalogue, which loads automatically. When several drops are eligible, Star, Moon and Sun gear is collected first (Sun before Moon before Star) whatever the distance; without the catalogue the nearest drop goes first. Presets clear Always include names; exclusions still apply. Other items excludes the separate categories above. Ownership and bag capacity always apply. Failed pickups use a backoff.', 'muted'));
       host.append(options);
+      host.append(this.group('Alert sounds',
+        this.check('Chime when another player comes near', () => Settings.profile.sounds.player, v => Settings.profile.sounds.player = v),
+        this.check('Chime when the character dies', () => Settings.profile.sounds.died, v => Settings.profile.sounds.died = v),
+        this.check('Chime on a level up', () => Settings.profile.sounds.levelUp, v => Settings.profile.sounds.levelUp = v),
+        this.check('Chime when a unique monster comes into view', () => Settings.profile.sounds.unique, v => Settings.profile.sounds.unique = v),
+        el('p', 'Short chimes, one per switch, all off by default (the player one uses the player alert detection). A click in the game unlocks the sound when the browser blocked it. The pet and SoX chimes above preview the sound.', 'muted')));
   },
   section_lootWho(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
@@ -17249,7 +17481,10 @@ const UI = {
   section_lootBalance(host) {
     host.append(this.group('Bag and pet space',
       this.check('Balance free slots with the pickup pet', () => ItemRules.cfg().balance, v => ItemRules.cfg().balance = v),
-      el('p', 'While hunting, items with a Sell or Store rule move to the bag or pet, whichever has more free slots. Supplies and the weapons and shield chosen under Combat never move.', 'muted')));
+      el('p', 'While hunting, items with a Sell or Store rule move to the bag or pet, whichever has more free slots. Supplies and the weapons and shield chosen under Combat never move.', 'muted')),
+      this.group('Wear better gear',
+        this.check('On town trips, wear carried gear with better stats; store the replaced piece', () => Settings.profile.items.autoEquip, v => Settings.profile.items.autoEquip = v),
+        el('p', 'At the warehouse, a carried equipment piece whose real stats (attack rolls, plus, defence, known blues) beat the worn one in the same slot is worn, and the piece it replaces is deposited, never sold. Weapons follow the worn weapon\'s dominant attack. The chosen weapons and shield, buff-set gear, the alchemy item, Keep-rule items and pieces with an incomplete tooltip or an unmet level requirement are never touched. A swap the game refuses is skipped for the session.', 'muted')));
   },
   section_suppliesPotions(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
@@ -17373,6 +17608,7 @@ const UI = {
         this.number('Gear durability below (%)', () => town().wear.pct, v => town().wear.pct = v, 1, 90),
         this.check('No XP for a while', () => town().noXp.on, v => town().noXp.on = v),
         this.number('No XP for (minutes)', () => town().noXp.minutes, v => town().noXp.minutes = v, 1, 120),
+        this.select('When there is no XP', [['town', 'Return to town'], ['nextSpot', 'Move to the next level spot']], () => town().noXp.action, v => town().noXp.action = v),
         this.check('On a timer', () => town().every.on, v => town().every.on = v),
         this.number('Every (minutes)', () => town().every.minutes, v => town().every.minutes = v, 5, 600),
         this.check('Revive in town and go back to the hunting spot', () => town().revive, v => town().revive = v),
@@ -17597,7 +17833,8 @@ const UI = {
         this.check('Only join and accept parties while the bot is running', () => party().onlyWhileRunning, v => { party().onlyWhileRunning = v; Party.reset(); }),
         el('p', 'Off by default: Auto-recruit, Auto-accept and joining the party leader also work while hunting is stopped. Turn this on to make all of them wait until you press Start. Resurrection is not affected.', 'muted'),
         this.check('Accept resurrection from party members', () => party().acceptRes, v => party().acceptRes = v),
-        el('p', 'When you are dead and a party member casts Rebirth on you, the bot answers Yes. Works during hunting and while stopped; resurrection offers from other players are left to you.', 'muted'),
+        this.number('Wait for a party resurrection (s)', () => party().reviveWaitS, v => party().reviveWaitS = v, 5, 600),
+        el('p', 'When you are dead and a party member casts Rebirth on you, the bot answers Yes. Works during hunting and while stopped; resurrection offers from other players are left to you. With a living party member in view it waits this long after dying before reviving itself in town (20 s by default).', 'muted'),
         this.check('Auto-resurrect party members', () => party().autoRes, v => { party().autoRes = v; Resurrect.reset(); }),
         this.number('Maximum res distance from hunt spot (m)', () => party().resRadius / 10, v => party().resRadius = v * 10, 1, 100),
         el('p', 'Works during hunting and while stopped. Walks into skill range for visible dead members within the maximum radius, casts Rebirth, then returns. During hunting the radius is measured from the saved hunt spot; while stopped it uses your starting position. Collision data is required for walking. Travel stops after 30 seconds or 12 seconds without progress per leg. The member must accept the revival. Travel, shopping and manual control take priority.', 'muted')));
@@ -18703,9 +18940,9 @@ function userStop() {
 
 function boot() {
   if (Setup.isNew()) UI.current = 'Setup';
-  UI.mount(); Stats.init(); Updates.start(); Diagnostics.start();
+  UI.mount(); Stats.init(); Sound.init(); Updates.start(); Diagnostics.start();
   const unlockSound = e => {
-    if (e.isTrusted && (Settings.profile.hunt.pickup.petFullSound || Settings.profile.hunt.pickup.soxSound)) Sound.unlock();
+    if (e.isTrusted && (Settings.profile.hunt.pickup.petFullSound || Settings.profile.hunt.pickup.soxSound || Sound.anyOn())) Sound.unlock();
   };
   W.addEventListener('pointerdown', unlockSound, true);
   W.addEventListener('keydown', unlockSound, true);
@@ -18732,7 +18969,7 @@ function boot() {
     const key = name ? 'profile:' + name : 'profile:default';
     if (key !== Settings.profileKey) { Town.lastScrollPoint = null; Town.deathPoint = null; stopAll(); Settings.useCharacter(name); }
   });
-  bus.on('profile', () => { PetPotion.reset(); AutoMastery.reset(); StatPoints.reset(); Trace.reset(); BuffGear.reset(); Town.lastScrollPoint = null; Town.deathPoint = null; SpeedScroll.reset(); ScrollBuff.reset(); MallBuyer.reset(); MallBuyer.unpoison(); RepairHammer.reset(); Party.reset(); Resurrect.reset(); Quest.reset(); stopAll(); Restock.cancelRecording(); Restock.unbuyable.clear(); Loot.reset(); Wardrobe.applyNow(); UI.draw(); });
+  bus.on('profile', () => { PetPotion.reset(); AutoMastery.reset(); StatPoints.reset(); Trace.reset(); BuffGear.reset(); Equip.reset(); Town.lastScrollPoint = null; Town.deathPoint = null; SpeedScroll.reset(); ScrollBuff.reset(); MallBuyer.reset(); MallBuyer.unpoison(); RepairHammer.reset(); Party.reset(); Resurrect.reset(); Quest.reset(); stopAll(); Restock.cancelRecording(); Restock.unbuyable.clear(); Loot.reset(); Wardrobe.applyNow(); UI.draw(); });
   bus.on('phase', phase => {
     if (phase !== 'world') {
       BuffGear.interrupt('World transition interrupted buff swaps.', true);
