@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         nixxane bot
 // @namespace    https://opensro.online/
-// @version      1.2.203
+// @version      1.2.213
 // @updateURL    https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.meta.js
 // @downloadURL  https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -22,7 +22,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[NIX] Another SRO assistant is active. Disable it and reload to use NIX.');
   return;
 }
-const VERSION = '1.2.203';
+const VERSION = '1.2.213';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -201,18 +201,18 @@ const DEFAULT_PROFILE = {
   trade: { from: 'CH', to: 'WC', trips: 1, potions: true, goods: 0 },
   trace: { enabled: false, name: '', distance: 12, fight: true },
   mastery: { enabled: false, ids: [], gap: 0, skills: false, scope: 'rotation', reserve: 0, order: 'masteries' },
-  lure: { enabled: false, points: [], taunt: { id: 0, group: 0 }, area: { id: 0, group: 0 }, holdS: 10, pauseEveryM: 10, pauseS: 4, radius: 15, returnHpPct: 50, stopAt: 0 },
+  lure: { enabled: false, points: [], taunt: { id: 0, group: 0 }, area: { id: 0, group: 0 }, holdS: 10, pauseEveryM: 10, pauseS: 4, radius: 15, returnHpPct: 50, stopAt: 0, stopOnPlayers: 0, stopAfter: 0 },
   pet: { attack: { on: false, recall: true, radius: 15, timeout: 3, resend: 5 } },
   scroll: { damageInc: false, damageAbs: false },
   mall: { on: false, budgetSilk: 0, hp: { on: false, low: 10, target: 1000 }, mp: { on: false, low: 10, target: 1000 }, damageInc: { on: false, low: 5, target: 20 }, damageAbs: { on: false, low: 5, target: 20 }, reverse: { on: false, low: 10, target: 50 } },
-  party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', leaveIfNotLeader: false, acceptNames: '', autoRes: false, acceptRes: false, resRadius: 300, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
+  party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', leaveIfNotLeader: false, onlyWhileRunning: false, acceptNames: '', autoRes: false, acceptRes: false, resRadius: 300, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
     support: { enabled: false, whileStopped: false, range: 30, heal: { id: 0, group: 0, pct: 60, self: false }, group: { id: 0, group: 0, pct: 60, count: 2 }, buffs: [] } },
   wardrobe: { on: true, phantom: true, realAnim: true, hideAvatars: false,
     eq: {}, av: {}, pet: { atk: 0, pick: 0, mount: 0 }, presets: {}, undo: null },
   macro: {
     rotations: { normal: [], champion: [], giant: [], party: [], elite: [], unique: [] },
     fallbackToNormal: true, normalAttack: true, buffs: [], imbue: null, buffSwap: false, buffAuto: true, buffSets: [],
-    imbueBeforeAttack: true, berserkClasses: { normal: false, champion: false, giant: true, giantParty: false, party: false, elite: false, unique: false, titan: false },
+    imbueBeforeAttack: true, berserkClasses: { normal: false, champion: false, giant: true, giantParty: false, party: false, elite: false, unique: false, titan: false }, berserkCornered: 0,
     minMpPct: 0, castGapMs: 350,
   },
   potion: {
@@ -221,7 +221,7 @@ const DEFAULT_PROFILE = {
     prefer: { hp: 0, mp: 0, vigor: 0, cure: 0 }, delayMs: 350,
     restock: {
       enabled: false, vendor: null, route: [], offers: [],
-      town: { enabled: false, revive: true, revivePet: false, deathReturn: 'recall', returnBy: 'reverse', storeSox: true, sellStar: false, sellBag: false, storeLevels: '', petFull: true, petFree: 1, arrivalRadius: 500,
+      town: { enabled: false, revive: true, revivePet: false, deathReturn: 'recall', returnBy: 'reverse', storeSox: true, sellStar: false, sellBag: false, sellExcess: false, storeLevels: '', petFull: true, petFree: 1, arrivalRadius: 500,
         broken: true, wear: { on: false, pct: 15 }, noXp: { on: false, minutes: 10 }, every: { on: false, minutes: 60 }, arrival: null, storage: null, vendor: null, smith: null, gate: null,
         keep: '', store: { equipment: true, elixirs: true, powders: true, alchemy: true, others: false } },
       hp: { on: true, refObjId: 0, low: 20, target: 100 },
@@ -238,9 +238,9 @@ const DEFAULT_PROFILE = {
     levelSpots: { on: false, list: [] },
     center: null, radius: 400, chase: 700, returnToCenter: true, travel: true, attack: true,
     classes: { normal: true, champion: true, giant: true, party: false, elite: false, unique: false, titan: false },
-    levelMin: 0, levelMax: 0, include: '', exclude: '', priority: 'attackers', avoidKs: true,
+    levelMin: 0, levelMax: 0, include: '', exclude: '', priority: 'attackers', avoidKs: true, avoidKsScope: 'all',
     targetTimeoutS: 25,
-    pickup: { enabled: true, soxOnly: false, gold: true, potions: true, equipment: true, elixirs: true, powders: true, magicStones: true, attrStones: true, alchemy: true, others: true,
+    pickup: { enabled: true, soxOnly: false, skipStar: false, gold: true, potions: true, equipment: true, elixirs: true, powders: true, magicStones: true, attrStones: true, alchemy: true, others: true,
       collector: 'character', by: {}, petFullSound: true, soxSound: true, include: '', exclude: '', radius: 300, afterKillOnly: true, retries: 2 },
     sit: { enabled: true, hpBelow: 35, mpBelow: 20, resumeAt: 90 },
     antiStuck: { enabled: true, minutes: 3, maxRecoveries: 3, recall: false },
@@ -273,6 +273,8 @@ function botProfile(input) {
   if (!Number.isInteger(result.potion.delayMs) || result.potion.delayMs < 0 || result.potion.delayMs > 60000) result.potion.delayMs = DEFAULT_PROFILE.potion.delayMs;
   if (!['death', 'recall'].includes(result.potion.restock.town.deathReturn)) result.potion.restock.town.deathReturn = 'recall';
   if (!['reverse', 'walk'].includes(result.potion.restock.town.returnBy)) result.potion.restock.town.returnBy = 'reverse';
+  // The anti-KS scope only has the two meanings; anything else is the old full behavior.
+  if (result.hunt.avoidKsScope !== 'minor') result.hunt.avoidKsScope = 'all';
   // New categories inherit the old Other items switch, preserving existing selection.
   const pickup = input.hunt?.pickup;
   for (const key of ['elixirs', 'powders', 'alchemy']) {
@@ -1749,6 +1751,16 @@ const Hunt = {
     return !!this.cfg().classes[cls];
   },
 
+  ksAvoids(e, sim = World.simNow() ?? 0) {
+    const H = this.cfg();
+    if (!H.avoidKs) return false;
+    if (H.avoidKsScope === 'minor') {
+      const cls = monsterClass(e);
+      if (cls !== 'normal' && cls !== 'champion') return false;
+    }
+    return sim - (World.hitByOthers.get(e.gid) ?? -Infinity) < 8000 && sim - (World.hitByUs.get(e.gid) ?? -Infinity) > 8000;
+  },
+
   chooseTarget() {
     const H = this.cfg();
     const pose = World.pose();
@@ -1770,7 +1782,7 @@ const Hunt = {
         if (inc.length && !inc.some((s) => name.includes(s))) continue;
         if (exc.some((s) => name.includes(s))) continue;
         if (!this.inArea(e) || d > H.chase) continue;
-        if (H.avoidKs && sim - (World.hitByOthers.get(e.gid) ?? -Infinity) < 8000 && sim - (World.hitByUs.get(e.gid) ?? -Infinity) > 8000) continue;
+        if (this.ksAvoids(e, sim)) continue;
       } else if (d > H.chase * 1.5) continue;
       let score = d;
       if (H.priority === 'attackers' && attacking) score -= 100000;
@@ -5995,6 +6007,9 @@ const WalkBack = {
     if (!a) return;
     if (!World.inWorld() || World.isDead()) return this.cancel('Walk back interrupted.', false);
     if (Manual.lastAt !== a.manualAt) return this.cancel('Manual control: walk back cancelled.', false);
+    // Self buffs marked "Hunting and walk-back" are kept up while travelling; the walk owns the tick, so no
+    // hunting cast happens at the same time and a refused skill only backs itself off.
+    Controller.guard('walkBuffs', () => Combat.buffs(false));
     if (a.source === 'planning') {
       if (now() - a.plan.at <= (a.plan.limit || WALK_PLAN_MS)) return;
       if (!this.useLegs()) return;
@@ -6205,6 +6220,8 @@ const Loot = {
     this.ensureCatalogue();
     return Items.data.size ? Items.sox(e.refObjId) : 0;
   },
+  // "Don't pick up Star gear": Star equipment only; Moon and Sun still drop in. Unknown until the catalogue is loaded, so it waits.
+  starSkipped(e, P, tf) { return !!P.skipStar && ItemType.isEquipment(tf) && (this.sox(e) === 1 || !Items.data.size); },
   allowed(e) {
     if (!e || e.kind !== 'ground-item' || !this.owned(e)) return false;
     const P = Hunt.cfg().pickup, tf = e.groundItem.typeFlags ?? e.tidWord ?? 0;
@@ -6214,7 +6231,7 @@ const Loot = {
     if (rule && (rule.pick === 'no' || rule.act === 'drop')) return false;
     const gold = ItemType.isGold(tf);
     if (rule?.pick !== 'yes') {
-      if (splitList(P.exclude).some(s => name.includes(s))) return false;
+      if (splitList(P.exclude).some(s => name.includes(s)) || this.starSkipped(e, P, tf)) return false;
       const included = splitList(P.include).some(s => name.includes(s));
       // SoX-only narrows equipment to Star/Moon/Sun gear; every other category keeps its own switch.
       if (P.soxOnly && ItemType.isEquipment(tf)) { if (!this.sox(e)) return false; }
@@ -6239,7 +6256,7 @@ const Loot = {
     const tf = e.groundItem.typeFlags ?? e.tidWord ?? 0, name = (e.name || '').toLowerCase(), rule = ItemRules.get(e.refObjId);
     if (rule && (rule.pick === 'no' || rule.act === 'drop')) return 'rule';
     const included = splitList(P.include).some(s => name.includes(s));
-    const filtered = rule?.pick !== 'yes' && (splitList(P.exclude).some(s => name.includes(s)) ||
+    const filtered = rule?.pick !== 'yes' && (splitList(P.exclude).some(s => name.includes(s)) || this.starSkipped(e, P, tf) ||
       (P.soxOnly && ItemType.isEquipment(tf) ? !this.sox(e) : !included && !P[this.category(tf)]));
     if (filtered) return 'filter';
     if (this.collector(e) === 'pet') {
@@ -6253,10 +6270,11 @@ const Loot = {
   filterWhy(e) {
     const P = Hunt.cfg().pickup, tf = e.groundItem.typeFlags ?? e.tidWord ?? 0, name = (e.name || '').toLowerCase();
     if (splitList(P.exclude).some(s => name.includes(s))) return 'name';
+    if (this.starSkipped(e, P, tf)) return 'star';
     return P.soxOnly && ItemType.isEquipment(tf) ? 'sox' : this.category(tf);
   },
   filterLabel(key) {
-    return { name: 'excluded by name', sox: 'not Star/Moon/Sun gear (SoX only)', gold: 'gold', potions: 'potions', equipment: 'equipment', elixirs: 'elixirs',
+    return { name: 'excluded by name', sox: 'not Star/Moon/Sun gear (SoX only)', star: 'Star gear (skipped by choice)', gold: 'gold', potions: 'potions', equipment: 'equipment', elixirs: 'elixirs',
       powders: 'lucky powders', magicStones: 'magic stones', attrStones: 'attribute stones', alchemy: 'other alchemy items', others: 'other items' }[key] || key;
   },
   skip(e, reason, inventoryBound = false) {
@@ -6744,6 +6762,8 @@ const Party = {
     this.acceptResurrection();
     if (World.inWorld() && Settings.profile.party.acceptRes) this.helping();
     const c = Settings.profile.party;
+    // Optional: party joining, leaving, recruiting and accepting wait until the bot is running (default: they work while stopped).
+    if (c.onlyWhileRunning && !Hunt.running) { this.joinMessage = ''; this.message = 'Waiting for the bot to be started.'; return; }
     if (World.inWorld()) { this.leaveWrongParty(); this.joinMain(); } else this.joinMessage = '';
     if (!World.inWorld() || (!c.autoAcceptMatching && !c.autoRecruit)) return;
     const gp = World.gp, matching = gp?.partyMatching, request = matching?.request, social = gp?.social;
@@ -7742,6 +7762,21 @@ const Town = {
       t.staged = direct ? null : { slot: pending.destination, ref: pending.ref };
     }
   },
+  // The surplus of a supply this profile restocks, above its refill target, from the character bag.
+  // Stacks the merchant refused are left alone; the sale itself is a partial one, bounded by the surplus.
+  excess() {
+    const t = this.trip;
+    for (const s of t.supplies || []) {
+      if (!s.on || !s.refObjId || !Number.isInteger(s.target)) continue;
+      const count = Restock.count(s.refObjId);
+      if (count <= s.target) continue;
+      const stack = World.items().filter(i => i.refObjId === s.refObjId && !t.unsold?.includes('bag:' + i.slot + ':' + i.refObjId))
+        .sort((a, b) => (b.quantity ?? 1) - (a.quantity ?? 1))[0];
+      if (!stack) continue;
+      return { kind: s.kind, stack, quantity: Math.min(stack.quantity ?? 1, count - s.target) };
+    }
+    return null;
+  },
   sell() {
     const t = this.trip, gp = World.gp, pet = Loot.pet();
     if (!Restock.activeShop() || gp.shop.npc !== this.npc('smith')?.gid || gp.shop.error) return this.fail(gp.shop?.error || 'Weapon merchant selection changed.');
@@ -7756,12 +7791,21 @@ const Town = {
       Activity.emit({ category: 'town', code: 'sale-refused', level: 'warn', text: 'Town sell: merchant refused an item (' + gp.error + '); skipped.', userText: 'The merchant refused one item; it was kept and selling continued.', outcome: 'refused', operationId: Activity.contexts.town?.id });
       t.pending = null;
     }
-    if (!this.pendingDone(p => p.bag ? !World.items().some(i => i.slot === p.source && i.refObjId === p.ref) : !pet.rec.inventory.some(i => i.slot === p.source && i.refObjId === p.ref)) || !this.trip || gp.inventoryPending) return;
+    if (!this.pendingDone(p => p.excess ? Restock.count(p.ref) <= p.before - p.quantity : p.bag ? !World.items().some(i => i.slot === p.source && i.refObjId === p.ref) : !pet.rec.inventory.some(i => i.slot === p.source && i.refObjId === p.ref)) || !this.trip || gp.inventoryPending) return;
     const unsold = (where, i) => t.unsold?.includes(where + i.slot + ':' + i.refObjId);
     const petItem = pet?.rec.inventory.find(i => this.sellable(i) && !unsold('pet:', i));
     const bagItem = !petItem && t.sellFirst ? World.items().find(i => this.sellableBag(i) && !unsold('bag:', i)) : null;
     const item = petItem || bagItem;
     if (!item) {
+      // Picked-up or overbought supplies crowd the bag: with the switch on, their surplus above the refill
+      // target sells here. Only items this profile restocks are ever touched, so nothing else is at risk.
+      const excess = this.cfg().sellExcess ? this.excess() : null;
+      if (excess) {
+        const label = { hp: 'HP potions', mp: 'MP potions', vigor: 'vigor potions', cure: 'pills', reverse: 'reverse scrolls', hgp: 'HGP potions', kit: 'pet kits' }[excess.kind] || excess.kind;
+        if (Cmd.raw({ kind: 'shop-sell', slot: excess.stack.slot, quantity: excess.quantity }, 'Town: sell surplus ' + label))
+          t.pending = { bag: true, excess: true, source: excess.stack.slot, ref: excess.stack.refObjId, quantity: excess.quantity, before: Restock.count(excess.stack.refObjId), at: now() };
+        return;
+      }
       // Protected items may still fill the pet; the trip carries on and goes back to hunting rather than stopping in town.
       this.enter(this.ammoSupplies().length ? 'ammo' : 'repair'); return;
     }
@@ -8844,6 +8888,176 @@ const Stall = {
   refresh() {
     if (!UI.is('Stall') || !UI.stallNote) return;
     UI.stallNote.textContent = this.status();
+  },
+};
+
+
+// Sell Star from storage: one click takes every Seal of Star piece out of the warehouse and sells it at the saved
+// repair merchant, in batches that fit the bag. Not a setting and never automatic: it only runs when the player
+// presses the button, and walks to each NPC itself. Uses the Town page's saved warehouse and repair merchant.
+// phases: walk-storage -> open-storage -> withdraw -> close-storage -> walk-smith -> open-shop -> sell -> close-shop -> (walk-storage again | done)
+// Every step waits for the state it expects (the item in the bag, the item gone from the bag); a dispatch is
+// never proof and nothing is resent, so a command the game never answered cannot sell twice.
+const SELL_STAR_STEP_MS = 10000;
+const SELL_STAR_ITEM_MS = 8000;
+const SELL_STAR_KEEP_SLOTS = 2;
+const SellStar = {
+  run: null, message: 'Idle.',
+  // Star equipment the merchant would take. Buff-set gear and Keep names stay, as everywhere else in the bot.
+  isStar(item) {
+    const tf = item.typeFlags, keep = splitList(Town.cfg().keep), name = (item.name || '').toLowerCase();
+    return ItemType.isEquipment(tf) && Items.soxOf(item) === 1 && item.tooltip?.fields?.canSell !== 0 &&
+      !ItemRules.guarded(item) && !keep.some(s => name.includes(s));
+  },
+  // Star gear already in the bag (left over from an earlier run) is sold too.
+  inBag() { const eq = World.gp?.equipmentSlotCount || 13; return World.items().filter(i => i.slot >= eq && this.isStar(i)); },
+  inStorage() { const st = World.gp?.storage; return st && st.phase === 'open' && !st.guild ? st.items.filter(i => this.isStar(i)) : []; },
+  bag(slot, ref) { return World.items().find(i => i.slot === slot && i.refObjId === ref); },
+  blocked() {
+    const gp = World.gp, c = Town.cfg();
+    if (!World.inWorld() || !gp || !World.local()) return 'Enter the game world first.';
+    if (World.isDead()) return 'Character is dead.';
+    if (!c.storage || !c.smith) return 'Save the warehouse and the repair merchant first (Town page).';
+    if (Alchemy.run || Alchemy.pending || Stall.run || Trade.run || BuffGear.run || BuffGear.recovery) return 'Stop alchemy, stall, trade and gear swaps first.';
+    if (Hunt.running || Town.trip || WalkBack.active || Travel.active || Restock.trip || Restock.recording || Resurrect.trip || Quest.trip || Loot.active) return 'Stop hunting, travel and route recording first.';
+    if (Restock.activeShop() || gp.storage || gp.exchange?.open || gp.exchange?.requesting || gp.stall?.phase && gp.stall.phase !== 'none') return 'Close shop, storage, trade and stall first.';
+    if (World.isCasting() || World.isSitting() || gp.pendingMoves) return 'Stand still and wait for casts and movement to finish.';
+    return '';
+  },
+  start() {
+    if (this.run) return;
+    const error = this.blocked();
+    if (error) { this.message = error; UI.toast(error, 'warn'); return; }
+    if (World.gp.inventoryPending) { this.message = 'Wait for settled inventory state.'; UI.toast(this.message, 'warn'); return; }
+    this.run = { phase: 'walk-storage', at: now(), sent: false, pending: null, mine: this.inBag().map(i => ({ slot: i.slot, ref: i.refObjId })), sold: 0, round: 0, refused: new Set(), more: false, rev: null };
+    this.message = 'Selling Star gear from the warehouse.';
+    Log.info('Sell Star: started.');
+  },
+  stop(text = 'Sell Star stopped.') {
+    const r = this.run; this.run = null;
+    if (!r) return;
+    this.message = text;
+    Log.warn(text); UI.toast(text, 'warn', 8000);
+    if (World.inWorld() && (World.gp.storage || Restock.activeShop())) Cmd.raw({ kind: 'npc-close' }, 'Sell Star: close NPC');
+  },
+  enter(phase) {
+    const r = this.run;
+    r.phase = phase; r.at = now(); r.sent = false; r.pending = null;
+    r.travel = null; r.lastPose = null; r.progressAt = now(); r.movedAt = -Infinity; r.retryAt = 0; r.stall = null; r.avoid = [];
+  },
+  // Walks to the saved standing point of a service, as the town cycle does; true once in service range.
+  walk(role) {
+    const r = this.run, dest = Town.cfg()[role], pose = World.pose(), what = Town.role('walk-' + role);
+    const radius = Math.max(0, Math.min(60, 190 - dist2D(dest, dest.npc || dest)));
+    // Close enough to the NPC itself is enough; the exact saved standing spot is not needed.
+    if (dist2D(pose, Town.npc(role) || dest.npc || dest) <= 190) return true;
+    if (!Number.isFinite(dist2D(pose, dest))) { this.stop('Sell Star stopped: the ' + what + ' is in another world.'); return false; }
+    if (!r.lastPose || dist2D(r.lastPose, pose) > 3) { r.lastPose = { ...pose }; r.progressAt = now(); }
+    if (now() < r.retryAt) return false;
+    // No way through: try opening from here anyway; the game refuses when too far and the open step says so.
+    if (now() - r.progressAt > 20000) { Log.warn('Sell Star: no progress walking to the ' + what + '; trying from here.'); return true; }
+    if (!World.isSitting() && Navigation.watch(r, pose, r.movedAt, r.travel?.route[r.travel.index] || dest) === 'giveup') { Log.warn('Sell Star: blocked on the way to the ' + what + '; trying from here.'); return true; }
+    const step = Navigation.next(r, dest, false, radius);
+    if (step.waiting || step.error) { r.travel = null; r.retryAt = now() + 3000; this.message = 'Walking to the ' + what + ': waiting for a route.'; return false; }
+    this.message = 'Walking to the ' + what + '.';
+    if (!step.point || now() - r.movedAt < 1000 || World.gp.inventoryPending) return false;
+    if (World.isSitting()) { if (Cmd.action(1000)) r.movedAt = now(); }
+    else if (Cmd.move(step.point)) r.movedAt = now();
+    return false;
+  },
+  // Selects the saved NPC and opens its window; true once the window shows.
+  open(role, kind) {
+    const r = this.run, gp = World.gp, npc = Town.npc(role);
+    if (!npc) { this.stop('Cannot see the ' + Town.role('open-' + role) + '. Stand next to it.'); return false; }
+    if (gp.targetPending || gp.inventoryPending) return false;
+    if (gp.target !== npc.gid) {
+      if (r.sent) { this.stop('Sell Star stopped: the NPC selection changed.'); return false; }
+      if (Cmd.spaced('select')) Cmd.select(npc.gid);
+      return false;
+    }
+    if (!(gp.targetCapabilities & (role === 'storage' ? 4 : 8))) { this.stop('The saved ' + Town.role('open-' + role) + ' does not offer that service.'); return false; }
+    if (!r.sent) {
+      r.rev = gp.shopCompletionRevision;
+      if (Cmd.raw({ kind, gid: npc.gid }, 'Sell Star: open ' + Town.role('open-' + role))) r.sent = true;
+      return false;
+    }
+    return role === 'storage' ? gp.storage?.phase === 'open' && !gp.storage.guild && gp.storage.npc === npc.gid
+      : gp.shop?.npc === npc.gid && gp.shopCompletionRevision !== r.rev;
+  },
+  close(next) {
+    const r = this.run, gp = World.gp;
+    if (gp.inventoryPending) return;
+    if (!r.sent) { if (Cmd.raw({ kind: 'npc-close' }, 'Sell Star: close NPC')) r.sent = true; return; }
+    if (!gp.target && !gp.storage && !Restock.activeShop()) this.enter(next);
+  },
+  tick() {
+    const r = this.run;
+    if (!r) return false;
+    const gp = World.gp;
+    if (!World.inWorld() || !gp || World.isDead()) { this.stop('Sell Star stopped: left the world or died. Withdrawn gear stays in your bag.'); return true; }
+    if (r.phase !== 'sell' && r.phase !== 'withdraw' && !r.phase.startsWith('walk-') && now() - r.at > SELL_STAR_STEP_MS) { this.stop('Sell Star timed out in "' + r.phase + '". Gear already withdrawn stays in your bag.'); return true; }
+    switch (r.phase) {
+      case 'walk-storage':
+        if (this.walk('storage')) this.enter('open-storage');
+        break;
+      case 'open-storage':
+        if (this.open('storage', 'storage-open')) { r.round++; this.enter('withdraw'); }
+        break;
+      case 'withdraw': {
+        const st = gp.storage;
+        if (!st || st.phase !== 'open' || st.guild) { this.stop('Sell Star stopped: the warehouse closed. Gear already withdrawn stays in your bag.'); break; }
+        const p = r.pending;
+        if (p) {
+          // The item may land in another slot than asked, and shows a moment after the busy flag clears.
+          const landed = World.items().find(i => i.refObjId === p.ref && i.slot >= (gp.equipmentSlotCount || 13) && !p.before.has(i.slot));
+          if (!landed) {
+            if (now() - p.at > SELL_STAR_ITEM_MS) this.stop('Sell Star stopped: a withdrawal did not reach the bag.');
+            break;
+          }
+          r.mine.push({ slot: landed.slot, ref: p.ref }); r.pending = null; r.at = now();
+        }
+        if (gp.inventoryPending) break;
+        const item = this.inStorage()[0];
+        if (!item || World.freeBagSlots() <= SELL_STAR_KEEP_SLOTS) { r.more = !!item; this.enter('close-storage'); break; }
+        const dest = Town.free(gp.inventory, gp.equipmentSlotCount || 13, gp.inventorySlotCount);
+        if (dest === null) { r.more = true; this.enter('close-storage'); break; }
+        if (Cmd.raw({ kind: 'storage-move', move: { type: 3, source: item.slot, destination: dest, quantity: 0, gold: 0 } }, 'Sell Star: withdraw ' + (item.name || item.refObjId)))
+          r.pending = { dest, ref: item.refObjId, at: now(), before: new Set(World.items().map(i => i.slot)) };
+        break;
+      }
+      case 'close-storage': this.close(r.mine.length ? 'walk-smith' : 'done'); break;
+      case 'walk-smith':
+        if (this.walk('smith')) this.enter('open-shop');
+        break;
+      case 'open-shop':
+        if (this.open('smith', 'shop-open')) this.enter('sell');
+        break;
+      case 'sell': {
+        const shop = gp.shop;
+        if (!shop || shop.npc !== Town.npc('smith')?.gid || shop.error) { this.stop('Sell Star stopped: the merchant window closed. Unsold gear stays in your bag.'); break; }
+        const p = r.pending;
+        if (p) {
+          if (!this.bag(p.slot, p.ref)) { r.sold++; r.mine = r.mine.filter(m => !(m.slot === p.slot && m.ref === p.ref)); r.pending = null; }
+          else if (gp.inventoryPending || now() - p.at < 1500) break;
+          else if (now() - p.at > SELL_STAR_ITEM_MS) { r.refused.add(p.slot + ':' + p.ref); r.mine = r.mine.filter(m => !(m.slot === p.slot && m.ref === p.ref)); r.pending = null; }
+          else break;
+        }
+        if (gp.inventoryPending) break;
+        const next = r.mine.map(m => this.bag(m.slot, m.ref)).find(Boolean);
+        if (!next) { this.enter('close-shop'); break; }
+        if (Cmd.raw({ kind: 'shop-sell', slot: next.slot, quantity: next.quantity ?? 1 }, 'Sell Star: sell ' + (next.name || next.refObjId)))
+          r.pending = { slot: next.slot, ref: next.refObjId, at: now() };
+        break;
+      }
+      case 'close-shop': this.close(r.more && r.round < 50 && !r.refused.size ? 'walk-storage' : 'done'); break;
+      case 'done': {
+        const left = r.refused.size, text = 'Sold ' + r.sold + ' Star item' + (r.sold === 1 ? '' : 's') + ' from the warehouse' +
+          (left ? '; the merchant refused ' + left + ', which stayed in your bag.' : '.');
+        this.run = null; this.message = text; Log.info('Sell Star: ' + text); UI.toast(text);
+        break;
+      }
+    }
+    return true;
   },
 };
 
@@ -10040,11 +10254,11 @@ const LURE_ARRIVAL = 30;      // 3 m
 const LURE_TAUNT_MS = 10000;  // give up on a pull point's target after this long and walk back
 const Lure = {
   phase: 'back', index: -1, holdUntil: 0, phaseAt: 0, target: 0, pulled: false, sentAt: -Infinity, travel: null, message: 'Lure off.',
-  legFrom: null, pauseUntil: 0, halted: false, hurry: false,
+  legFrom: null, pauseUntil: 0, halted: false, hurry: false, pulls: 0,
   cfg() { return Settings.profile.lure; },
   on() { return !!this.cfg().enabled && this.cfg().points.length > 0; },
   // Every start begins at the hunting spot, with no hold since nothing was pulled yet; the next point is then A.
-  reset() { this.enter('back'); this.index = -1; this.pulled = false; },
+  reset() { this.enter('back'); this.index = -1; this.pulled = false; this.pulls = 0; },
   enter(phase) { this.phase = phase; this.phaseAt = now(); this.target = 0; this.travel = null; this.sentAt = -Infinity; this.legFrom = null; this.pauseUntil = 0; this.hurry = false; },
   addPoint() {
     const p = World.pose();
@@ -10091,10 +10305,34 @@ const Lure = {
     if (this.phase !== 'back') this.pulled = true;
     return true;
   },
+  // Strangers within 30 m of the character; party members and the character itself never count.
+  playersNear() {
+    const pose = World.pose();
+    if (!pose) return 0;
+    const party = new Set((World.gp?.social?.members || []).map(m => m?.name));
+    let n = 0;
+    for (const e of World.ents.values())
+      if (e.kind === 'player' && e.gid !== World.localGid() && !party.has(e.name) && dist2D(pose, e) <= 300) n++;
+    return n;
+  },
   tick() {
     const c = this.cfg(), home = Settings.profile.hunt.center, point = c.points[this.index];
     Hunt.state = 'lure';
     if (!home) { this.message = 'Lure: save a hunting spot first.'; return Hunt.stop(this.message); }
+    // Pulling monsters onto strangers is what gets a lure reported: with the switches on it stops when other
+    // players come within 30 m, and after a chosen number of completed pulls.
+    if (c.stopOnPlayers > 0) {
+      const strangers = this.playersNear();
+      if (strangers >= c.stopOnPlayers) {
+        this.message = strangers + ' players within 30 m; lure stopped.';
+        Log.info('Lure: ' + this.message);
+        return Hunt.stop('Lure: ' + this.message);
+      }
+    }
+    if (c.stopAfter > 0 && this.pulls >= c.stopAfter) {
+      this.message = c.stopAfter + ' pulls done; lure stopped.';
+      return Hunt.stop('Lure: ' + this.message);
+    }
     if (!point && (this.phase === 'out' || this.phase === 'taunt')) this.reset();
     if (World.isCasting() || now() - Combat.lastCastAt < (Settings.profile.macro.castGapMs ?? 250)) return;
     if (this.areaTaunt()) return;
@@ -10139,7 +10377,7 @@ const Lure = {
     this.legFrom = { ...p }; this.pauseUntil = now() + Number(c.pauseS) * 1000; this.halted = false;
     return this.pause(home);
   },
-  next() { this.index = (this.index + 1) % this.cfg().points.length; this.pulled = false; this.enter('out'); },
+  next() { if (this.pulled) this.pulls++; this.index = (this.index + 1) % this.cfg().points.length; this.pulled = false; this.enter('out'); },
   // Pick the monster nearest the point, select it, get into range and cast the single-target taunt on it.
   taunt(point) {
     const id = this.skill(this.cfg().taunt);
@@ -10177,6 +10415,8 @@ const Lure = {
       UI.number('Pause length (s)', () => c().pauseS, v => c().pauseS = v, 0, 30),
       UI.number('Search radius at a point (m)', () => c().radius, v => c().radius = v, 3, 50),
       UI.number('Stop pulling at this many monsters in the training area (0 = off)', () => c().stopAt, v => c().stopAt = v, 0, 50),
+      UI.number('Stop when this many other players are within 30 m (0 = off)', () => c().stopOnPlayers, v => c().stopOnPlayers = v, 0, 8),
+      UI.number('Stop after this many completed pulls (0 = off)', () => c().stopAfter, v => c().stopAfter = v, 0, 999),
       UI.number('Back to the party below HP (%)', () => c().returnHpPct, v => c().returnHpPct = v, 0, 95),
       UI.button('Add pull point here', () => this.addPoint()));
     const center = Settings.profile.hunt.center;
@@ -10198,6 +10438,7 @@ Hunt.start = function (...args) {
   if (Alchemy.run || Alchemy.pending) return UI.toast('Stop alchemy and wait for its result before hunting.', 'warn');
   if (Trade.run) return UI.toast('Stop auto trade before hunting.', 'warn');
   if (Stall.run) return UI.toast('Stop the stall session before hunting.', 'warn');
+  if (SellStar.run) return UI.toast('Wait for Sell Star to finish (or stop the bot).', 'warn');
   if (Quest.trip) return UI.toast('Wait for the quest visit to finish (or stop the bot).', 'warn');
   if (World.gp?.stall?.phase && World.gp.stall.phase !== 'none') return UI.toast('Close the stall before hunting.', 'warn');
   Lure.reset();
@@ -10253,7 +10494,7 @@ Hunt.chooseTarget = function (...args) {
     if (H.levelMin && (e.level ?? 0) < H.levelMin || H.levelMax && (e.level ?? 0) > H.levelMax) continue;
     const name = (e.name || '').toLowerCase();
     if (inc.length && !inc.some(s => name.includes(s)) || exc.some(s => name.includes(s))) continue;
-    if (H.avoidKs && sim - (World.hitByOthers.get(e.gid) ?? -Infinity) < 8000 && sim - (World.hitByUs.get(e.gid) ?? -Infinity) > 8000) continue;
+    if (this.ksAvoids(e, sim)) continue;
     if (!best || dist2D(pose, e) < dist2D(pose, best)) best = e;
   }
   return best || target;
@@ -10307,6 +10548,8 @@ Hunt.tick = function () {
     this.state = 'resting'; return;
   }
   if (Combat.buffs(true)) { this.state = 'buff'; return; }
+  // Cornered berserk runs before the attack and lure branches, so it also covers a luring tank with no target.
+  if (Combat.corneredBerserk()) return;
   // A support character (Attack monsters off) never starts a fight, not even with what hits it: it keeps looting,
   // its own buffs and party support, at its hunting spot or beside the member it follows.
   const attack = H.attack !== false;
@@ -10330,6 +10573,7 @@ function stopAll() {
   Alchemy.stop();
   Trade.cancel();
   Stall.stop();
+  SellStar.stop('Sell Star stopped.');
   BuffGear.cancel();
   Quest.cancel();
   const townActive = !!Town.trip;
@@ -10373,6 +10617,16 @@ Combat.fight = function (target) {
     now() - this.lastCastAt >= (M.castGapMs ?? 250) && this.imbue()) return;
   return fightBetweenCasts.call(this, target);
 };
+// A buff can also be kept up while walking back (speed or stealth skills). The buff loop only knows "hunt", and an
+// entry saved before the choice existed has no mode, so the walk-back call sees exactly the entries that opted in
+// and the hunting call is untouched.
+const combatBuffs = Combat.buffs;
+Combat.buffs = function (hunting) {
+  if (hunting) return combatBuffs.call(this, hunting);
+  const M = Settings.profile.macro, all = M.buffs;
+  M.buffs = all.filter(b => b.enabled && b.mode === 'walk');
+  try { return combatBuffs.call(this, false); } finally { M.buffs = all; }
+};
 // Berserk fires when the gauge is full and the target's class is ticked in Combat options.
 // A party Giant has its own switch; other party monsters share the Party monsters one.
 Combat.berserk = function (cls) {
@@ -10380,6 +10634,22 @@ Combat.berserk = function (cls) {
   if (!Settings.profile.macro.berserkClasses?.[key] || World.berserkGauge < 5) return false;
   if (World.local()?.appearanceState?.[2] === 1) return false;
   return Cmd.berserk();
+};
+// SBot-style cornered berserk: with the switch on, a full gauge also fires when enough living monsters attack
+// at once, whatever their class — the defensive panic button of a luring tank or an over-pulled spot. The gauge,
+// berserk-form and attacker-expiry rules are the combat ones.
+Combat.corneredBerserk = function () {
+  const need = Number(Settings.profile.macro.berserkCornered) || 0;
+  if (need <= 0 || !Hunt.running || World.isDead() || World.berserkGauge < 5) return false;
+  if (World.local()?.appearanceState?.[2] === 1) return false;
+  const sim = World.simNow();
+  let count = 0;
+  for (const [gid, at] of World.attackers) {
+    if (sim == null || sim - at > 5000) continue;
+    const e = World.ents.get(gid);
+    if (e && World.isAlive(e) && ++count >= need) return Cmd.berserk();
+  }
+  return false;
 };
 const Controller = {
   mode: 'idle', lastErrorAt: -Infinity, resumeAfterRevive: false, guardAt: {},
@@ -10442,6 +10712,7 @@ const Controller = {
       }
       if (Alchemy.run || Alchemy.pending) { this.mode = 'alchemy'; return; }
       if (Stall.run) { if (World.inWorld()) Potion.tick(); Stall.tick(); this.mode = 'stall'; return; }
+      if (SellStar.run) { SellStar.tick(); this.mode = 'sell star'; return; }
       if (World.inWorld() && World.isDead() && Hunt.running) {
         Town.cancel(); Resurrect.cancelTrip(); Resurrect.holdUntil = 0;
         Hunt.tick(); this.mode = Hunt.state; return;
@@ -15037,7 +15308,7 @@ const Alchemy = {
 };
 
 
-const RELEASE_NOTES = [{"version": "1.2.203", "title": "Anti-stuck can go to town", "items": ["New option under Settings > Anti-stuck: Go to town instead of stopping. When the bot makes no progress after all its recoveries, it makes a town trip instead of stopping.", "The trip ends in town and does not return to the spot where nothing worked. It needs the town cycle to be on, and it is off by default, so nothing changes unless you turn it on."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.202", "title": "Bug reports say why the bot stopped", "items": ["A bug report now lists the last reasons the bot stopped by itself (for example a town trip that timed out), how long ago, and whether you stopped it last.", "Before, a stopped bot only said \"Bot stopped.\", so reports of the bot doing nothing after a town trip could not say what ended the run.", "This only adds information to reports. Nothing about how the bot hunts or travels changes."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.201", "title": "Panel bottom rows stay on screen", "items": ["On screens like 1920×1080 with browser bars, the bottom of the bot window (the feedback line and the wide window's activity log) was cut off. It now always stays on screen.", "The scrolling part of the window shrinks to fit instead, and the window re-fits when you move it, resize the page, restore it or show it again (Shift+F7).", "On short screens the wide window uses a smaller activity log and status strip to leave room."], "note": "Contributed by duan78 (#81). Tested in simulation, and in a local browser test page at several window sizes. Not tested in a live game."}, {"version": "1.2.200", "title": "Seal gear is picked up first", "items": ["When several drops are on the ground, Star, Moon and Sun gear is now collected before everything else, whatever the distance. Sun goes before Moon, and Moon before Star.", "This applies to both your character and your pickup pet. Among drops of the same kind, the nearest still goes first.", "Without the item list loaded, the nearest drop still goes first. Ownership, exclusions and bag space still apply as before. There is a short note about this on the loot options in the panel."], "note": "Contributed by duan78 (#80). Tested in simulation only, not in a live game. The Sun, Moon, Star order was tested for Sun before Star only."}, {"version": "1.2.199", "title": "Auto quest: pick quests from a list", "items": ["The Quest page now has a list of quests to tick, like phBot. Each shows its level and name. The list comes from the game's own quest data (about 140 quests whose NPC the data names).", "Ticked quests are done lowest level first: the bot walks to the quest NPC from the game's NPC table (it can cross regions, outdoors), takes the quest, hunts what the quest counts and turns it in. Quests above your level wait.", "Quest codenames now come from the data, so the right dialogue row is picked without learning it first. The journal's own target list is hunted first.", "With nothing ticked it still follows the quest markers the game shows. The status line says what it is waiting for."], "note": "Only tested in simulation and against the game data files. Monster spawns are not in the client, so the bot hunts where your hunting area already is. Not checked on the live server."}, {"version": "1.2.198", "title": "Auto quest says what it is waiting for", "items": ["When Start quests is on but nothing happens, the Quest page now says why: no quest markers, no NPC offering a quest, an NPC in another region, quests excluded by your lists, or what it is waiting on.", "The same reason is written to the log when it changes."], "note": "Only tested in simulation. This explains the idle state; it does not yet walk to NPCs in other regions."}, {"version": "1.2.197", "title": "Quest Start button and stall prompts", "items": ["Auto quest now has Start quests and Stop quests buttons.", "Auto stall now answers the game's own OK prompt when opening the stall, so it no longer hangs waiting for you to click it."], "note": "Only tested in simulation; the OK prompt press was not checked on the live server."}, {"version": "1.2.196", "title": "Shorter page list in the wide window", "items": ["In the wide window, the page list now shows one row per page: a small icon with the name beside it, like the Classic window's sidebar.", "The wide window is about 190 px shorter, and the page list column is a little wider to fit the names."], "note": "Tested in simulation only, not in a live game. The layout was checked on a screenshot replica, not in a real browser."}];
+const RELEASE_NOTES = [{"version": "1.2.213", "title": "Choose which monsters to avoid for kill-stealing", "items": ["New option \"Avoided monsters\" under \"Avoid other players' targets\" in the hunting settings. \"All monsters\" is the old behavior. \"Normal & champion only\" still leaves alone normal and champion monsters another player is fighting, but takes giant, party, elite and other strong monsters even if someone else is fighting them.", "The default is \"All monsters\", so nothing changes unless you pick the other choice. If \"Avoid other players' targets\" is off, the new option has no effect.", "The \"no target\" explanation in the bug report counts monsters by the same rule."], "note": "Contributed by duan78 (#91). Tested in simulation only, not in a live game."}, {"version": "1.2.212", "title": "Option to not pick up Star gear", "items": ["New option under the Loot settings: Equipment: don't pick up Star gear (Moon and Sun still are). When it is on, the bot and the pet leave Star (Seal of Star) equipment on the ground and keep picking up everything else, including Moon and Sun gear.", "It is off by default, so nothing changes unless you turn it on. A Pick rule on an item still takes that item.", "Only tested in simulation, not on the live server."]}, {"version": "1.2.211", "title": "Sell Star: withdrawals and walking fixed", "items": ["Fixes Sell all Star gear stopping with \"a withdrawal did not reach the bag\". It now waits for the gear to show up in the bag, in whatever slot the game puts it.", "It no longer insists on reaching the exact saved standing spot: close enough to the warehouse or merchant is enough, and if it cannot find a way it tries from where it stands.", "Only tested in simulation, not on the live server."]}, {"version": "1.2.210", "title": "Sell Star also sells Star gear already in the bag", "items": ["Fixes Sell all Star gear doing nothing when Star gear from an earlier run was still in your bag. Star gear in the bag is now sold along with what comes out of the warehouse.", "When it stops, the reason now shows in the bug report (Diagnostics), so a failed run can be diagnosed.", "Only tested in simulation, not on the live server."]}, {"version": "1.2.209", "title": "Sell Star walks to the warehouse and merchant", "items": ["Fixes the Sell all Star gear button taking the gear out and then not selling it. It now walks to the saved warehouse and then to the saved repair merchant itself, instead of needing you to stand in reach of both.", "If it stops, it now says why in a message.", "Only tested in simulation, not on the live server."]}, {"version": "1.2.208", "title": "Sell all Star gear from the warehouse", "items": ["New button on the Town page: Sell all Star gear in warehouse. One click takes every Seal of Star piece out of the warehouse and sells it at your saved repair merchant, in batches that fit your bag, then stops. It never runs on its own.", "Needs the warehouse and repair merchant saved on the Town page, and you standing where both are in reach. Moon and Sun gear, buff-set gear and Keep names stay in the warehouse.", "Only tested in simulation, not on the live server."]}, {"version": "1.2.207", "title": "Party joining can wait for Start", "items": ["New option under Settings > Party: Only join and accept parties while the bot is running. When it is on, Auto-recruit, Auto-accept party-matching joins and joining the party leader's party all wait until you press Start. This fixes the bot joining a party after it was stopped.", "It is off by default, so nothing changes unless you turn it on. Accept resurrection is not affected."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.206", "title": "Lure stops near players or after set pulls", "items": ["Two new lure options under Combat > Hunt area > Lure: Stop when this many other players are within 30 m, and Stop after this many completed pulls. Both are 0 (off) by default, so nothing changes unless you set them.", "The player option stops the lure when that many strangers are within 30 m of your character. You and your party members never count.", "The pull option stops the lure after the chosen number of pulls. A round where nothing was pulled does not use up a pull, and the count starts again each time you start."], "note": "Contributed by duan78 (#85). Tested in simulation only, not in a live game."}];
 
 // Check trusted repository metadata; never execute downloaded update code.
 const Updates = {
@@ -15259,7 +15530,7 @@ const Diagnostics = {
       else if (H.levelMin && level < H.levelMin || H.levelMax && level > H.levelMax) why.level++;
       else if (include.length && !include.some(s => name.includes(s)) || exclude.some(s => name.includes(s))) why.name++;
       else if (!Hunt.inArea(e) || dist2D(pose, e) > H.chase) why.far++;
-      else if (H.avoidKs && sim - (World.hitByOthers.get(e.gid) ?? -Infinity) < 8000 && sim - (World.hitByUs.get(e.gid) ?? -Infinity) > 8000) why.others++;
+      else if (Hunt.ksAvoids(e, sim)) why.others++;
     }
     if (!seen) return 'No monsters in view. Move to a place with monsters and press "Set hunting spot here".';
     const parts = [
@@ -15307,7 +15578,7 @@ const Diagnostics = {
   snapshot() {
     const gp = World.gp, c = Settings.profile, pet = Loot.pet(), social = gp?.social, matching = gp?.partyMatching;
     return {
-      action: this.main(), partyStatus: this.party(), petStatus: this.pet(), townStatus: this.town(), townDetail: this.townDetail(), townReason: this.townReason(),
+      action: this.main(), partyStatus: this.party(), petStatus: this.pet(), townStatus: this.town(), townDetail: this.townDetail(), townReason: this.townReason(), sellStarStatus: String(SellStar.message || '').slice(0, 200),
       navigationReady: !!Navigation.scene, navigationError: String(Navigation.error || '').slice(0, 80),
       buffGearStatus: BuffGear.cfg().buffSwap ? String(BuffGear.status()).slice(0, 600) : '', buffGearActive: !!BuffGear.run, buffGearRestoring: !!BuffGear.run?.restoring, buffGearMovePending: !!BuffGear.run?.pending, buffGearRecovery: !!BuffGear.recovery,
       alchemyActive: !!Alchemy.run, alchemyPending: !!Alchemy.pending, alchemyAttempts: this.number(Alchemy.result?.attempts),
@@ -16501,7 +16772,7 @@ const UI = {
     // Busy comes from the live trips, not from Controller.mode: that label lags a tick behind (it still says
     // "returning" for up to 100 ms after Stop all ended a walk-back).
     const busy = Town.trip ? 'Town trip' : WalkBack.active ? 'Returning' : Reconnect.active() ? 'Reconnecting' : Restock.trip ? 'Shopping'
-      : Resurrect.trip ? 'Resurrecting' : BuffGear.run ? 'Buff gear' : Trade.run ? 'Trading' : Alchemy.run || Alchemy.pending ? 'Alchemy' : Stall.run ? 'Stall' : '';
+      : Resurrect.trip ? 'Resurrecting' : BuffGear.run ? 'Buff gear' : Trade.run ? 'Trading' : Alchemy.run || Alchemy.pending ? 'Alchemy' : Stall.run ? 'Stall' : SellStar.run ? 'Sell Star' : '';
     const label = dead ? 'Dead' : error ? 'Error' : busy || (Hunt.running ? 'Hunting' : 'Stopped');
     // `note` is what only the state can say; the icon falls back to the first wait reason, which the wide window shows below the strip.
     const note = Town.trip ? Town.status() : Travel.active ? Travel.status() : WalkBack.active ? WalkBack.status() : Reconnect.active() && Reconnect.message ? Reconnect.message
@@ -16756,6 +17027,9 @@ const UI = {
       up.className = down.className = remove.className = 'mini';
       up.setAttribute('aria-label', 'Move up ' + World.skillName(id)); down.setAttribute('aria-label', 'Move down ' + World.skillName(id)); remove.setAttribute('aria-label', 'Delete ' + World.skillName(id));
       row.append(this.skillSlot(id, () => {}, World.skillName(id)), info, up, down, remove); parent.append(row);
+      if (buff) parent.append(this.select('Keep ' + World.skillName(id) + ' up',
+        () => [['hunt', 'While hunting'], ['walk', 'Hunting and walk-back']],
+        () => entry.mode || 'hunt', value => entry.mode = value));
       if (buff) parent.append(this.select('Gear for ' + World.skillName(id),
         () => [[0, BuffGear.auto() ? 'Automatic: the weapon the skill needs' : 'Current combat gear'], ['primary', 'Primary weapon'], ['secondary', 'Secondary weapon'],
           ['shield', 'Shield (with a one-handed weapon)'], ...Settings.profile.macro.buffSets.map(s => [s.id, s.name])],
@@ -16991,6 +17265,7 @@ const UI = {
         this.check('Walking back may use teleports and ferries (beta; pays their fee)', () => H().travel !== false, v => H().travel = v),
         el('p', 'Beta: a long walk back is first checked against the game map, and teleports and ferries are used where walking cannot get there. If a route looks wrong, send the log.', 'muted'),
         this.check('Avoid other players’ targets', () => H().avoidKs, v => H().avoidKs = v),
+        this.select('Avoided monsters', () => [['all', 'All monsters'], ['minor', 'Normal & champion only']], () => H().avoidKsScope || 'all', v => H().avoidKsScope = v),
         this.number('Minimum mob level (0 = any)', () => H().levelMin, v => H().levelMin = v, 0, 140),
         this.number('Maximum mob level (0 = any)', () => H().levelMax, v => H().levelMax = v, 0, 140),
         this.text('Only these mobs', () => H().include, v => H().include = v),
@@ -17027,7 +17302,8 @@ const UI = {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
       host.append(this.group('Berserk when the gauge is full, on',
         ...[['giant', 'Giants'], ['giantParty', 'Giant party'], ['titan', 'Titans'], ['unique', 'Uniques'], ['elite', 'Elites'], ['party', 'Party monsters'], ['champion', 'Champions'], ['normal', 'Normal monsters']]
-          .map(([key, label]) => this.check(label, () => M().berserkClasses[key], v => M().berserkClasses[key] = v))));
+          .map(([key, label]) => this.check(label, () => M().berserkClasses[key], v => M().berserkClasses[key] = v)),
+        this.number('Also berserk when this many monsters attack at once (0 = off)', () => M().berserkCornered, v => M().berserkCornered = v, 0, 8)));
   },
   section_combatGear(host) {
     const pick = (title, slot) => this.select(title, () => ItemRules.gearOptions(slot), () => ItemRules.cfg().gear?.[slot] || '', v => ItemRules.setGear(slot, v));
@@ -17055,7 +17331,7 @@ const UI = {
         this.check('Chime and notice when a SoX item is picked up', () => L().soxSound, v => L().soxSound = v), this.button('Test SoX chime', () => Sound.test('sox')));
       this.petNote = el('p', '', 'muted pet-note'); options.append(this.petNote);
       options.append(this.row(...[['Elixirs only','elixirs'],['Elixirs + gold','elixirs-gold'],['All items','all']].map(([label,mode]) => this.button(label, () => { Loot.preset(mode); this.draw(); }))));
-      for (const [key, label] of [['enabled', 'Collect drops'], ['soxOnly', 'Equipment: only SoX (Star / Moon / Sun)'], ['afterKillOnly', 'Character: finish the current fight before picking up']]) options.append(this.check(label, () => L()[key], v => L()[key] = v));
+      for (const [key, label] of [['enabled', 'Collect drops'], ['soxOnly', 'Equipment: only SoX (Star / Moon / Sun)'], ['skipStar', "Equipment: don't pick up Star gear (Moon and Sun still are)"], ['afterKillOnly', 'Character: finish the current fight before picking up']]) options.append(this.check(label, () => L()[key], v => L()[key] = v));
       options.append(this.number('Pickup radius (m)', () => L().radius / 10, v => L().radius = v * 10, 3, 100),
         this.number('Retries after first attempt', () => L().retries, v => L().retries = v, 0, 3),
         this.text('Always include names', () => L().include, v => L().include = v),
@@ -17222,6 +17498,7 @@ const UI = {
         this.check('Deposit SoX gear in the warehouse (character and pet bags)', () => town().storeSox, v => town().storeSox = v),
         this.check('Sell Star gear too (instead of depositing it)', () => town().sellStar, v => town().sellStar = v),
         this.check('Sell ordinary gear from the character bag too', () => town().sellBag, v => town().sellBag = v),
+        this.check('Sell surplus restocked potions above the refill amounts', () => town().sellExcess, v => town().sellExcess = v),
         this.text('Also deposit gear requiring level', () => town().storeLevels, v => town().storeLevels = v, 'e.g. 85 or 80-90, 100'),
         this.number('Town arrival tolerance (m)', () => town().arrivalRadius / 10, v => town().arrivalRadius = v * 10, 10, 150),
         el('p', 'Bind your recall to Hotan, Jangan, Donwhang, Constantinople or Samarkand in the game. Quickest: pick your town and press Set up this town; the arrival point is where its return scroll always lands, so you do not have to be in town. It fills the arrival point and the four services. To do it by hand instead, save the arrival point where a return scroll places you, then stand near, select and save the warehouse, potion merchant, repair merchant and world statue / teleport. Open the potion shop before saving its merchant. Saves your standing position for each approach. Uses collision-aware walking between services. Overrides the recorded walking restock while enabled.', 'muted'));
@@ -17235,6 +17512,11 @@ const UI = {
       services.append(el('p', 'Pet loot: store elixirs, and Star / Moon / Sun gear when SoX deposit is on (needs the saved warehouse; SoX gear in your own bag goes in too, all other character items stay). Nothing is deposited right after pickup, only on the next town trip. Gear requiring one of the levels you list above (for example 85) is deposited the same way and never sold. SoX gear that is part of a saved buff set, the weapon chosen for alchemy, or matches the Keep names stays in your bag. Sell other unprotected pet items at the saved weapon / repair merchant before repairing. Other seal/rare equipment and equipment with unknown rarity stays in the pet. Ordinary equipment is sold regardless of + or blue options. With Sell Star gear too, Star gear (not Moon or Sun) is sold like ordinary gear instead of deposited (Keep names, buff-set gear, the alchemy weapon and the level list above still protect it). With the switch above, ordinary weapons, armour, shields and accessories in the character bag are sold too; other bag items only with a Sell rule. Never sold from the bag: potions, scrolls, supplies, pet summons, avatars, devil spirits, job suits, item mall items, Keep names, buff-set gear or the alchemy weapon.', 'muted'));
       services.append(this.text('Keep in pet (names)', () => town().keep, v => town().keep = v),
         el('p', 'Town buys X-Large potions using the Buy HP/MP switches, low-stock thresholds and refill counts above. Keep each low-stock threshold below its refill target. Potion selections apply to walking-route restock. Returns when the character bag has at most one free slot. Free at least two slots before hunting again; existing character items stay protected. Revival uses the saved town services without a return scroll in town, then reverses or walks back. Pet loot passes through one reserved character bag slot. Potions, return/reverse scrolls, beginner speed scrolls and matching Keep names are protected. Refills travel scrolls to two where sold for gold; otherwise carry spares. F8 cancels.', 'muted'));
+      // One click, never automatic: stand by the saved warehouse and repair merchant. Only Star gear; Moon and Sun stay.
+      this.sellStarNote = el('p', SellStar.message, 'muted');
+      this.sellStarButton = this.button('Sell all Star gear in warehouse', () => SellStar.run ? SellStar.stop() : SellStar.start());
+      services.append(this.row(this.sellStarButton, this.sellStarNote),
+        el('p', 'Takes every Star (Seal of Star) piece out of the warehouse and sells it at the saved repair merchant, then stops. Stand where both are in reach. Moon and Sun gear, buff-set gear and Keep names stay. Sold gear is gone for good.', 'muted'));
       this.townNote = el('p', Town.status(), 'muted'); services.append(this.townNote); host.append(services);
   },
   section_townAmmo(host) {
@@ -17419,6 +17701,8 @@ const UI = {
         this.check("Leave someone else's party when the party leader is back", () => party().leaveIfNotLeader, v => { party().leaveIfNotLeader = v; Party.reset(); }),
         el('p', 'For your other accounts. While you are not in a party, the bot accepts a party invitation from that character, or finds their party listing on the party-matching board and applies to it. The main account needs Auto-recruit and Auto-accept party-matching joins ticked. It also rejoins after a disconnect, once the character is back in the game. Leave this off on the main account.', 'muted'),
         el('p', 'With the leave option on, a party led by someone else is left only once the party leader is in view near your hunting spot. If the party leader disconnects, the party the game hands to another member stays together until they are back.', 'muted'),
+        this.check('Only join and accept parties while the bot is running', () => party().onlyWhileRunning, v => { party().onlyWhileRunning = v; Party.reset(); }),
+        el('p', 'Off by default: Auto-recruit, Auto-accept and joining the party leader also work while hunting is stopped. Turn this on to make all of them wait until you press Start. Resurrection is not affected.', 'muted'),
         this.check('Accept resurrection from party members', () => party().acceptRes, v => party().acceptRes = v),
         el('p', 'When you are dead and a party member casts Rebirth on you, the bot answers Yes. Works during hunting and while stopped; resurrection offers from other players are left to you.', 'muted'),
         this.check('Auto-resurrect party members', () => party().autoRes, v => { party().autoRes = v; Resurrect.reset(); }),
@@ -17656,6 +17940,7 @@ const UI = {
     if (this.waitNote) this.waitNote.textContent = this.waitNote.title = Diagnostics.lines(diagnosticState);
     this.updateOrb(); this.updateWide(); this.updateRunLed();
     if (this.townNote) this.townNote.textContent = Town.status();
+    if (this.sellStarNote?.isConnected) { this.sellStarNote.textContent = SellStar.message; this.sellStarButton.textContent = SellStar.run ? 'Stop selling' : 'Sell all Star gear in warehouse'; }
     if (this.is('Settings') && AutoMastery.note) AutoMastery.note.textContent = AutoMastery.status();
     if (this.is('Settings') && AutoMastery.maxNote) AutoMastery.maxNote.textContent = AutoMastery.maxMessage;
     if (this.is('Settings') && StatPoints.note) StatPoints.note.textContent = StatPoints.status();
@@ -18511,7 +18796,7 @@ UI.showActivityExport = function() {
 
 // The player's Start / stop (F8 and the buttons). What they choose is remembered for auto-start.
 function toggleBot() {
-  if (Alchemy.run || Alchemy.pending || Stall.run || Hunt.running || Town.trip || Quest.trip || WalkBack.active || Travel.active || Restock.trip || Resurrect.trip || Controller.resumeAfterRevive) userStop();
+  if (Alchemy.run || Alchemy.pending || Stall.run || SellStar.run || Hunt.running || Town.trip || Quest.trip || WalkBack.active || Travel.active || Restock.trip || Resurrect.trip || Controller.resumeAfterRevive) userStop();
   else if (Restock.recording) UI.toast('Finish or cancel route recording before starting the bot.', 'warn');
   else { Hunt.start(); if (Hunt.running) RunIntent.set(true); }
 }

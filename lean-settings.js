@@ -17,18 +17,18 @@ const DEFAULT_PROFILE = {
   trade: { from: 'CH', to: 'WC', trips: 1, potions: true, goods: 0 },
   trace: { enabled: false, name: '', distance: 12, fight: true },
   mastery: { enabled: false, ids: [], gap: 0, skills: false, scope: 'rotation', reserve: 0, order: 'masteries' },
-  lure: { enabled: false, points: [], taunt: { id: 0, group: 0 }, area: { id: 0, group: 0 }, holdS: 10, pauseEveryM: 10, pauseS: 4, radius: 15, returnHpPct: 50, stopAt: 0 },
+  lure: { enabled: false, points: [], taunt: { id: 0, group: 0 }, area: { id: 0, group: 0 }, holdS: 10, pauseEveryM: 10, pauseS: 4, radius: 15, returnHpPct: 50, stopAt: 0, stopOnPlayers: 0, stopAfter: 0 },
   pet: { attack: { on: false, recall: true, radius: 15, timeout: 3, resend: 5 } },
   scroll: { damageInc: false, damageAbs: false },
   mall: { on: false, budgetSilk: 0, hp: { on: false, low: 10, target: 1000 }, mp: { on: false, low: 10, target: 1000 }, damageInc: { on: false, low: 5, target: 20 }, damageAbs: { on: false, low: 5, target: 20 }, reverse: { on: false, low: 10, target: 50 } },
-  party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', leaveIfNotLeader: false, acceptNames: '', autoRes: false, acceptRes: false, resRadius: 300, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
+  party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', leaveIfNotLeader: false, onlyWhileRunning: false, acceptNames: '', autoRes: false, acceptRes: false, resRadius: 300, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
     support: { enabled: false, whileStopped: false, range: 30, heal: { id: 0, group: 0, pct: 60, self: false }, group: { id: 0, group: 0, pct: 60, count: 2 }, buffs: [] } },
   wardrobe: { on: true, phantom: true, realAnim: true, hideAvatars: false,
     eq: {}, av: {}, pet: { atk: 0, pick: 0, mount: 0 }, presets: {}, undo: null },
   macro: {
     rotations: { normal: [], champion: [], giant: [], party: [], elite: [], unique: [] },
     fallbackToNormal: true, normalAttack: true, buffs: [], imbue: null, buffSwap: false, buffAuto: true, buffSets: [],
-    imbueBeforeAttack: true, berserkClasses: { normal: false, champion: false, giant: true, giantParty: false, party: false, elite: false, unique: false, titan: false },
+    imbueBeforeAttack: true, berserkClasses: { normal: false, champion: false, giant: true, giantParty: false, party: false, elite: false, unique: false, titan: false }, berserkCornered: 0,
     minMpPct: 0, castGapMs: 350,
   },
   potion: {
@@ -37,7 +37,7 @@ const DEFAULT_PROFILE = {
     prefer: { hp: 0, mp: 0, vigor: 0, cure: 0 }, delayMs: 350,
     restock: {
       enabled: false, vendor: null, route: [], offers: [],
-      town: { enabled: false, revive: true, revivePet: false, deathReturn: 'recall', returnBy: 'reverse', storeSox: true, sellStar: false, sellBag: false, storeLevels: '', petFull: true, petFree: 1, arrivalRadius: 500,
+      town: { enabled: false, revive: true, revivePet: false, deathReturn: 'recall', returnBy: 'reverse', storeSox: true, sellStar: false, sellBag: false, sellExcess: false, storeLevels: '', petFull: true, petFree: 1, arrivalRadius: 500,
         broken: true, wear: { on: false, pct: 15 }, noXp: { on: false, minutes: 10 }, every: { on: false, minutes: 60 }, arrival: null, storage: null, vendor: null, smith: null, gate: null,
         keep: '', store: { equipment: true, elixirs: true, powders: true, alchemy: true, others: false } },
       hp: { on: true, refObjId: 0, low: 20, target: 100 },
@@ -54,9 +54,9 @@ const DEFAULT_PROFILE = {
     levelSpots: { on: false, list: [] },
     center: null, radius: 400, chase: 700, returnToCenter: true, travel: true, attack: true,
     classes: { normal: true, champion: true, giant: true, party: false, elite: false, unique: false, titan: false },
-    levelMin: 0, levelMax: 0, include: '', exclude: '', priority: 'attackers', avoidKs: true,
+    levelMin: 0, levelMax: 0, include: '', exclude: '', priority: 'attackers', avoidKs: true, avoidKsScope: 'all',
     targetTimeoutS: 25,
-    pickup: { enabled: true, soxOnly: false, gold: true, potions: true, equipment: true, elixirs: true, powders: true, magicStones: true, attrStones: true, alchemy: true, others: true,
+    pickup: { enabled: true, soxOnly: false, skipStar: false, gold: true, potions: true, equipment: true, elixirs: true, powders: true, magicStones: true, attrStones: true, alchemy: true, others: true,
       collector: 'character', by: {}, petFullSound: true, soxSound: true, include: '', exclude: '', radius: 300, afterKillOnly: true, retries: 2 },
     sit: { enabled: true, hpBelow: 35, mpBelow: 20, resumeAt: 90 },
     antiStuck: { enabled: true, minutes: 3, maxRecoveries: 3, recall: false },
@@ -89,6 +89,8 @@ function botProfile(input) {
   if (!Number.isInteger(result.potion.delayMs) || result.potion.delayMs < 0 || result.potion.delayMs > 60000) result.potion.delayMs = DEFAULT_PROFILE.potion.delayMs;
   if (!['death', 'recall'].includes(result.potion.restock.town.deathReturn)) result.potion.restock.town.deathReturn = 'recall';
   if (!['reverse', 'walk'].includes(result.potion.restock.town.returnBy)) result.potion.restock.town.returnBy = 'reverse';
+  // The anti-KS scope only has the two meanings; anything else is the old full behavior.
+  if (result.hunt.avoidKsScope !== 'minor') result.hunt.avoidKsScope = 'all';
   // New categories inherit the old Other items switch, preserving existing selection.
   const pickup = input.hunt?.pickup;
   for (const key of ['elixirs', 'powders', 'alchemy']) {

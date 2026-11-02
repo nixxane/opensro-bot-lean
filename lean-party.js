@@ -190,6 +190,8 @@ const Party = {
     this.acceptResurrection();
     if (World.inWorld() && Settings.profile.party.acceptRes) this.helping();
     const c = Settings.profile.party;
+    // Optional: party joining, leaving, recruiting and accepting wait until the bot is running (default: they work while stopped).
+    if (c.onlyWhileRunning && !Hunt.running) { this.joinMessage = ''; this.message = 'Waiting for the bot to be started.'; return; }
     if (World.inWorld()) { this.leaveWrongParty(); this.joinMain(); } else this.joinMessage = '';
     if (!World.inWorld() || (!c.autoAcceptMatching && !c.autoRecruit)) return;
     const gp = World.gp, matching = gp?.partyMatching, request = matching?.request, social = gp?.social;

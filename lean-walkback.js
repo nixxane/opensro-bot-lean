@@ -176,6 +176,9 @@ const WalkBack = {
     if (!a) return;
     if (!World.inWorld() || World.isDead()) return this.cancel('Walk back interrupted.', false);
     if (Manual.lastAt !== a.manualAt) return this.cancel('Manual control: walk back cancelled.', false);
+    // Self buffs marked "Hunting and walk-back" are kept up while travelling; the walk owns the tick, so no
+    // hunting cast happens at the same time and a refused skill only backs itself off.
+    Controller.guard('walkBuffs', () => Combat.buffs(false));
     if (a.source === 'planning') {
       if (now() - a.plan.at <= (a.plan.limit || WALK_PLAN_MS)) return;
       if (!this.useLegs()) return;
