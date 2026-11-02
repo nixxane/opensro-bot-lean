@@ -8471,3 +8471,13 @@ test("Don't pick up Star gear skips only Star equipment and is off by default", 
   assert.equal(f.Loot.filterWhy(star), 'star');
   P.soxOnly = true; assert.deepEqual([star, moon, sun, plain].map(e => f.Loot.allowed(e)), [false, true, true, false], 'with SoX only: Moon and Sun');
 });
+test('skipStar waits for an equipment drop the catalogue has never seen', () => {
+  const f = fixture(), P = f.Settings.profile.hunt.pickup;
+  f.Items.filesMissing = true; P.skipStar = true;
+  const unseen = f.drop(41, 44); unseen.refObjId = 901;
+  assert.equal(f.Loot.allowed(unseen), false, 'with the files unserved and no wire row, it is not guessed');
+  f.Items.data.set(901, { name: 'Star sword', icon: '', code: 'ITEM_CH_SWORD_01_A_RARE' });
+  assert.equal(f.Loot.allowed(unseen), false, 'once the wire teaches it and it is Star, still skipped');
+  f.Items.data.set(901, { name: 'Plain sword', icon: '', code: 'ITEM_CH_SWORD_01' });
+  assert.equal(f.Loot.allowed(unseen), true, 'a seen plain sword is picked up');
+});
