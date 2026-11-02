@@ -14,9 +14,9 @@ function userStop() {
 
 function boot() {
   if (Setup.isNew()) UI.current = 'Setup';
-  UI.mount(); Stats.init(); Updates.start(); Diagnostics.start();
+  UI.mount(); Stats.init(); Sound.init(); Updates.start(); Diagnostics.start();
   const unlockSound = e => {
-    if (e.isTrusted && (Settings.profile.hunt.pickup.petFullSound || Settings.profile.hunt.pickup.soxSound)) Sound.unlock();
+    if (e.isTrusted && (Settings.profile.hunt.pickup.petFullSound || Settings.profile.hunt.pickup.soxSound || Sound.anyOn())) Sound.unlock();
   };
   W.addEventListener('pointerdown', unlockSound, true);
   W.addEventListener('keydown', unlockSound, true);
