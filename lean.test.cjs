@@ -4205,11 +4205,11 @@ test('town cycle recalls, confirms pet storage and purchases, repairs, reverses 
       } else if (c.kind === 'shop-open') {
         gp.shop = { npc: c.gid, offers: [{ refObjId: 15, name: 'MP', tab: 0, slot: 0, maxStack: 100, price: '10', previews: [{ refObjId: 15, typeFlags: 4332 }] }] };
         gp.shopCompletionRevision++;
-      } else if (c.kind === 'cos-shop-sell') {
-        assert.equal(gp.shop.npc, 62); assert.equal(c.gid, f.pet.gid);
-        const item = f.pet.inventory.find(i => i.slot === c.slot);
-        assert.equal(c.quantity, item.quantity ?? 1); sold.push(item.refObjId);
-        f.pet.inventory = f.pet.inventory.filter(i => i.slot !== c.slot);
+      } else if (c.kind === 'shop-sell') {
+        assert.equal(gp.shop.npc, 62);
+        const item = gp.inventory.find(i => i.slot === c.slot);
+        assert.ok(item, 'a sold pet item reached the bag'); assert.equal(c.quantity, item.quantity ?? 1);
+        sold.push(item.refObjId); gp.inventory = gp.inventory.filter(i => i.slot !== c.slot);
       } else if (c.kind === 'shop-buy') { buys.push(c.quantity); gp.inventory.find(i => i.refObjId === 15).quantity += c.quantity; }
       else if (c.kind === 'shop-repair') gp.inventory.find(i => i.slot === 6).durability = 10;
       else if (c.kind === 'npc-close') { gp.target = 0; gp.shop = null; gp.storage = null; }
@@ -4256,7 +4256,7 @@ test('without a reverse scroll the town cycle still runs, skips the statue and w
       } else if (c.kind === 'shop-open') {
         gp.shop = { npc: c.gid, offers: [{ refObjId: 15, name: 'MP', tab: 0, slot: 0, maxStack: 100, price: '10', previews: [{ refObjId: 15, typeFlags: 4332 }] }] };
         gp.shopCompletionRevision++;
-      } else if (c.kind === 'cos-shop-sell') f.pet.inventory = f.pet.inventory.filter(i => i.slot !== c.slot);
+      } else if (c.kind === 'shop-sell') gp.inventory = gp.inventory.filter(i => i.slot !== c.slot);
       else if (c.kind === 'shop-buy') gp.inventory.find(i => i.refObjId === 15).quantity += c.quantity;
       else if (c.kind === 'shop-repair') gp.inventory.find(i => i.slot === 6).durability = 10;
       else if (c.kind === 'npc-close') { gp.target = 0; gp.shop = null; gp.storage = null; }
@@ -5122,14 +5122,17 @@ test('town sells only unprotected non-elixir pet loot and waits for a full sale 
     assert.equal(f.Town.sellable(item), false);
   assert.equal(f.Town.sellable(f.pet.inventory[1]), true);
   f.pet.inventory[1].quantity = 3;
-  f.Town.tick(); assert.equal(f.commands.at(-1).kind, 'cos-shop-sell'); assert.equal(f.commands.at(-1).quantity, 3);
-  f.pet.inventory[1].quantity = 1; f.advance(1000); f.Town.tick();
-  assert.ok(f.Town.trip.pending); assert.equal(f.commands.filter(c => c.kind === 'cos-shop-sell').length, 1);
-  f.advance(15000); f.Town.tick();
+  // The server refuses selling straight from the pet: the item is moved to the bag first, then sold from there.
+  f.Town.tick(); const move = f.commands.at(-1);
+  assert.equal(move.kind, 'cos-transfer'); assert.equal(move.source, f.pet.inventory[1].slot);
+  gp.inventory.push({ ...f.pet.inventory[1], slot: move.destination }); f.pet.inventory = f.pet.inventory.filter(i => i.slot !== move.source);
+  f.advance(1000); f.Town.tick(); const sale = f.commands.at(-1);
+  assert.equal(sale.kind, 'shop-sell'); assert.equal(sale.slot, move.destination); assert.equal(sale.quantity, 3);
+  f.advance(16000); f.Town.tick();
   assert.equal(f.Town.trip.phase, 'settle'); assert.match(f.Town.message, /not confirmed/);
   f.Town.tick(); assert.equal(f.commands.at(-1).kind, 'npc-close');
-  assert.equal(f.commands.filter(c => c.kind === 'cos-shop-sell').length, 1);
-  assert.equal(f.commands.some(c => c.kind === 'shop-sell'), false);
+  assert.equal(f.commands.filter(c => c.kind === 'cos-transfer').length, 1);
+  assert.equal(f.commands.filter(c => c.kind === 'shop-sell').length, 1);
 });
 
 test('town keeps sealed equipment and unknown rarity while allowing plus and blue gear', () => {
@@ -5343,10 +5346,14 @@ test('town sells ordinary pet equipment while leaving valuable equipment in the 
   const rare = { ...normal, slot: 6, refObjId: 1101, tooltip: { fields: { rarity: 2, itemClass: 3 } } };
   f.pet.status = 20; f.pet.inventory = [rare, normal];
   f.Town.begin(); f.Town.enter('sell'); gp.target = 62; gp.shop = { npc: 62 };
-  f.Town.tick(); assert.equal(f.commands.at(-1).kind, 'cos-shop-sell'); assert.equal(f.commands.at(-1).slot, 5);
-  f.pet.inventory = [rare]; f.advance(1000); f.Town.tick();
+  f.Town.tick(); const move = f.commands.at(-1);
+  assert.equal(move.kind, 'cos-transfer'); assert.equal(move.source, 5);
+  gp.inventory.push({ ...normal, slot: move.destination }); f.pet.inventory = [rare];
+  f.advance(1000); f.Town.tick(); assert.equal(f.commands.at(-1).kind, 'shop-sell'); assert.equal(f.commands.at(-1).slot, move.destination);
+  gp.inventory = gp.inventory.filter(i => i.slot !== move.destination);
+  f.advance(1000); f.Town.tick();
   assert.equal(f.Town.trip.phase, 'repair'); assert.equal(f.pet.inventory[0].refObjId, 1101);
-  assert.equal(f.commands.filter(c => c.kind === 'cos-shop-sell').length, 1);
+  assert.equal(f.commands.filter(c => c.kind === 'cos-transfer').length, 1);
 });
 
 test('town never sells items the game marks unsellable, and skips a refused sale instead of ending the trip', () => {
@@ -5358,13 +5365,18 @@ test('town never sells items the game marks unsellable, and skips a refused sale
   f.ItemRules.set([quest.refObjId], { act: 'sell' }); assert.equal(f.Town.sellable(quest), false, 'not even with a Sell rule');
   f.pet.status = 20; f.pet.inventory = [quest, refused, other];
   f.Town.begin(); f.Town.enter('sell'); gp.target = 62; gp.shop = { npc: 62 };
-  f.Town.tick(); assert.equal(f.commands.at(-1).slot, 5);
+  f.Town.tick(); assert.equal(f.commands.at(-1).kind, 'cos-transfer'); assert.equal(f.commands.at(-1).source, 5);
   gp.error = 'Inventory rejected: 2'; f.advance(1000); f.Town.tick();
-  assert.equal(f.Town.trip?.phase, 'sell', 'a refused item does not end the trip');
-  assert.equal(f.commands.filter(c => c.kind === 'cos-shop-sell').at(-1).slot, 6, 'the next item is sold');
-  gp.error = null; f.pet.inventory = [quest, refused]; f.advance(1000); f.Town.tick();
+  assert.equal(f.Town.trip?.phase, 'sell', 'a refused pet-to-bag move does not end the trip');
+  assert.equal(f.commands.at(-1).kind, 'cos-transfer'); assert.equal(f.commands.at(-1).source, 6, 'the next item moves instead');
+  gp.error = null;
+  gp.inventory.push({ ...other, slot: f.commands.at(-1).destination }); f.pet.inventory = [quest, refused];
+  f.advance(1000); f.Town.tick(); const sale = f.commands.at(-1);
+  assert.equal(sale.kind, 'shop-sell');
+  gp.inventory = gp.inventory.filter(i => i.slot !== sale.slot);
+  f.advance(1000); f.Town.tick();
   assert.equal(f.Town.trip.phase, 'repair');
-  assert.equal(f.commands.filter(c => c.kind === 'cos-shop-sell').length, 2, 'the refused item is not offered again');
+  assert.equal(f.commands.filter(c => c.kind === 'cos-transfer').map(c => c.source).join(','), '5,6', 'the refused item is not offered again');
 });
 
 test('the surplus of restocked potions above the refill amount is sold, down to the target', () => {
@@ -5413,11 +5425,11 @@ function stalledSale() {
   f.Town.cfg().storeSox = false;
   f.pet.status = 20; f.pet.inventory = [ware(5, 1100), ware(6, 1101)];
   f.Town.begin(); f.Town.enter('sell'); gp.target = 62; gp.shop = { npc: 62 };
-  f.Town.tick(); assert.equal(f.commands.at(-1).slot, 5);
+  f.Town.tick(); assert.equal(f.commands.at(-1).kind, 'cos-transfer'); assert.equal(f.commands.at(-1).source, 5);
   gp.inventoryPending = true; f.advance(16000); f.Town.tick();
   return { f, gp, ware };
 }
-const sales = f => f.commands.filter(c => c.kind === 'cos-shop-sell');
+const sales = f => f.commands.filter(c => c.kind === 'cos-transfer');
 test('a stalled sale is not sent again: the trip waits for the game, closes the shop and sells from what is left', () => {
   const { f, gp, ware } = stalledSale();
   assert.equal(f.Town.trip?.phase, 'settle'); assert.equal(f.Hunt.running, true);
@@ -5433,15 +5445,19 @@ test('a stalled sale is not sent again: the trip waits for the game, closes the 
   assert.equal(f.Town.trip.phase, 'open-smith'); assert.equal(f.commands.at(-1).kind, 'select');
   gp.target = 62; gp.targetCapabilities = 9; f.Town.tick(); assert.equal(f.commands.at(-1).kind, 'shop-open');
   gp.shop = { npc: 62 }; gp.shopCompletionRevision++; f.Town.tick(); f.Town.tick();
-  assert.deepEqual(sales(f).map(c => c.slot), [5, 6], 'the item the stalled sale took is not offered again');
-  f.pet.inventory = []; f.advance(1000); f.Town.tick();
+  assert.deepEqual(sales(f).map(c => c.source), [5, 6], 'the item the stalled move took is not offered again');
+  const move = sales(f).at(-1);
+  gp.inventory.push({ ...ware(6, 1101), slot: move.destination }); f.pet.inventory = [];
+  f.advance(1000); f.Town.tick(); const sale = f.commands.at(-1);
+  assert.equal(sale.kind, 'shop-sell'); assert.equal(sale.slot, move.destination);
+  gp.inventory = gp.inventory.filter(i => i.slot !== move.destination); f.advance(1000); f.Town.tick();
   assert.equal(f.Town.trip.phase, 'repair');
 });
 test('a second stalled transaction in the same trip stops the town cycle', () => {
   const { f, gp } = stalledSale();
   gp.inventoryPending = false; gp.target = null; gp.shop = null; f.Town.tick();
   f.Town.enter('sell'); gp.target = 62; gp.shop = { npc: 62 }; f.Town.tick();
-  assert.equal(sales(f).at(-1).slot, 5);
+  assert.equal(sales(f).at(-1).source, 5);
   gp.inventoryPending = true; f.advance(16000); f.Town.tick();
   assert.equal(f.Town.trip, null); assert.equal(f.Hunt.running, false);
   assert.match(f.Town.message, /Inventory transaction timed out\. No repeat command sent/);
@@ -5593,7 +5609,7 @@ test('Sell Star gear too sells Star instead of depositing it, and leaves Moon an
 test('town refuses selling at the wrong merchant or after the pet is replaced', () => {
   const f = townFixture(); f.Town.begin(); f.Town.enter('sell');
   f.World.gp.target = 61; f.World.gp.shop = { npc: 61 };
-  f.Town.tick(); assert.equal(f.Town.trip, null); assert.equal(f.commands.some(c => c.kind === 'cos-shop-sell'), false);
+  f.Town.tick(); assert.equal(f.Town.trip, null); assert.equal(f.commands.some(c => c.kind === 'cos-transfer'), false);
   const g = townFixture(); g.Town.begin(); g.Town.enter('sell');
   g.World.gp.target = 62; g.World.gp.shop = { npc: 62 }; g.Town.tick();
   g.Town.trip.salePetGid = 999; g.advance(1000); g.Town.tick();
