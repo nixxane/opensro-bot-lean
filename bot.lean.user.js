@@ -14782,8 +14782,9 @@ const Items = {
     for (const it of items || []) {
       if (!it || !isNum(it.refObjId) || typeof it.name !== 'string' || !it.name) continue;
       const key = /^SN_(.+)_TT_DESC$/.exec(it.tooltip?.descriptionSymbol || '');
-      const row = { name: it.name, code: key ? key[1] : '', icon: it.icon || '' };
+      // Shop offers carry a name only: a sparse sighting keeps the richer cached fields instead of erasing them.
       const old = this.wireRows.get(it.refObjId);
+      const row = { name: it.name, code: key ? key[1] : (old?.code || ''), icon: it.icon || old?.icon || '' };
       if (old && old.name === row.name && old.code === row.code && old.icon === row.icon) continue;
       this.wireRows.set(it.refObjId, row);
       changed = true;

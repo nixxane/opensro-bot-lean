@@ -929,6 +929,11 @@ test('items seen on the wire fill the catalogue when the files are not served', 
   f.advance(3000);
   f.World.applyGameplay({ ...f.World.gp, shop: { npc: 7, offers: [{ refObjId: 57, name: 'Universal Pill (large)', price: '150' }] } });
   assert.equal(f.Items.name(57), 'Universal Pill (large)', 'shop offers are cached by name');
+  // A name-only sighting never erases what a full row already taught (no row flipping while a shop is open).
+  assert.equal(f.Items.wireLearn([{ refObjId: 8, name: 'HP recovery potion (X-large)' }]), false, 'a sparse row changes nothing once a rich one is cached');
+  assert.equal(f.Items.wireRows.get(8).code, 'ITEM_ETC_HP_POTION_05', 'the codename is kept');
+  assert.equal(f.Items.iconDdj(8), 'item\\etc\\hp_potion_05.ddj', 'the icon is kept');
+  assert.equal(f.ItemRules.info(8).group, 'potion', 'so the codename filters keep working');
   // Unchanged rows are not rewritten, and what one session saw the next one keeps.
   assert.equal(f.Items.wireLearn([potion]), false, 'the same row again changes nothing');
   f.Items.wireRows.clear(); f.Items.data.clear(); f.Items.wireLoaded = false;
