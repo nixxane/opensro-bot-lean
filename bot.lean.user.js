@@ -239,7 +239,7 @@ const DEFAULT_PROFILE = {
     levelSpots: { on: false, list: [] },
     center: null, radius: 400, chase: 700, returnToCenter: true, travel: true, attack: true,
     classes: { normal: true, champion: true, giant: true, party: false, elite: false, unique: false, titan: false },
-    levelMin: 0, levelMax: 0, include: '', exclude: '', priority: 'attackers', avoidKs: true, avoidKsScope: 'all',
+    levelMin: 0, levelMax: 0, include: '', exclude: '', priority: 'attackers', avoidKs: true, avoidKsScope: 'all', avoidKsBelow: 50,
     targetTimeoutS: 25,
     pickup: { enabled: true, soxOnly: false, skipStar: false, gold: true, potions: true, equipment: true, elixirs: true, powders: true, magicStones: true, attrStones: true, alchemy: true, others: true,
       collector: 'character', by: {}, petFullSound: true, soxSound: true, include: '', exclude: '', radius: 300, afterKillOnly: true, retries: 2 },
@@ -276,6 +276,9 @@ function botProfile(input) {
   if (!['reverse', 'walk'].includes(result.potion.restock.town.returnBy)) result.potion.restock.town.returnBy = 'reverse';
   // The anti-KS scope only has the two meanings; anything else is the old full behavior.
   if (result.hunt.avoidKsScope !== 'minor') result.hunt.avoidKsScope = 'all';
+  // The finish-steal cutoff stops at 50: above it the kill can still be won, so avoiding is pointless.
+  if (!Number.isFinite(result.hunt.avoidKsBelow) || result.hunt.avoidKsBelow < 0) result.hunt.avoidKsBelow = 0;
+  if (result.hunt.avoidKsBelow > 50) result.hunt.avoidKsBelow = 50;
   // New categories inherit the old Other items switch, preserving existing selection.
   const pickup = input.hunt?.pickup;
   for (const key of ['elixirs', 'powders', 'alchemy']) {
@@ -1776,7 +1779,15 @@ const Hunt = {
     if (!H.avoidKs) return false;
     if (H.avoidKsScope === 'minor') {
       const cls = monsterClass(e);
-      if (cls !== 'normal' && cls !== 'champion') return false;
+      if (cls !== 'normal' && cls !== 'champion') {
+        // Big monsters stay fair game while the kill can still be won: below the HP cutoff the drop
+        // already belongs to the other fighter (damage majority is out of reach), so the DPS goes
+        // to a fresh target instead. Unknown HP never blocks a choice.
+        const below = H.avoidKsBelow ?? 0;
+        if (!(below > 0) || (cls !== 'giant' && cls !== 'party')) return false;
+        const pct = World.hpPctOf(e);
+        if (pct === null || pct > below) return false;
+      }
     }
     return sim - (World.hitByOthers.get(e.gid) ?? -Infinity) < 8000 && sim - (World.hitByUs.get(e.gid) ?? -Infinity) > 8000;
   },
@@ -17410,6 +17421,7 @@ const UI = {
         el('p', 'Beta: a long walk back is first checked against the game map, and teleports and ferries are used where walking cannot get there. If a route looks wrong, send the log.', 'muted'),
         this.check('Avoid other players’ targets', () => H().avoidKs, v => H().avoidKs = v),
         this.select('Avoided monsters', () => [['all', 'All monsters'], ['minor', 'Normal & champion only']], () => H().avoidKsScope || 'all', v => H().avoidKsScope = v),
+        this.number('Spare engaged giant/party below % HP (0 = off)', () => H().avoidKsBelow ?? 50, v => H().avoidKsBelow = v, 0, 50),
         this.number('Minimum mob level (0 = any)', () => H().levelMin, v => H().levelMin = v, 0, 140),
         this.number('Maximum mob level (0 = any)', () => H().levelMax, v => H().levelMax = v, 0, 140),
         this.text('Only these mobs', () => H().include, v => H().include = v),

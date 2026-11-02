@@ -166,7 +166,15 @@ hunt = hunt.replace(ks_method_old, """  ksAvoids(e, sim = World.simNow() ?? 0) {
     if (!H.avoidKs) return false;
     if (H.avoidKsScope === 'minor') {
       const cls = monsterClass(e);
-      if (cls !== 'normal' && cls !== 'champion') return false;
+      if (cls !== 'normal' && cls !== 'champion') {
+        // Big monsters stay fair game while the kill can still be won: below the HP cutoff the drop
+        // already belongs to the other fighter (damage majority is out of reach), so the DPS goes
+        // to a fresh target instead. Unknown HP never blocks a choice.
+        const below = H.avoidKsBelow ?? 0;
+        if (!(below > 0) || (cls !== 'giant' && cls !== 'party')) return false;
+        const pct = World.hpPctOf(e);
+        if (pct === null || pct > below) return false;
+      }
     }
     return sim - (World.hitByOthers.get(e.gid) ?? -Infinity) < 8000 && sim - (World.hitByUs.get(e.gid) ?? -Infinity) > 8000;
   },

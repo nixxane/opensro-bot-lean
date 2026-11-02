@@ -4595,6 +4595,36 @@ test('the anti-KS scope can spare every monster but normal and champion', () => 
   f.Settings.profile.hunt.avoidKs = false;
   assert.equal(f.Hunt.chooseTarget()?.gid, 30, 'the switch off still disables the filter entirely');
 });
+test('giant and party monsters stay fair game unless the kill can no longer be won', () => {
+  const f = fixture(), H = f.Settings.profile.hunt;
+  H.classes.party = true; H.classes.elite = true; H.avoidKsScope = 'minor';
+  const mob = (gid, rarity, aux = 0) => f.World.ents.set(gid, { gid, kind: 'monster', name: 'Mob' + gid, regionId: 1, x: 100 + gid, y: 0, z: 100, rarity, rarityAuxIcon: aux, level: 5, attackFlags: 16, appearanceState: [0] }).get(gid);
+  mob(30, 4); mob(31, 0, 1); mob(32, 6); mob(33, 0);
+  for (const gid of [30, 31, 32, 33]) f.World.hitByOthers.set(gid, f.World.simNow());
+  f.World.gp.vitals.push({ gid: 33, hp: 90, maxHp: 100 });
+  f.Hunt.running = true; f.Hunt.state = 'search';
+  assert.equal(f.Hunt.chooseTarget()?.gid, 30, 'an engaged giant with unknown HP is still taken');
+  f.World.gp.vitals.push({ gid: 30, hp: 60, maxHp: 100 });
+  assert.equal(f.Hunt.chooseTarget()?.gid, 30, 'at 60% the kill can still be won');
+  f.World.gp.vitals.find(v => v.gid === 30).hp = 50;
+  assert.equal(f.Hunt.chooseTarget()?.gid, 31, 'at exactly the 50% cutoff the giant is spared');
+  f.World.gp.vitals.find(v => v.gid === 30).hp = 10;
+  assert.equal(f.Hunt.chooseTarget()?.gid, 31, 'a nearly finished giant is spared');
+  f.World.gp.vitals.push({ gid: 31, hp: 30, maxHp: 100 });
+  assert.equal(f.Hunt.chooseTarget()?.gid, 32, 'a low party monster is spared too');
+  f.World.gp.vitals.push({ gid: 32, hp: 10, maxHp: 100 });
+  assert.equal(f.Hunt.chooseTarget()?.gid, 32, 'an engaged elite is never spared by the cutoff');
+  H.avoidKsBelow = 0;
+  assert.equal(f.Hunt.chooseTarget()?.gid, 30, 'the cutoff off restores the old behaviour');
+  f.World.ents.delete(32);
+  assert.equal(f.Hunt.chooseTarget()?.gid, 30, 'the old behaviour also holds for the party monster');
+  H.avoidKsBelow = 50;
+  assert.equal(f.Hunt.chooseTarget(), null, 'a normal monster stays skipped by the scope whatever its HP');
+  H.avoidKsScope = 'all';
+  assert.equal(f.Hunt.chooseTarget(), null, 'the full scope still skips everything engaged');
+  assert.equal(f.botProfile({ hunt: { avoidKsBelow: 999 } }).hunt.avoidKsBelow, 50, 'the cutoff is capped at 50');
+  assert.equal(f.botProfile({ hunt: { avoidKsBelow: -3 } }).hunt.avoidKsBelow, 0, 'and never below zero');
+});
 test('the imbue is renewed as it runs out, ahead of skills and normal attacks', () => {
   const setup = (change = {}) => {
     const f = combatFixture();
