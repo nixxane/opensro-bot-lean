@@ -7835,11 +7835,12 @@ const Town = {
       : !World.items().some(i => i.slot === p.source && i.refObjId === p.ref)) || !this.trip || gp.inventoryPending) return;
     const unsold = (where, i) => t.unsold?.includes(where + i.slot + ':' + i.refObjId);
     // The server refuses selling straight from the pet inventory (native notice UIIT_MSG_COSPETERR_CANT_TRADE):
-    // pet loot moves to a free bag slot first, then sells from the bag like any other item.
+    // pet loot moves to a free bag slot first, then sells from the bag like any other item. With bag selling on, the
+    // bag sells before the pet, so a full bag frees the slots that pet loot has to pass through.
     const staged = t.staged ? World.items().find(i => i.slot === t.staged.slot && i.refObjId === t.staged.ref) : null;
     if (t.staged && !staged) return this.fail('Staged pet item changed unexpectedly.');
-    const petItem = pet?.rec.inventory.find(i => this.sellable(i) && !unsold('pet:', i));
-    const bagItem = staged || (!petItem && t.sellFirst ? World.items().find(i => this.sellableBag(i) && !unsold('bag:', i)) : null);
+    const bagItem = staged || (t.sellFirst ? World.items().find(i => this.sellableBag(i) && !unsold('bag:', i)) : null);
+    const petItem = bagItem ? null : pet?.rec.inventory.find(i => this.sellable(i) && !unsold('pet:', i));
     const item = bagItem || null;
     if (petItem && !item) {
       const slot = this.free(gp.inventory, gp.equipmentSlotCount || 13, gp.inventorySlotCount);

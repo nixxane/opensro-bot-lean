@@ -5608,6 +5608,30 @@ test('with bag selling on and a full bag, the trip sells before the warehouse so
   assert.equal(g.Town.trip.phase, 'walk-storage'); assert.equal(g.Town.closeNext('close-storage'), 'walk-smith'); assert.equal(g.Town.closeNext('close-smith'), 'walk-vendor');
 });
 
+test('with bag selling on, the bag sells before pet loot, so a full bag frees a slot for the pet loot', () => {
+  const f = townFixture(), gp = f.World.gp; f.Town.cfg().sellBag = true; f.Town.cfg().storeSox = false;
+  f.Items.data.set(1100, { name: 'Sword', code: 'ITEM_CH_SWORD_01_A' });
+  const equip = gp.equipmentSlotCount || 13, held = f.World.items().length, spare = equip + held;
+  gp.inventorySlotCount = spare + 1;
+  gp.inventory.push({ slot: spare, refObjId: 1100, typeFlags: 44 | (6 << 7), quantity: 1, name: 'Sword', plus: 0, magic: [], tooltip: { fields: { rarity: 0 } } });
+  assert.equal(f.World.freeBagSlots(), 0); assert.ok(f.pet.inventory.some(i => f.Town.sellable(i)), 'the pet holds loot to sell');
+  f.Town.begin(); f.Town.enter('sell'); gp.target = 62; gp.shop = { npc: 62 };
+  f.Town.tick();
+  const first = f.commands.at(-1);
+  assert.equal(first.kind, 'shop-sell', 'the bag item sells first'); assert.equal(first.slot, spare);
+  gp.inventory = gp.inventory.filter(i => i.slot !== spare); f.advance(1000); f.Town.tick();
+  const move = f.commands.at(-1);
+  assert.equal(move.kind, 'cos-transfer', 'then pet loot moves to the bag'); assert.equal(move.toCos, false); assert.equal(move.destination, spare, 'through the slot the sale freed');
+  const loot = f.pet.inventory.find(i => i.slot === move.source);
+  gp.inventory.push({ ...loot, slot: spare }); f.pet.inventory = f.pet.inventory.filter(i => i.slot !== move.source); f.advance(1000); f.Town.tick();
+  const sale = f.commands.at(-1);
+  assert.equal(sale.kind, 'shop-sell', 'and sells from there'); assert.equal(sale.slot, spare);
+  const off = townFixture(), og = off.World.gp; off.Town.cfg().sellBag = false; off.Items.data.set(1100, { name: 'Sword', code: 'ITEM_CH_SWORD_01_A' });
+  og.inventory.push({ slot: 40, refObjId: 1100, typeFlags: 44 | (6 << 7), quantity: 1, name: 'Sword', plus: 0, magic: [], tooltip: { fields: { rarity: 0 } } });
+  off.Town.begin(); off.Town.enter('sell'); og.target = 62; og.shop = { npc: 62 }; off.Town.tick();
+  assert.equal(off.commands.at(-1).kind, 'cos-transfer', 'with bag selling off only pet loot sells, as before');
+});
+
 test('pet summon scrolls and flutes are never sold, from the pet or the bag, even with a Sell rule', () => {
   const summons = [
     { refObjId: 9000, typeFlags: 12 | (2 << 5) | (1 << 7) | (2 << 11), quantity: 1, name: 'Rabbit summon scroll' },
