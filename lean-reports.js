@@ -1,7 +1,10 @@
 // Manual reports only. No startup requests, saved drafts, or automatic retries.
+// A rate-limit wait outlives the page: stored as a wall-clock deadline, converted to this page's clock on load.
+const REPORT_COOLDOWN_SAVED = Number(Store.get('reportCooldown', 0)) || 0;
 const Reports = {
   endpoint: 'https://nixbot.nixxane.workers.dev/report',
-  draft: null, sending: false, capturing: false, stream: null, cooldownUntil: 0,
+  draft: null, sending: false, capturing: false, stream: null,
+  cooldownUntil: REPORT_COOLDOWN_SAVED > Date.now() ? now() + REPORT_COOLDOWN_SAVED - Date.now() : 0,
   open() {
     if (this.sending || this.capturing) return;
     if (!this.draft) this.draft = { base: JSON.parse(Diagnostics.report()), description: '', image: null, url: '', sent: false };
@@ -112,6 +115,7 @@ const Reports = {
       if (response.status === 429) {
         const seconds = Number(response.headers.get('Retry-After'));
         this.cooldownUntil = now() + (Number.isFinite(seconds) && seconds > 0 ? clamp(seconds, 1, 3600) : 60) * 1000;
+        Store.set('reportCooldown', Date.now() + this.cooldownUntil - now());
         this.notice('Too many reports. Wait before trying again.');
       } else if (response.ok && (await response.json()).ok === true) {
         this.draft.sent = true;

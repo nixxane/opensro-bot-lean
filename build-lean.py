@@ -217,7 +217,7 @@ icon_loader += '''  self.onmessage = async e => {
     const msg = e.data || {};
     if (msg.op === 'init') { ORIGIN = String(msg.origin || ''); self.postMessage({ ready: true }); return; }
     try {
-      const allowed = ['/assets/data/levelData.json', '/assets/data/cosPresentation.json', '/assets/data/skillData.json', '/assets/text/textdataname.en.json', '/assets/data/missionPresentation.json', '/assets/char/roster.json', '/assets/npc/manifest.json'];
+      const allowed = ['/assets/data/levelData.json', '/assets/data/cosPresentation.json', '/assets/data/skillData.json', '/assets/text/textdataname.en.json', '/assets/data/missionPresentation.json', '/assets/data/questData.json', '/assets/data/npcpos.json', '/assets/char/roster.json', '/assets/npc/manifest.json'];
       if (msg.op !== 'blob' && !(msg.op === 'json' && allowed.includes(msg.path))) throw fail('op', 'Unsupported asset request');
       const { bytes, mime } = await bytesOf(msg.path);
       const result = msg.op === 'json' ? JSON.parse(new TextDecoder().decode(bytes)) : new Blob([bytes], { type: mime || 'image/png' });

@@ -334,6 +334,8 @@ const Settings = {
     } catch (e) { UI.toast('Could not import profile: ' + e.message, 'warn'); }
   },
 };
+// A change made right before the page closes still reaches storage; the debounce alone would lose it.
+W.addEventListener('pagehide', () => Store.set(Settings.profileKey, Settings.profile));
 const Sound = {
   ctx: null,
   unlock() {
@@ -6148,7 +6150,8 @@ const Loot = {
   lastFullChimeAt: -Infinity,
   checkPetFull() {
     const P = Hunt.cfg().pickup;
-    if (!Hunt.running || !World.inWorld() || World.isDead() || !P.enabled || !this.petMode() || !P.petFullSound) return;
+    // The visible warning is independent of the chime: silencing the sound must not hide the full pet bag.
+    if (!Hunt.running || !World.inWorld() || World.isDead() || !P.enabled || !this.petMode()) return;
     const pet = this.pet();
     if (!pet || pet.rec.inventory.length < pet.rec.status) { this.fullAlert = null; return; }
     let alert = this.fullAlert;
@@ -6156,7 +6159,7 @@ const Loot = {
       alert = this.fullAlert = { gid: pet.rec.gid, sounded: false };
       UI.toast('Pickup pet bag is full. ' + (Town.cfg().enabled ? 'Town service will take priority over hunting.' : 'Scroll town cycle is off; enable it in Supplies for automatic return.'), 'warn', 6000);
     }
-    if (!alert.sounded && now() - this.lastFullChimeAt >= 30000) {
+    if (P.petFullSound && !alert.sounded && now() - this.lastFullChimeAt >= 30000) {
       this.lastFullChimeAt = now();
       alert.sounded = Sound.play('pet-full');
     }
@@ -6805,7 +6808,6 @@ const Party = {
     if (!matching || !social || !Array.isArray(social.members)) return;
     this.recruit(matching, social);
     if (!request) { this.answered = ''; return; }
-    if (!social || !Array.isArray(social.members)) return;
     // An owned listing can exist before the first applicant forms the party.
     // The game only routes applications to the listing's owner, and the local listing record can be
     // missing while the server's still exists (it is wiped on world entry and after a party dissolves),
@@ -8156,9 +8158,13 @@ const Town = {
 const QuestData = {
   quests: new Map(),   // refId -> { refId, level, key, token, title, npcCode }
   npcs: new Map(),     // NPC_ codename -> { refObjId, regionId, x, y, z }
-  pending: null, loaded: false, failed: false,
+  pending: null, loaded: false, failed: false, failedAt: 0,
   ready() {
     if (this.pending) return this.pending;
+    if (this.loaded) return null;
+    // Quest observe asks every tick; a failed load waits ten minutes before another try.
+    if (this.failed && now() - this.failedAt < 600000) return null;
+    this.failed = false;
     this.pending = Promise.all([Assets.json('/assets/data/questData.json'), Assets.json('/assets/data/npcpos.json'),
       Assets.json('/assets/npc/manifest.json')]).then(([quest, pos, npc]) => {
       const names = quest.textEntries || {};
@@ -8177,7 +8183,7 @@ const QuestData = {
       }
       this.loaded = true;
       if (UI.is('Quest')) UI.draw();
-    }).catch(e => { this.pending = null; this.failed = true; Log.warn('Quest data unavailable: ' + (e?.message || e)); });
+    }).catch(e => { this.pending = null; this.failed = true; this.failedAt = now(); Log.warn('Quest data unavailable: ' + (e?.message || e)); });
     return this.pending;
   },
   quest(refId) { return this.quests.get(refId) || null; },
@@ -9479,8 +9485,15 @@ const BuffGear = {
     if (this.autoRestore && this.recovery && !this.run) this.restore(true);
   },
   restore(auto = false) {
-    if (this.run || !this.recovery || !World.inWorld() || World.isDead() || World.gp?.inventoryPending || World.isCasting()) return;
-    if (!auto && Hunt.running || Town.trip || WalkBack.active || Restock.trip || Alchemy.run || Alchemy.pending) return UI.toast('Stop hunting and travel before restoring gear.', 'warn');
+    const gp = World.gp;
+    const windowOpen = !!(gp?.returnScroll || gp?.storage || Restock.activeShop() || gp?.exchange?.open || gp?.exchange?.requesting || gp?.stall?.phase && gp.stall.phase !== 'none');
+    if (this.run || !this.recovery || !World.inWorld() || World.isDead() || gp?.inventoryPending || World.isCasting()) return;
+    // The automatic restore waits out travel and open game windows instead of saying so every tick; only a manual one explains itself.
+    if (windowOpen || !auto && Hunt.running || Town.trip || WalkBack.active || Restock.trip || Alchemy.run || Alchemy.pending) {
+      if (windowOpen && !auto) return UI.toast('Close the open trade, stall or shop before restoring gear.', 'warn');
+      if (auto) return;
+      return UI.toast('Stop hunting and travel before restoring gear.', 'warn');
+    }
     this.run = this.create(this.recovery, []); this.run.restoring = true; this.recovery = null; this.autoRestore = false;
   },
   create(home, queue) {
@@ -10327,7 +10340,7 @@ const Lure = {
   on() { return !!this.cfg().enabled && this.cfg().points.length > 0; },
   // Every start begins at the hunting spot, with no hold since nothing was pulled yet; the next point is then A.
   reset() { this.enter('back'); this.index = -1; this.pulled = false; this.pulls = 0; },
-  enter(phase) { this.phase = phase; this.phaseAt = now(); this.target = 0; this.travel = null; this.sentAt = -Infinity; this.legFrom = null; this.pauseUntil = 0; this.hurry = false; },
+  enter(phase) { this.phase = phase; this.phaseAt = now(); this.target = 0; this.travel = null; this.sentAt = -Infinity; this.legFrom = null; this.pauseUntil = 0; this.hurry = false; this.halted = false; },
   addPoint() {
     const p = World.pose();
     if (!World.inWorld() || !p) return UI.toast('Enter the game first.', 'warn');
@@ -10502,7 +10515,8 @@ const Lure = {
 // Single owner for movement/combat/pickup. Potion use remains a separate emergency lane.
 const startHunting = Hunt.start;
 Hunt.start = function (...args) {
-  if (BuffGear.run || BuffGear.recovery) return UI.toast('Restore or review combat gear before hunting.', 'warn');
+  // A swap cut short by death or a world change restores itself during hunting; only a review the player must do blocks the start.
+  if (BuffGear.run || BuffGear.recovery && !BuffGear.autoRestore) return UI.toast('Restore or review combat gear before hunting.', 'warn');
   if (Alchemy.run || Alchemy.pending) return UI.toast('Stop alchemy and wait for its result before hunting.', 'warn');
   if (Trade.run) return UI.toast('Stop auto trade before hunting.', 'warn');
   if (Stall.run) return UI.toast('Stop the stall session before hunting.', 'warn');
@@ -10576,8 +10590,11 @@ Hunt.tick = function () {
     Loot.suspend();
     this.state = 'dead';
     if (!this.deathAt) { Town.deathPoint = World.pose() ? { ...World.pose() } : null; this.deathAt = now(); Party.noteDeath(); Log.info('Died: ' + Party.waitNote()); }
-    if ((Town.autoRevive() || H.onDeath === 'revive') && !this.revived && now() - this.deathAt > Party.reviveDelay() && !Party.resBusy()) {
-      if (Cmd.rebirth(1)) this.revived = true;
+    if ((Town.autoRevive() || H.onDeath === 'revive') && now() - this.deathAt > Party.reviveDelay() && !Party.resBusy()) {
+      // A rebirth the server never answers is asked again every ten seconds; the send itself refuses unless still dead.
+      if (!this.revived) {
+        if (Cmd.rebirth(1)) { this.revived = true; this.revivedAt = now(); }
+      } else if (now() - (this.revivedAt ?? this.deathAt) > 10000 && Cmd.rebirth(1)) this.revivedAt = now();
     } else if (!Town.autoRevive() && H.onDeath === 'stop') this.stop('character died');
     return;
   }
@@ -12149,7 +12166,8 @@ const Reconnect = {
     if (!p.character || Date.now() - p.at > this.PENDING_MS) return;
     this.intent = { character: p.character, hunting: !!p.hunting, since: now(), reloaded: true };
     this.attempts = 1; this.nextAt = now() + 3000; this.backAt = 0;
-    this.message = 'The page was reloaded; restoring ' + p.character + '.';
+    // The message reaches uploaded diagnostics, so it never carries the character's name.
+    this.message = 'The page was reloaded; restoring your character.';
     Log.warn('The game failed to load earlier; page reloaded, restoring ' + p.character + '.');
   },
   // Save what to resume, then reload. Shared by a failed load and an expired session; the wait before it grows with
@@ -12557,7 +12575,11 @@ const AutoMastery = {
     this.maxAll = true; this.total = 0; this.pending = null; this.blocked.clear();
     this.message = this.maxMessage = 'Max every skill: starting.';
     Stats.loadLevels();
-    this.fast = setInterval(() => this.tick(), 10);
+    this.fast = setInterval(() => {
+      // Leaving the world (death screen, disconnect) must stop the 10 ms loop, not spin it forever.
+      if (!World.inWorld()) return this.stopMax('Max every skill stopped: the game world was left.');
+      this.tick();
+    }, 10);
   },
   stopMax(text) {
     if (this.fast) { clearInterval(this.fast); this.fast = 0; }
@@ -13662,7 +13684,7 @@ function assetLoaderMain(self) {
     const msg = e.data || {};
     if (msg.op === 'init') { ORIGIN = String(msg.origin || ''); self.postMessage({ ready: true }); return; }
     try {
-      const allowed = ['/assets/data/levelData.json', '/assets/data/cosPresentation.json', '/assets/data/skillData.json', '/assets/text/textdataname.en.json', '/assets/data/missionPresentation.json', '/assets/char/roster.json', '/assets/npc/manifest.json'];
+      const allowed = ['/assets/data/levelData.json', '/assets/data/cosPresentation.json', '/assets/data/skillData.json', '/assets/text/textdataname.en.json', '/assets/data/missionPresentation.json', '/assets/data/questData.json', '/assets/data/npcpos.json', '/assets/char/roster.json', '/assets/npc/manifest.json'];
       if (msg.op !== 'blob' && !(msg.op === 'json' && allowed.includes(msg.path))) throw fail('op', 'Unsupported asset request');
       const { bytes, mime } = await bytesOf(msg.path);
       const result = msg.op === 'json' ? JSON.parse(new TextDecoder().decode(bytes)) : new Blob([bytes], { type: mime || 'image/png' });
@@ -15797,9 +15819,12 @@ const Diagnostics = {
 
 
 // Manual reports only. No startup requests, saved drafts, or automatic retries.
+// A rate-limit wait outlives the page: stored as a wall-clock deadline, converted to this page's clock on load.
+const REPORT_COOLDOWN_SAVED = Number(Store.get('reportCooldown', 0)) || 0;
 const Reports = {
   endpoint: 'https://nixbot.nixxane.workers.dev/report',
-  draft: null, sending: false, capturing: false, stream: null, cooldownUntil: 0,
+  draft: null, sending: false, capturing: false, stream: null,
+  cooldownUntil: REPORT_COOLDOWN_SAVED > Date.now() ? now() + REPORT_COOLDOWN_SAVED - Date.now() : 0,
   open() {
     if (this.sending || this.capturing) return;
     if (!this.draft) this.draft = { base: JSON.parse(Diagnostics.report()), description: '', image: null, url: '', sent: false };
@@ -15910,6 +15935,7 @@ const Reports = {
       if (response.status === 429) {
         const seconds = Number(response.headers.get('Retry-After'));
         this.cooldownUntil = now() + (Number.isFinite(seconds) && seconds > 0 ? clamp(seconds, 1, 3600) : 60) * 1000;
+        Store.set('reportCooldown', Date.now() + this.cooldownUntil - now());
         this.notice('Too many reports. Wait before trying again.');
       } else if (response.ok && (await response.json()).ok === true) {
         this.draft.sent = true;
@@ -18145,7 +18171,11 @@ const UI = {
     const distance = center ? dist2D(World.pose(), center) : Infinity;
     this.status.textContent = `${World.charName || 'No character'} · ${World.inWorld() ? Controller.mode : World.phase}\nHP ${Math.round(me.hpPct)}% · MP ${Math.round(me.mpPct)}% · Potions ${Potion.count('hp')}/${Potion.count('mp')} · Pickups ${Stats.values.loot}\nHunting spot: ${Number.isFinite(distance) ? Math.round(distance / 10) + ' m away' : center ? 'another region' : 'not saved'}${Restock.recording ? '\nRecording route: ' + Restock.draft.route.length + ' points' : ''}`;
 
-    this.refreshers.forEach(refresh => refresh());
+    // One throwing refresher must not stall every later one on each update; the error is logged at most every 5 s.
+    this.refreshers.forEach(refresh => {
+      try { refresh(); }
+      catch (e) { if (now() - (this.refreshErrorAt || -Infinity) > 5000) { this.refreshErrorAt = now(); Log.error('Panel update failed: ' + (e?.message || e)); } }
+    });
     for (const slot of this.pane.querySelectorAll('.slot[data-skill]')) {
       const id = Number(slot.dataset.skill), left = World.cooldownLeft(id), total = World.skill(id)?.cooldownMs || 0;
       slot.querySelector('.cd').style.setProperty('--p', total && left > 0 ? Math.min(100, left / total * 100) + '%' : '0%');
@@ -19011,7 +19041,7 @@ function boot() {
     const key = name ? 'profile:' + name : 'profile:default';
     if (key !== Settings.profileKey) { Town.lastScrollPoint = null; Town.deathPoint = null; stopAll(); Settings.useCharacter(name); }
   });
-  bus.on('profile', () => { PetPotion.reset(); AutoMastery.reset(); StatPoints.reset(); Trace.reset(); BuffGear.reset(); Equip.reset(); Town.lastScrollPoint = null; Town.deathPoint = null; SpeedScroll.reset(); ScrollBuff.reset(); MallBuyer.reset(); MallBuyer.unpoison(); RepairHammer.reset(); Party.reset(); Resurrect.reset(); Quest.reset(); stopAll(); Restock.cancelRecording(); Restock.unbuyable.clear(); Loot.reset(); Wardrobe.applyNow(); UI.draw(); });
+  bus.on('profile', () => { PetPotion.reset(); AutoMastery.reset(); StatPoints.reset(); Trace.reset(); BuffGear.reset(); Equip.reset(); Town.lastScrollPoint = null; Town.deathPoint = null; Town.tier = {}; SpeedScroll.reset(); ScrollBuff.reset(); MallBuyer.reset(); MallBuyer.unpoison(); RepairHammer.reset(); Party.reset(); Resurrect.reset(); Quest.reset(); stopAll(); Restock.cancelRecording(); Restock.unbuyable.clear(); Loot.reset(); Wardrobe.applyNow(); UI.draw(); });
   bus.on('phase', phase => {
     if (phase !== 'world') {
       BuffGear.interrupt('World transition interrupted buff swaps.', true);
@@ -19035,7 +19065,7 @@ function boot() {
       if (['recall-wait', 'reverse-wait'].includes(Town.trip.phase)) Town.trip.transition = true;
       else Town.fail('Unexpected world reset during town service.');
     }
-    SpeedScroll.reset(); ScrollBuff.reset(); MallBuyer.reset(); RepairHammer.reset(); Party.reset(); Resurrect.reset(); Quest.reset(); Loot.reset(); Navigation.scene = null; Wardrobe.inv = Wardrobe.baseInv = Wardrobe.av = Wardrobe.baseAv = null; Wardrobe.body = '';
+    SpeedScroll.reset(); ScrollBuff.reset(); MallBuyer.reset(); RepairHammer.reset(); Party.reset(); Resurrect.reset(); Quest.reset(); PetPotion.reset(); Loot.reset(); Navigation.scene = null; Wardrobe.inv = Wardrobe.baseInv = Wardrobe.av = Wardrobe.baseAv = null; Wardrobe.body = '';
   });
   bus.on('attached', ({ late }) => { if (late) UI.toast('Attached after the game started. Reload for complete character data.', 'warn'); });
   bus.on('potion-empty', kind => UI.toast('Out of ' + kind.toUpperCase() + ' potions.', 'warn'));

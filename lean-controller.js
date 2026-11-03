@@ -1,7 +1,8 @@
 // Single owner for movement/combat/pickup. Potion use remains a separate emergency lane.
 const startHunting = Hunt.start;
 Hunt.start = function (...args) {
-  if (BuffGear.run || BuffGear.recovery) return UI.toast('Restore or review combat gear before hunting.', 'warn');
+  // A swap cut short by death or a world change restores itself during hunting; only a review the player must do blocks the start.
+  if (BuffGear.run || BuffGear.recovery && !BuffGear.autoRestore) return UI.toast('Restore or review combat gear before hunting.', 'warn');
   if (Alchemy.run || Alchemy.pending) return UI.toast('Stop alchemy and wait for its result before hunting.', 'warn');
   if (Trade.run) return UI.toast('Stop auto trade before hunting.', 'warn');
   if (Stall.run) return UI.toast('Stop the stall session before hunting.', 'warn');
@@ -75,8 +76,11 @@ Hunt.tick = function () {
     Loot.suspend();
     this.state = 'dead';
     if (!this.deathAt) { Town.deathPoint = World.pose() ? { ...World.pose() } : null; this.deathAt = now(); Party.noteDeath(); Log.info('Died: ' + Party.waitNote()); }
-    if ((Town.autoRevive() || H.onDeath === 'revive') && !this.revived && now() - this.deathAt > Party.reviveDelay() && !Party.resBusy()) {
-      if (Cmd.rebirth(1)) this.revived = true;
+    if ((Town.autoRevive() || H.onDeath === 'revive') && now() - this.deathAt > Party.reviveDelay() && !Party.resBusy()) {
+      // A rebirth the server never answers is asked again every ten seconds; the send itself refuses unless still dead.
+      if (!this.revived) {
+        if (Cmd.rebirth(1)) { this.revived = true; this.revivedAt = now(); }
+      } else if (now() - (this.revivedAt ?? this.deathAt) > 10000 && Cmd.rebirth(1)) this.revivedAt = now();
     } else if (!Town.autoRevive() && H.onDeath === 'stop') this.stop('character died');
     return;
   }

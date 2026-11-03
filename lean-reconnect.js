@@ -49,7 +49,8 @@ const Reconnect = {
     if (!p.character || Date.now() - p.at > this.PENDING_MS) return;
     this.intent = { character: p.character, hunting: !!p.hunting, since: now(), reloaded: true };
     this.attempts = 1; this.nextAt = now() + 3000; this.backAt = 0;
-    this.message = 'The page was reloaded; restoring ' + p.character + '.';
+    // The message reaches uploaded diagnostics, so it never carries the character's name.
+    this.message = 'The page was reloaded; restoring your character.';
     Log.warn('The game failed to load earlier; page reloaded, restoring ' + p.character + '.');
   },
   // Save what to resume, then reload. Shared by a failed load and an expired session; the wait before it grows with
