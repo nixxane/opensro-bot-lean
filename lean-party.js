@@ -202,7 +202,6 @@ const Party = {
     if (!matching || !social || !Array.isArray(social.members)) return;
     this.recruit(matching, social);
     if (!request) { this.answered = ''; return; }
-    if (!social || !Array.isArray(social.members)) return;
     // An owned listing can exist before the first applicant forms the party.
     // The game only routes applications to the listing's owner, and the local listing record can be
     // missing while the server's still exists (it is wiped on world entry and after a party dissolves),

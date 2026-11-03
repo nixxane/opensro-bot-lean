@@ -11,7 +11,7 @@ const Lure = {
   on() { return !!this.cfg().enabled && this.cfg().points.length > 0; },
   // Every start begins at the hunting spot, with no hold since nothing was pulled yet; the next point is then A.
   reset() { this.enter('back'); this.index = -1; this.pulled = false; this.pulls = 0; },
-  enter(phase) { this.phase = phase; this.phaseAt = now(); this.target = 0; this.travel = null; this.sentAt = -Infinity; this.legFrom = null; this.pauseUntil = 0; this.hurry = false; },
+  enter(phase) { this.phase = phase; this.phaseAt = now(); this.target = 0; this.travel = null; this.sentAt = -Infinity; this.legFrom = null; this.pauseUntil = 0; this.hurry = false; this.halted = false; },
   addPoint() {
     const p = World.pose();
     if (!World.inWorld() || !p) return UI.toast('Enter the game first.', 'warn');

@@ -7,9 +7,13 @@
 const QuestData = {
   quests: new Map(),   // refId -> { refId, level, key, token, title, npcCode }
   npcs: new Map(),     // NPC_ codename -> { refObjId, regionId, x, y, z }
-  pending: null, loaded: false, failed: false,
+  pending: null, loaded: false, failed: false, failedAt: 0,
   ready() {
     if (this.pending) return this.pending;
+    if (this.loaded) return null;
+    // Quest observe asks every tick; a failed load waits ten minutes before another try.
+    if (this.failed && now() - this.failedAt < 600000) return null;
+    this.failed = false;
     this.pending = Promise.all([Assets.json('/assets/data/questData.json'), Assets.json('/assets/data/npcpos.json'),
       Assets.json('/assets/npc/manifest.json')]).then(([quest, pos, npc]) => {
       const names = quest.textEntries || {};
@@ -28,7 +32,7 @@ const QuestData = {
       }
       this.loaded = true;
       if (UI.is('Quest')) UI.draw();
-    }).catch(e => { this.pending = null; this.failed = true; Log.warn('Quest data unavailable: ' + (e?.message || e)); });
+    }).catch(e => { this.pending = null; this.failed = true; this.failedAt = now(); Log.warn('Quest data unavailable: ' + (e?.message || e)); });
     return this.pending;
   },
   quest(refId) { return this.quests.get(refId) || null; },

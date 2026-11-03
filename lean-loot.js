@@ -8,7 +8,8 @@ const Loot = {
   lastFullChimeAt: -Infinity,
   checkPetFull() {
     const P = Hunt.cfg().pickup;
-    if (!Hunt.running || !World.inWorld() || World.isDead() || !P.enabled || !this.petMode() || !P.petFullSound) return;
+    // The visible warning is independent of the chime: silencing the sound must not hide the full pet bag.
+    if (!Hunt.running || !World.inWorld() || World.isDead() || !P.enabled || !this.petMode()) return;
     const pet = this.pet();
     if (!pet || pet.rec.inventory.length < pet.rec.status) { this.fullAlert = null; return; }
     let alert = this.fullAlert;
@@ -16,7 +17,7 @@ const Loot = {
       alert = this.fullAlert = { gid: pet.rec.gid, sounded: false };
       UI.toast('Pickup pet bag is full. ' + (Town.cfg().enabled ? 'Town service will take priority over hunting.' : 'Scroll town cycle is off; enable it in Supplies for automatic return.'), 'warn', 6000);
     }
-    if (!alert.sounded && now() - this.lastFullChimeAt >= 30000) {
+    if (P.petFullSound && !alert.sounded && now() - this.lastFullChimeAt >= 30000) {
       this.lastFullChimeAt = now();
       alert.sounded = Sound.play('pet-full');
     }

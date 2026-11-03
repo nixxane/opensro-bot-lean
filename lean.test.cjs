@@ -3,10 +3,10 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(__dirname + '/bot.lean.user.js', 'utf8');
 const isolated = source.slice(0, source.lastIndexOf('installWorkerHook();')) +
-  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap};\n})();';
-function fixture(document) {
+  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap};\n})();';
+function fixture(document, sharedStorage) {
   let time = 100000;
-  const storage = new Map(), commands = [], notices = [], intervals = [], timers = [];
+  const storage = sharedStorage || new Map(), commands = [], notices = [], intervals = [], timers = [];
   const win = { addEventListener() {}, localStorage: { getItem: k => storage.get(k) ?? null, setItem: (k, v) => storage.set(k, v) } };
   const context = { window: win, document, performance: { now: () => time }, console,
     setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimeout() {}, clearInterval() {}, setInterval(fn, ms) { intervals.push({ fn, ms }); }, AbortController, Blob, FormData, URL, Map, Set, Date, ArrayBuffer, DataView, atob };
@@ -1544,6 +1544,7 @@ test('pet full alert respects toggle, collector, stopped and missing pet states'
   f.Sound.play = kind => { if (kind !== 'pet-full') return false; sounds++; return true; }; pet.status = 1; pet.inventory = [{ slot: 0 }];
   f.Controller.tick(); assert.equal(sounds, 0); f.Hunt.start();
   f.Settings.profile.hunt.pickup.petFullSound = false; f.Controller.tick(); assert.equal(sounds, 0);
+  assert.ok(f.notices.some(n => /bag is full/.test(n)), 'the visible warning does not depend on the chime');
   f.Settings.profile.hunt.pickup.petFullSound = true;
   f.Settings.profile.hunt.pickup.collector = 'character'; f.Controller.tick(); assert.equal(sounds, 0);
   f.Settings.profile.hunt.pickup.collector = 'pet'; pet.dead = true; f.Controller.tick(); assert.equal(sounds, 0);
@@ -3051,6 +3052,14 @@ test('Max every skill raises a mastery only when it is what blocks a skill, and 
   assert.deepEqual(skillTrains(f), [1001], 'then the skill it unlocked');
   f.AutoMastery.stopMax('Max every skill: stopped.'); assert.equal(f.AutoMastery.maxAll, false);
 });
+test('Max every skill stops by itself when the game world is left', () => {
+  const f = skillFixture({}, []);
+  f.AutoMastery.startMax(); f.Controller.tick();
+  assert.equal(f.AutoMastery.maxAll, true);
+  f.World.inWorld = () => false;
+  f.intervals.at(-1).fn();
+  assert.equal(f.AutoMastery.maxAll, false, 'the fast loop does not spin outside the world');
+});
 test('Max every skill sees a refusal at once, does not repeat it and leaves other skills alone', () => {
   const f = skillFixture({}, []);
   f.Settings.profile.mastery.skills = false;
@@ -4054,6 +4063,14 @@ test('the wait for a party resurrection before reviving in town is configurable'
   t = deathFixture('revive'); t.f.Settings.profile.party.reviveWaitS = 120; t.f.World.ents.delete(77); t.die();
   assert.match(t.f.Party.waitNote(), /no party member in view/);
   t.f.advance(6000); t.f.Controller.tick(); assert.equal(rebirths(t.f), 1, 'nobody around: the short 5 s wait is untouched');
+});
+test('an unanswered rebirth is asked again instead of latching the dead state forever', () => {
+  const rebirths = f => f.commands.filter(c => c.kind === 'rebirth').length;
+  const t = deathFixture('revive'); t.f.World.ents.delete(77); t.die();
+  t.f.advance(6000); t.f.Controller.tick(); assert.equal(rebirths(t.f), 1, 'nobody around: the first revive goes out');
+  t.f.advance(10000); t.f.Controller.tick(); assert.equal(rebirths(t.f), 1, 'not yet ten seconds since the send: no resend');
+  t.f.advance(1001); t.f.Controller.tick(); assert.equal(rebirths(t.f), 2, 'an unanswered rebirth is asked again');
+  assert.equal(t.f.Hunt.running, true, 'hunting stays on through it all');
 });
 test('auto mastery is off by default, ignores dead characters and pending training, and backs off after a refusal', () => {
   assert.equal(fixture().Settings.profile.mastery.enabled, false);
@@ -7103,6 +7120,33 @@ test('dying with a buff weapon on puts the combat weapon back after revival and 
   f.drive();
   assert.equal(JSON.stringify(f.BuffGear.setup()), home); assert.equal(f.BuffGear.recovery, null);
 });
+test('the automatic gear restore waits out travel without repeating its warning', () => {
+  const f = buffGearFixture();
+  f.BuffGear.recovery = f.BuffGear.setup(); f.BuffGear.autoRestore = true;
+  f.Town.trip = { phase: 'sell' };
+  f.BuffGear.resume(); f.BuffGear.resume(); f.BuffGear.resume();
+  assert.equal(f.notices.length, 0, 'the automatic restore stays silent while a town trip runs');
+  assert.equal(f.BuffGear.run, null, 'and it does not start the restore either');
+  f.BuffGear.restore();
+  assert.ok(f.notices.some(n => /Stop hunting and travel/.test(n)), 'a manual restore during the trip still explains itself');
+  f.Town.trip = null; f.BuffGear.resume();
+  assert.ok(f.BuffGear.run?.restoring, 'the automatic restore starts once travel is over');
+});
+test('hunting restarts at the walk-back end even while combat gear waits to restore itself', () => {
+  const f = buffGearFixture();
+  f.Hunt.running = false;
+  f.BuffGear.recovery = f.BuffGear.setup(); f.BuffGear.autoRestore = true;
+  f.Hunt.start();
+  assert.equal(f.Hunt.running, true, 'a pending automatic restore does not block the start');
+  f.BuffGear.resume();
+  assert.ok(f.BuffGear.run?.restoring, 'the restore runs alongside hunting');
+  f.drive();
+  assert.equal(f.BuffGear.recovery, null, 'the combat gear is back');
+  f.Hunt.running = false; f.BuffGear.run = null; f.BuffGear.recovery = f.BuffGear.setup(); f.BuffGear.autoRestore = false;
+  f.Hunt.start();
+  assert.equal(f.Hunt.running, false, 'a gear review the player must do still blocks hunting');
+  assert.ok(f.notices.some(n => /Restore or review combat gear/.test(n)));
+});
 test('the pet status notes have a fixed height and are never hidden, so the panel below does not shift', () => {
   const fs = require('fs'), css = fs.readFileSync(__dirname + '/lean-skin.css', 'utf8'), ui = fs.readFileSync(__dirname + '/lean-ui.js', 'utf8');
   assert.match(css, /\.pet-note\{height:[\d.]+em;[^}]*overflow-y:auto/);
@@ -7772,6 +7816,18 @@ async function updateTests() {
       f.advance(1); assert.equal(calls, 1); await r.send(); assert.equal(calls, 2);
     }
   });
+  await check('a report rate-limit wait survives the page reload', async () => {
+    const shared = new Map();
+    const f = fixture(undefined, shared), r = reporting(f);
+    f.win.fetch = async () => ({ status: 429, ok: false, headers: { get: () => '90' } });
+    await r.send();
+    assert.ok(Number(f.storage.get('sroBotLean:v1:reportCooldown')) > Date.now(), 'the wait is stored as a wall-clock deadline');
+    const g = fixture(undefined, shared), r2 = reporting(g);
+    assert.ok(r2.cooldownUntil > 0, 'the reloaded page still waits');
+    let calls = 0; g.win.fetch = async () => { calls++; return { status: 200, ok: true, json: async () => ({ ok: true }) }; };
+    await r2.send();
+    assert.equal(calls, 0, 'sending stays blocked by the stored cooldown');
+  });
   await check('report timeout aborts once and validation/service failures never trigger retries', async () => {
     const f = fixture(), r = reporting(f); let signal, calls = 0;
     f.win.fetch = (_, options) => { calls++; signal = options.signal; return new Promise((_, reject) => signal.addEventListener('abort', () => reject(Error('timeout')))); };
@@ -8249,6 +8305,28 @@ test('a quest ticked on the list is accepted from the game data with no marker, 
   qDialog(f, { kind: 4, prompt: 'SN_TALK_MENU', options: [{ choice: 5, symbol: 'SN_CON_QNO_CH_A_1' }, { choice: 6, symbol: 'SN_CON_QNO_CH_B_1' }] });
   f.Quest.tick(); f.Quest.tick();
   assert.ok(qSent(f, 'npc-choice').some(c => c.choice === 6), 'its own row is chosen, not the other one');
+});
+test('a failed quest data load backs off instead of refetching every tick', async () => {
+  const f = questFixture();
+  let asks = 0;
+  f.Assets.json = async () => { asks++; throw Error('Unsupported asset request'); };
+  await f.QuestData.ready();
+  assert.equal(asks, 3, 'one load asks for the three catalogue files');
+  assert.equal(f.QuestData.failed, true); assert.equal(f.QuestData.pending, null);
+  for (let i = 0; i < 5; i++) f.QuestData.ready();
+  assert.equal(asks, 3, 'the backoff window does not refetch');
+  f.advance(600001);
+  const again = f.QuestData.ready();
+  assert.equal(asks, 6, 'ten minutes later a retry is allowed');
+  await again;
+  assert.equal(f.QuestData.failed, true, 'a retry that fails again re-arms the backoff');
+});
+test('the learned potion tier does not cross characters', () => {
+  const f = fixture();
+  f.UI.mount = f.UI.draw = f.UI.update = f.Ticker.start = () => {}; f.boot();
+  f.Town.tier.hp = 10850;
+  f.bus.emit('profile');
+  assert.equal(JSON.stringify(f.Town.tier), '{}', 'a profile switch clears the learned low-town potion tier');
 });
 test('picked quests that cannot run say why', () => {
   const f = questFixture();

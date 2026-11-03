@@ -131,7 +131,11 @@ const AutoMastery = {
     this.maxAll = true; this.total = 0; this.pending = null; this.blocked.clear();
     this.message = this.maxMessage = 'Max every skill: starting.';
     Stats.loadLevels();
-    this.fast = setInterval(() => this.tick(), 10);
+    this.fast = setInterval(() => {
+      // Leaving the world (death screen, disconnect) must stop the 10 ms loop, not spin it forever.
+      if (!World.inWorld()) return this.stopMax('Max every skill stopped: the game world was left.');
+      this.tick();
+    }, 10);
   },
   stopMax(text) {
     if (this.fast) { clearInterval(this.fast); this.fast = 0; }

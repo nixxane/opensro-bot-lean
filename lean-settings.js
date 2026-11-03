@@ -150,6 +150,8 @@ const Settings = {
     } catch (e) { UI.toast('Could not import profile: ' + e.message, 'warn'); }
   },
 };
+// A change made right before the page closes still reaches storage; the debounce alone would lose it.
+W.addEventListener('pagehide', () => Store.set(Settings.profileKey, Settings.profile));
 const Sound = {
   ctx: null,
   unlock() {
