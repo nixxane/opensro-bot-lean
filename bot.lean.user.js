@@ -188,6 +188,7 @@ const CLASS_KEYS = ['normal', 'champion', 'giant', 'party', 'elite', 'unique'];
 const DEFAULT_PROFILE = {
   items: { rules: {}, balance: false, autoEquip: false, gear: { primaryWeapon: null, secondaryWeapon: null, shield: null } },
   sounds: { player: false, died: false, levelUp: false, unique: false },
+  assistant: { endpoint: '', model: '' },
   stall: { title: '', greeting: '', network: true, closeWhenEmpty: true, prices: {} },
   alchemy: { target: 3, limit: 20, elixir: 0, powder: false, use: { luck: false, steady: false, immortal: false, astral: false }, stones: { luck: 1, steady: 1, immortal: 1, astral: 1 }, stoneLimit: 0,
     // The plus from which each helper is used: a failure from +5 up can destroy the item (Steady and Immortal matter from there),
@@ -255,7 +256,7 @@ const DEFAULT_PROFILE = {
 function botProfile(input) {
   const result = deepMerge(DEFAULT_PROFILE, {});
   if (!input || typeof input !== 'object') return result;
-  for (const key of ['macro', 'potion', 'hunt', 'lure', 'pet', 'scroll', 'mall', 'wardrobe', 'party', 'alchemy', 'mastery', 'statPoints', 'trace', 'items', 'trade', 'stall', 'quest', 'sounds']) {
+  for (const key of ['macro', 'potion', 'hunt', 'lure', 'pet', 'scroll', 'mall', 'wardrobe', 'party', 'alchemy', 'mastery', 'statPoints', 'trace', 'items', 'trade', 'stall', 'quest', 'sounds', 'assistant']) {
     if (!input[key] || typeof input[key] !== 'object') continue;
     for (const field of Object.keys(DEFAULT_PROFILE[key])) {
       if (field in input[key]) result[key][field] = deepMerge(DEFAULT_PROFILE[key][field], input[key][field]);
@@ -15958,6 +15959,72 @@ const Reports = {
 };
 
 
+// Optional bridge to a player-run LLM server (LM Studio and friends, any OpenAI-compatible
+// endpoint on the player's own machine). This first slice only remembers where that server
+// listens and checks that it answers: the test asks for the models listing and nothing else,
+// no request happens without the button press, and no game data leaves the page.
+const Assistant = {
+  // The page's fetch; tests replace this with a stub. Only ever called by probe().
+  fetchImpl: typeof fetch === 'function' ? fetch : null,
+  testing: false,
+  // Collapse anything the player typed into a bare base address (scheme + host + port).
+  // Addresses without a scheme are http, paths and queries are dropped, and credentials
+  // never reach the stored settings.
+  base(raw) {
+    let value = String(raw || '').trim();
+    if (!value) return '';
+    // Another explicit scheme (ftp, ws…) can never serve a model; only http may be implied.
+    if (!/^https?:\/\//i.test(value)) {
+      if (/:\/\//i.test(value)) return '';
+      value = 'http://' + value;
+    }
+    let url;
+    try { url = new URL(value); } catch { return ''; }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return '';
+    return url.protocol + '//' + url.host;
+  },
+  modelsUrl(base) { return base.replace(/\/+$/, '') + '/v1/models'; },
+  async probe(rawEndpoint, timeoutMs = 5000) {
+    const base = this.base(rawEndpoint);
+    if (!base) return { ok: false, error: 'Enter an endpoint address first.' };
+    if (!this.fetchImpl) return { ok: false, error: 'This browser exposes no fetch; the assistant cannot connect.' };
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await this.fetchImpl(this.modelsUrl(base), { signal: controller.signal });
+      if (!response.ok) return { ok: false, error: 'The server answered with HTTP ' + response.status + '.' };
+      const data = await response.json().catch(() => null);
+      const models = Array.isArray(data?.data) ? data.data.map(m => String(m?.id || '')).filter(Boolean) : [];
+      if (!models.length) return { ok: false, error: 'The endpoint answered, but listed no models — is it an OpenAI-compatible server?' };
+      return { ok: true, base, models };
+    } catch (e) {
+      if (e?.name === 'AbortError') return { ok: false, error: 'No answer within ' + Math.round(timeoutMs / 1000) + ' s.' };
+      // A plain http address on another machine is mixed content on this https page, and the
+      // server must also allow cross-origin requests; both surface as a failed fetch here.
+      return { ok: false, error: 'Could not reach the endpoint. Run the server on this machine (127.0.0.1) or serve it over https, and allow cross-origin requests in it.' };
+    } finally {
+      clearTimeout(timer);
+    }
+  },
+  modelNote(probe, configured) {
+    if (!configured) return 'No model set; the server lists ' + probe.models.length + '.';
+    return probe.models.includes(configured) ? 'Model "' + configured + '" is listed.' : 'Model "' + configured + '" is not listed; the server offers ' + probe.models.length + ' models.';
+  },
+  // Wired to the Settings page button; keeps the section free of request logic.
+  async test(status, button) {
+    if (this.testing) return;
+    this.testing = true;
+    button.disabled = true;
+    status.textContent = 'Testing…';
+    const A = Settings.profile.assistant;
+    const result = await this.probe(A.endpoint);
+    status.textContent = result.ok ? 'OK — ' + result.models.length + ' models. ' + this.modelNote(result, A.model.trim()) : result.error;
+    this.testing = false;
+    button.disabled = false;
+  },
+};
+
+
 // Item rules: what to do with each item of the game's catalogue, like sBot's item list.
 // A rule is per exact item (refObjId) and per character: pick (always / never) and one action (store in the warehouse,
 // sell at the repair merchant, keep, or drop). Rules come first; without one the Loot categories and the town settings
@@ -17304,7 +17371,7 @@ const UI = {
     } else if (this.current === 'Wardrobe') {
       LeanWardrobe.draw(this.pane);
     } else {
-      this.sections('settingsStats', 'settingsBehaviour', 'settingsObstacles', 'settingsAntiStuck', 'settingsMastery', 'settingsStatPoints', 'settingsProfiles', 'settingsShare', 'settingsReports', 'settingsActivity');
+      this.sections('settingsStats', 'settingsBehaviour', 'settingsObstacles', 'settingsAntiStuck', 'settingsMastery', 'settingsStatPoints', 'settingsProfiles', 'settingsShare', 'settingsAssistant', 'settingsReports', 'settingsActivity');
     }
     this.balance();
     this.update();
@@ -17331,7 +17398,7 @@ const UI = {
       { name: 'Auto alchemy', icon: 'action\\icon_cha_alchemy', pages: ['Alchemy'], draw() { Alchemy.draw(); } },
       { name: 'Stall', icon: 'action\\icon_cha_shop', pages: ['Stall'], draw() { Stall.draw(); } },
       { name: 'Extra', icon: 'action\\icon_cha_helper', pages: ['Settings'], sections: [
-        ['settingsStats'], ['settingsMastery'], ['settingsStatPoints'], ['settingsProfiles'], ['settingsShare'], ['settingsReports'], ['settingsActivity']] },
+        ['settingsStats'], ['settingsMastery'], ['settingsStatPoints'], ['settingsProfiles'], ['settingsShare'], ['settingsAssistant', 'Local assistant'], ['settingsReports'], ['settingsActivity']] },
       { name: 'Map', pages: ['Map'], draw() { LeanMap.draw(this.pane); } },
       { name: 'Auto trade', icon: 'action\\icon_cha_shop', pages: ['Trade'], draw() { Trade.draw(); } },
       { name: 'Wardrobe', icon: 'action\\icon_cha_shop', pages: ['Wardrobe'], draw() { LeanWardrobe.draw(this.pane); } },
@@ -17986,6 +18053,16 @@ const UI = {
   section_settingsShare(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
       ProfileShare.draw(host);
+  },
+  section_settingsAssistant(host) {
+    const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
+    const status = el('p', '', 'muted'); status.setAttribute('role', 'status');
+    const test = this.button('Test connection', () => { void Assistant.test(status, test); });
+    host.append(this.group('Assistant (local)',
+      el('p', 'Point this at your own OpenAI-compatible server (for example LM Studio on this machine) to enable assistant features. The test only asks for its models listing; nothing about the game is ever sent.', 'muted'),
+      this.text('Assistant endpoint', () => Settings.profile.assistant.endpoint, v => { Settings.profile.assistant.endpoint = v.trim(); }, 'http://127.0.0.1:1234'),
+      this.text('Model', () => Settings.profile.assistant.model, v => { Settings.profile.assistant.model = v.trim(); }, 'model id from your server'),
+      this.row(test), status));
   },
   section_settingsReports(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();

@@ -3,7 +3,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(__dirname + '/bot.lean.user.js', 'utf8');
 const isolated = source.slice(0, source.lastIndexOf('installWorkerHook();')) +
-  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap};\n})();';
+  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap, Assistant};\n})();';
 function fixture(document, sharedStorage) {
   let time = 100000;
   const storage = sharedStorage || new Map(), commands = [], notices = [], intervals = [], timers = [];
@@ -7880,6 +7880,58 @@ async function updateTests() {
   await Promise.all(asyncTests);
   console.log('Total integration tests: ' + passed);
 }
+// ---- Local assistant endpoint ----
+test('assistant endpoint base normalises what the player typed and refuses unusable addresses', () => {
+  const f = fixture();
+  assert.equal(f.Assistant.base('http://127.0.0.1:1234'), 'http://127.0.0.1:1234');
+  assert.equal(f.Assistant.base('127.0.0.1:1234'), 'http://127.0.0.1:1234');
+  assert.equal(f.Assistant.base('http://192.168.0.33:1234/'), 'http://192.168.0.33:1234');
+  assert.equal(f.Assistant.base('http://192.168.0.33:1234/v1'), 'http://192.168.0.33:1234');
+  assert.equal(f.Assistant.base('https://my.host:8443/x?y=1'), 'https://my.host:8443');
+  assert.equal(f.Assistant.base('ftp://example.com'), '', 'only http and https can serve a model');
+  assert.equal(f.Assistant.base('not a url'), '');
+  assert.equal(f.Assistant.base('   '), '');
+  assert.equal(f.Assistant.base('http://user:secret@127.0.0.1:1234'), 'http://127.0.0.1:1234', 'credentials are never kept');
+});
+test('assistant settings are per character and old profiles migrate to defaults', () => {
+  const f = fixture();
+  assert.equal(JSON.stringify(f.Settings.profile.assistant), '{"endpoint":"","model":""}');
+  const migrated = f.botProfile({ hunt: { radius: 100 } });
+  assert.equal(JSON.stringify(migrated.assistant), '{"endpoint":"","model":""}');
+  const kept = f.botProfile({ assistant: { endpoint: 'http://127.0.0.1:1234', model: 'x' } });
+  assert.equal(kept.assistant.endpoint, 'http://127.0.0.1:1234');
+});
+test('assistant probe lists models and validates the configured model id', async () => {
+  const f = fixture();
+  let asked = '';
+  f.Assistant.fetchImpl = async (url, opts) => {
+    asked = url;
+    assert.equal(typeof opts.signal.aborted, 'boolean', 'the request must carry an abort signal for its timeout');
+    return { ok: true, status: 200, json: async () => ({ data: [{ id: 'model-a' }, { id: 'model-b' }] }) };
+  };
+  const result = await f.Assistant.probe('127.0.0.1:1234');
+  assert.equal(asked, 'http://127.0.0.1:1234/v1/models');
+  assert.equal(result.ok, true); assert.deepEqual(result.models, ['model-a', 'model-b']);
+  assert.match(f.Assistant.modelNote(result, 'model-a'), /is listed/);
+  assert.match(f.Assistant.modelNote(result, 'other'), /not listed/);
+  assert.match(f.Assistant.modelNote(result, ''), /No model set/);
+});
+test('assistant probe classifies every failure path without sending game data', async () => {
+  const f = fixture();
+  assert.match((await f.Assistant.probe('')).error, /Enter an endpoint/);
+  f.Assistant.fetchImpl = async () => { throw new TypeError('Failed to fetch'); };
+  let result = await f.Assistant.probe('http://192.168.0.9:1234');
+  assert.equal(result.ok, false); assert.match(result.error, /Could not reach/);
+  assert.equal(f.commands.length, 0, 'a failed probe never falls back to game commands');
+  f.Assistant.fetchImpl = async () => { const e = new Error('aborted'); e.name = 'AbortError'; throw e; };
+  assert.match((await f.Assistant.probe('127.0.0.1:1')).error, /No answer within/);
+  f.Assistant.fetchImpl = async () => ({ ok: false, status: 404, json: async () => ({}) });
+  assert.match((await f.Assistant.probe('127.0.0.1:1')).error, /HTTP 404/);
+  f.Assistant.fetchImpl = async () => ({ ok: true, status: 200, json: async () => ({ nope: 1 }) });
+  assert.match((await f.Assistant.probe('127.0.0.1:1')).error, /no models/);
+  f.Assistant.fetchImpl = null;
+  assert.match((await f.Assistant.probe('127.0.0.1:1')).error, /no fetch/);
+});
 require('./lean.session.test.cjs')({ test, fixture, townFixture });
 require('./lean.logging.test.cjs')({ test, fixture, townFixture });
 updateTests().catch(error => { console.error(error); process.exitCode = 1; });
