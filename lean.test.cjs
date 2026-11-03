@@ -7885,9 +7885,17 @@ test('assistant endpoint base normalises what the player typed and refuses unusa
   const f = fixture();
   assert.equal(f.Assistant.base('http://127.0.0.1:1234'), 'http://127.0.0.1:1234');
   assert.equal(f.Assistant.base('127.0.0.1:1234'), 'http://127.0.0.1:1234');
-  assert.equal(f.Assistant.base('http://192.168.0.33:1234/'), 'http://192.168.0.33:1234');
-  assert.equal(f.Assistant.base('http://192.168.0.33:1234/v1'), 'http://192.168.0.33:1234');
-  assert.equal(f.Assistant.base('https://my.host:8443/x?y=1'), 'https://my.host:8443');
+  assert.equal(f.Assistant.base('http://localhost:1234/'), 'http://localhost:1234');
+  assert.equal(f.Assistant.base('http://127.0.0.1:1234/v1'), 'http://127.0.0.1:1234');
+  assert.equal(f.Assistant.base('http://[::1]:1234'), 'http://[::1]:1234');
+  assert.equal(f.Assistant.base('http://192.168.0.33:1234/'), 'http://192.168.0.33:1234', 'the local network may serve the assistant');
+  assert.equal(f.Assistant.base('http://10.0.0.5:1234'), 'http://10.0.0.5:1234');
+  assert.equal(f.Assistant.base('http://172.16.1.2:1234'), 'http://172.16.1.2:1234');
+  assert.equal(f.Assistant.base('http://172.31.255.1:1234'), 'http://172.31.255.1:1234');
+  assert.equal(f.Assistant.base('http://mypc.local:1234'), 'http://mypc.local:1234', 'mDNS names stay local');
+  assert.equal(f.Assistant.base('http://172.32.0.1:1234'), '', 'just outside the private ranges');
+  assert.equal(f.Assistant.base('http://8.8.8.8:1234'), '', 'public addresses are refused');
+  assert.equal(f.Assistant.base('https://my.host:8443/x?y=1'), '', 'public hostnames are refused too');
   assert.equal(f.Assistant.base('ftp://example.com'), '', 'only http and https can serve a model');
   assert.equal(f.Assistant.base('not a url'), '');
   assert.equal(f.Assistant.base('   '), '');
@@ -7919,8 +7927,11 @@ test('assistant probe lists models and validates the configured model id', async
 test('assistant probe classifies every failure path without sending game data', async () => {
   const f = fixture();
   assert.match((await f.Assistant.probe('')).error, /Enter an endpoint/);
-  f.Assistant.fetchImpl = async () => { throw new TypeError('Failed to fetch'); };
-  let result = await f.Assistant.probe('http://192.168.0.9:1234');
+  let called = false;
+  f.Assistant.fetchImpl = async () => { called = true; throw new TypeError('Failed to fetch'); };
+  assert.match((await f.Assistant.probe('http://8.8.8.8:1234')).error, /local network/, 'a public address is refused');
+  assert.equal(called, false, 'and it is refused before any request is made');
+  let result = await f.Assistant.probe('http://127.0.0.1:9');
   assert.equal(result.ok, false); assert.match(result.error, /Could not reach/);
   assert.equal(f.commands.length, 0, 'a failed probe never falls back to game commands');
   f.Assistant.fetchImpl = async () => { const e = new Error('aborted'); e.name = 'AbortError'; throw e; };

@@ -1273,11 +1273,10 @@ const UI = {
       ProfileShare.draw(host);
   },
   section_settingsAssistant(host) {
-    const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
     const status = el('p', '', 'muted'); status.setAttribute('role', 'status');
     const test = this.button('Test connection', () => { void Assistant.test(status, test); });
     host.append(this.group('Assistant (local)',
-      el('p', 'Point this at your own OpenAI-compatible server (for example LM Studio on this machine) to enable assistant features. The test only asks for its models listing; nothing about the game is ever sent.', 'muted'),
+      el('p', 'Point this at an OpenAI-compatible server on this machine or your local network (for example LM Studio) to enable assistant features. Public internet addresses are refused, and the test only asks for the models listing; nothing about the game is ever sent.', 'muted'),
       this.text('Assistant endpoint', () => Settings.profile.assistant.endpoint, v => { Settings.profile.assistant.endpoint = v.trim(); }, 'http://127.0.0.1:1234'),
       this.text('Model', () => Settings.profile.assistant.model, v => { Settings.profile.assistant.model = v.trim(); }, 'model id from your server'),
       this.row(test), status));

@@ -15967,9 +15967,17 @@ const Assistant = {
   // The page's fetch; tests replace this with a stub. Only ever called by probe().
   fetchImpl: typeof fetch === 'function' ? fetch : null,
   testing: false,
-  // Collapse anything the player typed into a bare base address (scheme + host + port).
-  // Addresses without a scheme are http, paths and queries are dropped, and credentials
-  // never reach the stored settings.
+  // Collapse anything the player typed into a bare base address. The assistant stays
+  // local: loopback, the private network ranges, or an mDNS name — a public host is
+  // refused outright, so nothing can point the bot at someone else's server. Addresses
+  // without a scheme are http, paths and queries are dropped, and credentials never
+  // reach the stored settings.
+  isLocalHost(hostname) {
+    const host = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+    return host === 'localhost' || host === '::1' || host === '[::1]' || /^127\./.test(host) ||
+      /^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+      /^169\.254\./.test(host) || /\.local$/.test(host);
+  },
   base(raw) {
     let value = String(raw || '').trim();
     if (!value) return '';
@@ -15981,12 +15989,13 @@ const Assistant = {
     let url;
     try { url = new URL(value); } catch { return ''; }
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return '';
+    if (!this.isLocalHost(url.hostname)) return '';
     return url.protocol + '//' + url.host;
   },
   modelsUrl(base) { return base.replace(/\/+$/, '') + '/v1/models'; },
   async probe(rawEndpoint, timeoutMs = 5000) {
     const base = this.base(rawEndpoint);
-    if (!base) return { ok: false, error: 'Enter an endpoint address first.' };
+    if (!base) return { ok: false, error: String(rawEndpoint || '').trim() ? 'The assistant only talks to this machine or your local network; public addresses are refused.' : 'Enter an endpoint address first.' };
     if (!this.fetchImpl) return { ok: false, error: 'This browser exposes no fetch; the assistant cannot connect.' };
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -16001,7 +16010,10 @@ const Assistant = {
       if (e?.name === 'AbortError') return { ok: false, error: 'No answer within ' + Math.round(timeoutMs / 1000) + ' s.' };
       // A plain http address on another machine is mixed content on this https page, and the
       // server must also allow cross-origin requests; both surface as a failed fetch here.
-      return { ok: false, error: 'Could not reach the endpoint. Run the server on this machine (127.0.0.1) or serve it over https, and allow cross-origin requests in it.' };
+      // A plain http address on another machine is mixed content on this https page: the
+      // browser blocks it even though it is on the local network, and the server must also
+      // allow cross-origin requests. Both surface as a failed fetch here.
+      return { ok: false, error: 'Could not reach the endpoint. The game page is https, so the browser blocks plain http on other machines: run the server on this machine, or forward its port to 127.0.0.1 (netsh interface portproxy), and allow cross-origin requests in it.' };
     } finally {
       clearTimeout(timer);
     }
@@ -18055,11 +18067,10 @@ const UI = {
       ProfileShare.draw(host);
   },
   section_settingsAssistant(host) {
-    const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
     const status = el('p', '', 'muted'); status.setAttribute('role', 'status');
     const test = this.button('Test connection', () => { void Assistant.test(status, test); });
     host.append(this.group('Assistant (local)',
-      el('p', 'Point this at your own OpenAI-compatible server (for example LM Studio on this machine) to enable assistant features. The test only asks for its models listing; nothing about the game is ever sent.', 'muted'),
+      el('p', 'Point this at an OpenAI-compatible server on this machine or your local network (for example LM Studio) to enable assistant features. Public internet addresses are refused, and the test only asks for the models listing; nothing about the game is ever sent.', 'muted'),
       this.text('Assistant endpoint', () => Settings.profile.assistant.endpoint, v => { Settings.profile.assistant.endpoint = v.trim(); }, 'http://127.0.0.1:1234'),
       this.text('Model', () => Settings.profile.assistant.model, v => { Settings.profile.assistant.model = v.trim(); }, 'model id from your server'),
       this.row(test), status));
