@@ -7893,6 +7893,10 @@ test('assistant endpoint base normalises what the player typed and refuses unusa
   assert.equal(f.Assistant.base('http://172.16.1.2:1234'), 'http://172.16.1.2:1234');
   assert.equal(f.Assistant.base('http://172.31.255.1:1234'), 'http://172.31.255.1:1234');
   assert.equal(f.Assistant.base('http://mypc.local:1234'), 'http://mypc.local:1234', 'mDNS names stay local');
+  assert.equal(f.Assistant.base('http://10.example.com:1234'), '', 'a public name with a private prefix is refused');
+  assert.equal(f.Assistant.base('http://127.attacker.net:1234'), '', 'prefix look-alikes are not loopback');
+  assert.equal(f.Assistant.base('http://192.168.evil.com:1234'), '', 'or a private network');
+  assert.equal(f.Assistant.base('http://169.254.evil.com:1234'), '', 'or link-local');
   assert.equal(f.Assistant.base('http://172.32.0.1:1234'), '', 'just outside the private ranges');
   assert.equal(f.Assistant.base('http://8.8.8.8:1234'), '', 'public addresses are refused');
   assert.equal(f.Assistant.base('https://my.host:8443/x?y=1'), '', 'public hostnames are refused too');
@@ -7929,8 +7933,10 @@ test('assistant probe classifies every failure path without sending game data', 
   assert.match((await f.Assistant.probe('')).error, /Enter an endpoint/);
   let called = false;
   f.Assistant.fetchImpl = async () => { called = true; throw new TypeError('Failed to fetch'); };
-  assert.match((await f.Assistant.probe('http://8.8.8.8:1234')).error, /local network/, 'a public address is refused');
-  assert.equal(called, false, 'and it is refused before any request is made');
+  for (const host of ['http://8.8.8.8:1234', 'http://10.example.com:1234', 'http://127.evil.net:1234', 'http://192.168.evil.com:1234', 'http://169.254.evil.com:1234']) {
+    assert.match((await f.Assistant.probe(host)).error, /local network/, host + ' is refused');
+    assert.equal(called, false, 'and it is refused before any request is made');
+  }
   let result = await f.Assistant.probe('http://127.0.0.1:9');
   assert.equal(result.ok, false); assert.match(result.error, /Could not reach/);
   assert.equal(f.commands.length, 0, 'a failed probe never falls back to game commands');

@@ -15974,9 +15974,15 @@ const Assistant = {
   // reach the stored settings.
   isLocalHost(hostname) {
     const host = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
-    return host === 'localhost' || host === '::1' || host === '[::1]' || /^127\./.test(host) ||
-      /^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
-      /^169\.254\./.test(host) || /\.local$/.test(host);
+    if (host === 'localhost' || host === '::1') return true;
+    if (/\.local$/.test(host)) return true;
+    // The private ranges only ever match a complete dotted-quad literal: a public DNS
+    // name such as 10.example.com or 127.attacker.net must not slip through a prefix.
+    if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return false;
+    const a = host.split('.').map(Number);
+    if (a.some(n => n > 255)) return false;
+    return a[0] === 127 || a[0] === 10 || (a[0] === 192 && a[1] === 168) ||
+      (a[0] === 172 && a[1] >= 16 && a[1] <= 31) || (a[0] === 169 && a[1] === 254);
   },
   base(raw) {
     let value = String(raw || '').trim();
@@ -16008,8 +16014,6 @@ const Assistant = {
       return { ok: true, base, models };
     } catch (e) {
       if (e?.name === 'AbortError') return { ok: false, error: 'No answer within ' + Math.round(timeoutMs / 1000) + ' s.' };
-      // A plain http address on another machine is mixed content on this https page, and the
-      // server must also allow cross-origin requests; both surface as a failed fetch here.
       // A plain http address on another machine is mixed content on this https page: the
       // browser blocks it even though it is on the local network, and the server must also
       // allow cross-origin requests. Both surface as a failed fetch here.
