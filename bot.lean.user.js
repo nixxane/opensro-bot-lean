@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         nixxane bot
 // @namespace    https://opensro.online/
-// @version      1.2.224
+// @version      1.2.225
 // @updateURL    https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.meta.js
 // @downloadURL  https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -22,7 +22,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[NIX] Another SRO assistant is active. Disable it and reload to use NIX.');
   return;
 }
-const VERSION = '1.2.224';
+const VERSION = '1.2.225';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -7175,6 +7175,9 @@ const TOWN_SETTLE_MS = 60000;
 // Such a reload is done at most once in this time, so a game that never answers cannot reload the page in a loop.
 // The time of the last one is kept in localStorage under TOWN_STALL_KEY, across the reload.
 const TOWN_STALL_RELOAD_GAP_MS = 30 * 60000, TOWN_STALL_KEY = 'sro-lean-town-stall-reload';
+// A service NPC that would not open, mostly a town that is still loading: how long to wait before walking back to it,
+// and how many tries each service gets in one trip before the trip stops.
+const TOWN_OPEN_WAIT_MS = 60000, TOWN_OPEN_TRIES = 3;
 // The service each transaction phase belongs to, to start it over after a stalled transaction.
 const TOWN_SERVICE_OF = { store: 'storage', buy: 'vendor', sell: 'smith', ammo: 'smith' };
 const Town = {
@@ -7685,10 +7688,10 @@ const Town = {
   },
   open(role, kind) {
     const t = this.trip, gp = World.gp, npc = this.npc(role);
-    if (now() - t.at > 15000) { this.fail('Could not open ' + role + '.'); return false; }
+    if (now() - t.at > 15000) { this.openFailed(role, 'Could not open ' + role + '.'); return false; }
     if (!npc || gp.targetPending || gp.inventoryPending) return false;
     if (gp.target !== npc.gid) {
-      if (t.sent) { this.fail('Town NPC selection changed.'); return false; }
+      if (t.sent) { this.openFailed(role, 'Town NPC selection changed.'); return false; }
       if (Cmd.spaced('select')) Cmd.select(npc.gid);
       return false;
     }
@@ -7704,6 +7707,22 @@ const Town = {
     }
     if (role === 'storage') return gp.storage?.phase === 'open' && !gp.storage.guild && gp.storage.npc === npc.gid;
     return gp.shop?.npc === npc.gid && gp.shopCompletionRevision !== t.revision;
+  },
+  // Opening changes nothing in the bag, so unlike a stalled transaction it is safe to try again.
+  openFailed(role, reason) {
+    const t = this.trip, tries = t.openTries = t.openTries || {};
+    tries[role] = (tries[role] || 0) + 1;
+    if (tries[role] >= TOWN_OPEN_TRIES) return this.fail(reason);
+    this.enter('service-wait');
+    t.resume = 'walk-' + role;
+    this.message = 'Town cycle: the ' + this.role(role) + ' did not open; the town may still be loading. Waiting a minute (try ' + (tries[role] + 1) + ' of ' + TOWN_OPEN_TRIES + ' next).';
+    Log.warn(this.message);
+  },
+  serviceWait() {
+    const t = this.trip, gp = World.gp, npc = this.npc(t.resume.slice(5));
+    // Nothing may stay open for the retry, and that includes an answer that only arrives during the wait.
+    if ((gp.storage || Restock.activeShop() || npc && gp.target === npc.gid) && !gp.inventoryPending && now() >= t.retryAt && Cmd.raw({ kind: 'npc-close' }, 'Town: close NPC before trying again')) t.retryAt = now() + 5000;
+    if (now() - t.at >= TOWN_OPEN_WAIT_MS) this.enter(t.resume);
   },
   close(next) {
     const t = this.trip, gp = World.gp;
@@ -8113,6 +8132,7 @@ const Town = {
       const role = t.phase.slice(5), kind = role === 'storage' ? 'storage-open' : role === 'gate' ? 'npc-talk' : 'shop-open';
       if (this.open(role, kind) && this.trip) this.enter({ storage: 'store', vendor: 'buy', smith: 'sell', gate: 'reverse' }[role]);
     } else if (t.phase === 'settle') this.settle();
+    else if (t.phase === 'service-wait') this.serviceWait();
     else if (t.phase === 'pet-revive') this.revivePet();
     else if (t.phase === 'store') this.store();
     else if (t.phase === 'buy') this.buy();
@@ -15472,7 +15492,7 @@ const Alchemy = {
 };
 
 
-const RELEASE_NOTES = [{"version": "1.2.224", "title": "Reliability fixes for death, rebirth and quests", "items": ["If you die or change world while a buff-gear swap is pending, hunting can now start anyway. The gear is restored quietly once it is safe, not during town trips or open trade, stall or shop windows.", "Rebirth is now re-sent every 10 seconds while your character is still dead.", "Quest data that fails to load is retried after 10 minutes instead of on every tick.", "The reconnect message no longer includes your character's name, so it stays out of reports.", "Smaller fixes: the pet-bag-full toast works with the chime off, Max skills stops when you leave the world, and settings are saved when you close the page. The town tier is reset when you switch character.", "No new option."], "note": "Contributed by duan78 (#96). Tested in simulation only, not in a live game."}, {"version": "1.2.223", "title": "Town trips no longer hang before the return scroll", "items": ["If the game keeps showing a pending inventory or an open cast when the bot is about to read the return scroll, the town trip used to wait forever. It now shows \"Waiting for the game to settle before the return scroll.\"", "After a full minute of that, the trip stops cleanly and hunting stays off. The bot never sends the scroll twice. Reload the game and check your character.", "If the game refuses the return scroll three times without giving a reason, the message now says the game itself may be refusing it and suggests using the scroll by hand.", "No new option."], "note": "Contributed by duan78 (#95). Tested in simulation only, not in a live game."}, {"version": "1.2.222", "title": "Full bags now sell before pet loot on town trips", "items": ["With \"Sell ordinary gear from the character bag too\" on, the bot now sells your bag items at the repair merchant first, then moves the pet's loot into the freed slots and sells it.", "This fixes trips where a full bag left pet loot with no free slot, so nothing was sold.", "With that option off, nothing changes. Items the merchant refuses are still skipped, and the rest are sold."], "note": "Contributed by corevider (#94). Tested in simulation only, not in a live game."}, {"version": "1.2.221", "title": "Spare giants and party monsters near death", "items": ["New hunt option \"Spare engaged giant/party below % HP (0 = off)\", next to \"Avoid other players' targets\". The default is 50, and the highest value is 50.", "It applies when \"Avoided monsters\" is set to \"Normal & champion only\". A giant or party monster that another player is already fighting is now skipped once its health is at or below that percentage, because the drop is probably theirs by then. The bot goes for a fresh target instead.", "Above the cutoff, or when the monster's health is unknown, these monsters are still attacked as before. Elite, unique and titan monsters are not affected.", "Because the default is 50, existing characters on \"Normal & champion only\" will start sparing these monsters. Set it to 0 to turn this off."], "note": "Contributed by duan78 (#93). Tested in simulation only, not in a live game."}, {"version": "1.2.220", "title": "Pet loot now sells again on town trips", "items": ["Town trips no longer stall at the smith when your pet is carrying loot. The server refuses sales straight from the pet's bag, so the bot now moves each sellable pet item to a free slot in your own bag and sells it from there.", "If the server refuses a move, that item is skipped and the rest are still sold. If your bag has no free slot, the loot stays in the pet and the trip carries on.", "No new option; protected and valuable items are still left alone."], "note": "Contributed by duan78 (#92). Tested in simulation only, not in a live game."}, {"version": "1.2.219", "title": "Town trips no longer stop at the smith after a skipped supply", "items": ["Fixes the character standing still at the repair merchant at the end of a town trip with \"Final supply, repair or travel-scroll check failed\".", "It happened when a supply was skipped on purpose in the shop (a merchant that does not sell Reverse Return Scrolls, HGP potions or pet kits, or gold that ran short). The last check still counted that supply as missing. Skipped supplies no longer block the walk back or the reverse."]}, {"version": "1.2.218", "title": "Item names show even without game data files", "items": ["The Items page now shows real item names instead of `#numbers` when the site does not serve its item data files. The bot learns each item's name and icon from what the game sends: your bag, worn gear, pet bag, warehouse, shop offers and drops on the ground.", "Item groups and filters on the Items page (potions, pets, gear and so on) now work from those learned names too.", "What the bot learns is saved in your browser, so names are still there after a reload. Nothing is added to your settings and there is no new option."], "note": "Contributed by duan78 (#90). Tested in simulation only, not in a live game."}, {"version": "1.2.217", "title": "Alert chimes for players, death and more", "items": ["New \"Alert sounds\" group on the Loot page with four short chimes: another player comes near, your character dies, you level up, and a unique monster comes into view.", "Each chime has its own switch and all of them are off by default, so nothing changes unless you turn one on.", "The player chime uses the same detection as the player alert. If the browser blocks sound, one click in the game unlocks it.", "The switches are saved per character like your other settings."], "note": "Contributed by duan78 (#88). Tested in simulation only, not in a live game; the sounds themselves were not heard in a real browser."}];
+const RELEASE_NOTES = [{"version": "1.2.225", "title": "Town trips wait when the warehouse will not open", "items": ["If the warehouse, a merchant or the world statue does not open, for example because the town is still loading, the bot no longer stops. It waits a minute, walks back and tries again.", "Each service gets three tries per trip. If the third one fails too, the bot stops with the same message as before.", "No new option."], "note": "From a player report. Tested in simulation only, not in a live game; a slow-loading town is the likely cause, not a confirmed one."}, {"version": "1.2.224", "title": "Reliability fixes for death, rebirth and quests", "items": ["If you die or change world while a buff-gear swap is pending, hunting can now start anyway. The gear is restored quietly once it is safe, not during town trips or open trade, stall or shop windows.", "Rebirth is now re-sent every 10 seconds while your character is still dead.", "Quest data that fails to load is retried after 10 minutes instead of on every tick.", "The reconnect message no longer includes your character's name, so it stays out of reports.", "Smaller fixes: the pet-bag-full toast works with the chime off, Max skills stops when you leave the world, and settings are saved when you close the page. The town tier is reset when you switch character.", "No new option."], "note": "Contributed by duan78 (#96). Tested in simulation only, not in a live game."}, {"version": "1.2.223", "title": "Town trips no longer hang before the return scroll", "items": ["If the game keeps showing a pending inventory or an open cast when the bot is about to read the return scroll, the town trip used to wait forever. It now shows \"Waiting for the game to settle before the return scroll.\"", "After a full minute of that, the trip stops cleanly and hunting stays off. The bot never sends the scroll twice. Reload the game and check your character.", "If the game refuses the return scroll three times without giving a reason, the message now says the game itself may be refusing it and suggests using the scroll by hand.", "No new option."], "note": "Contributed by duan78 (#95). Tested in simulation only, not in a live game."}, {"version": "1.2.222", "title": "Full bags now sell before pet loot on town trips", "items": ["With \"Sell ordinary gear from the character bag too\" on, the bot now sells your bag items at the repair merchant first, then moves the pet's loot into the freed slots and sells it.", "This fixes trips where a full bag left pet loot with no free slot, so nothing was sold.", "With that option off, nothing changes. Items the merchant refuses are still skipped, and the rest are sold."], "note": "Contributed by corevider (#94). Tested in simulation only, not in a live game."}, {"version": "1.2.221", "title": "Spare giants and party monsters near death", "items": ["New hunt option \"Spare engaged giant/party below % HP (0 = off)\", next to \"Avoid other players' targets\". The default is 50, and the highest value is 50.", "It applies when \"Avoided monsters\" is set to \"Normal & champion only\". A giant or party monster that another player is already fighting is now skipped once its health is at or below that percentage, because the drop is probably theirs by then. The bot goes for a fresh target instead.", "Above the cutoff, or when the monster's health is unknown, these monsters are still attacked as before. Elite, unique and titan monsters are not affected.", "Because the default is 50, existing characters on \"Normal & champion only\" will start sparing these monsters. Set it to 0 to turn this off."], "note": "Contributed by duan78 (#93). Tested in simulation only, not in a live game."}, {"version": "1.2.220", "title": "Pet loot now sells again on town trips", "items": ["Town trips no longer stall at the smith when your pet is carrying loot. The server refuses sales straight from the pet's bag, so the bot now moves each sellable pet item to a free slot in your own bag and sells it from there.", "If the server refuses a move, that item is skipped and the rest are still sold. If your bag has no free slot, the loot stays in the pet and the trip carries on.", "No new option; protected and valuable items are still left alone."], "note": "Contributed by duan78 (#92). Tested in simulation only, not in a live game."}, {"version": "1.2.219", "title": "Town trips no longer stop at the smith after a skipped supply", "items": ["Fixes the character standing still at the repair merchant at the end of a town trip with \"Final supply, repair or travel-scroll check failed\".", "It happened when a supply was skipped on purpose in the shop (a merchant that does not sell Reverse Return Scrolls, HGP potions or pet kits, or gold that ran short). The last check still counted that supply as missing. Skipped supplies no longer block the walk back or the reverse."]}, {"version": "1.2.218", "title": "Item names show even without game data files", "items": ["The Items page now shows real item names instead of `#numbers` when the site does not serve its item data files. The bot learns each item's name and icon from what the game sends: your bag, worn gear, pet bag, warehouse, shop offers and drops on the ground.", "Item groups and filters on the Items page (potions, pets, gear and so on) now work from those learned names too.", "What the bot learns is saved in your browser, so names are still there after a reload. Nothing is added to your settings and there is no new option."], "note": "Contributed by duan78 (#90). Tested in simulation only, not in a live game."}];
 
 // Check trusted repository metadata; never execute downloaded update code.
 const Updates = {
@@ -15721,7 +15741,7 @@ const Diagnostics = {
       if (Town.trip.phase === 'buy') return Town.trip.supplies.map(s => `Refilling ${s.kind === 'hp' ? 'HP' : s.kind === 'mp' ? 'MP' : 'abnormal pills'}: ${Restock.count(s.refObjId)} / ${s.target}`).join(' · ');
       if (World.gp?.inventoryPending) return 'Town services: waiting for inventory transaction.';
       const phases = { recall: 'stopping combat for recall', 'recall-wait': 'waiting for recall arrival', 'reverse-wait': 'waiting for reverse arrival', 'revive-arrival': 'waiting for town revival', store: 'depositing loot', sell: 'selling pet loot', ammo: 'buying ammunition', repair: 'repairing equipment', reverse: 'opening reverse return', leave: 'starting the walk back' };
-      if (/^(walk|open)-/.test(Town.trip.phase) && Town.message) return Town.message;
+      if (/^(walk|open|service)-/.test(Town.trip.phase) && Town.message) return Town.message;
       return 'Town services: ' + (phases[Town.trip.phase] || 'travelling between or opening services') + '.';
     }
     if (Travel.active && !WalkBack.active) return Travel.status();
@@ -15768,7 +15788,7 @@ const Diagnostics = {
       joinRequest: !!matching?.request, acceptanceSent: !!matching?.request && Party.answered === `${matching.request.a}:${matching.request.b}:${matching.request.expires}`,
       requestRemainingMs: Number.isFinite(World.simNow()) && Number.isFinite(matching?.request?.expires) ? Math.max(0, matching.request.expires - World.simNow()) : null,
       townActive: !!Town.trip,
-      townPhase: ['recall', 'recall-wait', 'revive-arrival', 'walk-arrival', 'walk-storage', 'open-storage', 'store', 'close-storage', 'walk-vendor', 'open-vendor', 'buy', 'close-vendor', 'walk-smith', 'open-smith', 'sell', 'repair', 'close-smith', 'walk-gate', 'open-gate', 'reverse', 'reverse-wait', 'leave', 'settle'].includes(Town.trip?.phase) ? Town.trip.phase : null,
+      townPhase: ['recall', 'recall-wait', 'revive-arrival', 'walk-arrival', 'service-wait', 'walk-storage', 'open-storage', 'store', 'close-storage', 'walk-vendor', 'open-vendor', 'buy', 'close-vendor', 'walk-smith', 'open-smith', 'sell', 'repair', 'close-smith', 'walk-gate', 'open-gate', 'reverse', 'reverse-wait', 'leave', 'settle'].includes(Town.trip?.phase) ? Town.trip.phase : null,
       scrollAttempts: this.number(Town.trip?.scrollAttempts), scrollAccepted: !!Town.trip?.scrollRequest?.accepted,
       returnScroll: !!Town.scroll(0x09ec), reverseScroll: !!Town.scroll(0x19ec),
       settings: { autoRecruit: !!c.party.autoRecruit, autoAccept: !!c.party.autoAcceptMatching,
@@ -18749,7 +18769,7 @@ Activity.userMessage = function( entry ) {
 		const phases = {
 			recall: "Preparing to return to town.", "recall-wait": "Returning to town…",
 			"revive-arrival": "Waiting to revive in town.", "walk-arrival": "Walking to the town start.", "walk-storage": "Walking to the warehouse.",
-			"open-storage": "Opening the warehouse.", store: "Depositing loot.", "close-storage": "Finished at the warehouse.",
+			"service-wait": "Waiting for the town to load, then trying again.", "open-storage": "Opening the warehouse.", store: "Depositing loot.", "close-storage": "Finished at the warehouse.",
 			"walk-vendor": "Walking to the potion merchant.", "open-vendor": "Opening the potion shop.",
 			buy: "Buying supplies.", "close-vendor": "Finished buying supplies.",
 			"walk-smith": "Walking to the repair merchant.", "open-smith": "Opening the repair shop.",

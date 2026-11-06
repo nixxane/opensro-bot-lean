@@ -7061,6 +7061,52 @@ test('a town walk that is stuck goes to the town start first, then on to the ser
   assert.equal(g.Town.trip.phase, 'walk-vendor'); assert.match(g.Town.message, /waiting; retrying collision route/);
   assert.equal(g.Log.lines.filter(l => /going to the town start first/.test(l.text)).length, 1);
 });
+test('a town NPC that shows up late is waited for: the trip retries instead of stopping the bot', () => {
+  const f = townFixture(), gp = f.World.gp, npc = f.World.ents.get(60);
+  f.Town.begin(); f.Town.enter('open-storage'); gp.pose = { regionId: 1, x: 130, y: 0, z: 100 };
+  gp.targetCapabilities = 4;
+  f.World.ents.delete(60);
+  f.advance(16000); f.Town.tick();
+  assert.equal(f.Town.trip?.phase, 'service-wait', f.Town.message); assert.equal(f.Hunt.running, true, 'the bot keeps running');
+  assert.match(f.Town.message, /warehouse/); assert.match(f.Town.message, /try 2 of 3/);
+  f.advance(30000); f.Town.tick(); assert.equal(f.Town.trip.phase, 'service-wait', 'waits the whole minute');
+  f.World.ents.set(60, npc);
+  f.advance(31000); f.Town.tick(); assert.equal(f.Town.trip.phase, 'walk-storage', 'walks back to the service first');
+  for (let n = 0; n < 10 && f.Town.trip?.phase !== 'store'; n++) {
+    const sent = f.commands.length; f.advance(1000); f.Town.tick();
+    if (f.Town.trip.phase === 'open-storage') gp.target = 60;
+    if (f.commands.slice(sent).some(c => c.kind === 'storage-open')) gp.storage = { npc: 60, phase: 'open', capacity: 30, items: [] };
+  }
+  assert.equal(f.Town.trip?.phase, 'store', f.Town.message);
+});
+test('a town NPC that never opens stops the trip after three tries, and each service counts its own', () => {
+  const f = townFixture(), gp = f.World.gp;
+  f.Town.begin(); f.Town.enter('open-storage'); gp.pose = { regionId: 1, x: 130, y: 0, z: 100 };
+  f.World.ents.delete(60);
+  for (let n = 0; n < 150; n++) { f.advance(1000); f.Town.tick(); }
+  assert.ok(f.Town.trip, 'still trying after two and a half minutes'); assert.equal(f.Hunt.running, true);
+  for (let n = 0; n < 30 && f.Town.trip; n++) { f.advance(1000); f.Town.tick(); }
+  assert.equal(f.Town.trip, null); assert.equal(f.Hunt.running, false); assert.match(f.Town.message, /Could not open storage/);
+  const g = townFixture(), trips = g.Town;
+  trips.begin(); trips.enter('open-storage'); trips.openFailed('storage', 'x'); trips.enter('open-storage'); trips.openFailed('storage', 'x');
+  trips.enter('open-vendor'); trips.openFailed('vendor', 'x');
+  assert.equal(trips.trip?.phase, 'service-wait', 'a failed warehouse does not use up the merchant tries');
+});
+test('a town open that got no answer closes the window, sends nothing else, and survives a changed selection', () => {
+  const f = townFixture(), gp = f.World.gp, count = kind => f.commands.filter(c => c.kind === kind).length;
+  f.Town.begin(); f.Town.enter('open-storage'); gp.pose = { regionId: 1, x: 130, y: 0, z: 100 }; gp.target = 60; gp.targetCapabilities = 4;
+  f.advance(1000); f.Town.tick(); assert.equal(count('storage-open'), 1);
+  f.advance(16000); f.Town.tick(); assert.equal(f.Town.trip.phase, 'service-wait');
+  f.advance(1000); f.Town.tick(); assert.equal(count('npc-close'), 1);
+  f.advance(1000); f.Town.tick(); assert.equal(count('npc-close'), 1, 'closes are spaced out');
+  gp.target = 0; f.advance(5000); f.Town.tick(); assert.equal(count('npc-close'), 1, 'nothing left to close');
+  gp.storage = { npc: 60, phase: 'open', capacity: 30, items: [] }; f.advance(1000); f.Town.tick();
+  assert.equal(count('npc-close'), 2, 'an answer that arrives late is closed too'); assert.equal(count('storage-open'), 1);
+  const g = townFixture(), gg = g.World.gp;
+  g.Town.begin(); g.Town.enter('open-storage'); gg.pose = { regionId: 1, x: 130, y: 0, z: 100 }; gg.target = 60; gg.targetCapabilities = 4;
+  g.advance(1000); g.Town.tick(); gg.target = 61; g.advance(1000); g.Town.tick();
+  assert.equal(g.Town.trip?.phase, 'service-wait', g.Town.message); assert.equal(g.Hunt.running, true);
+});
 
 
 function buffGearFixture() {

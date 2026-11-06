@@ -37,7 +37,7 @@ Activity.userMessage = function( entry ) {
 		const phases = {
 			recall: "Preparing to return to town.", "recall-wait": "Returning to town…",
 			"revive-arrival": "Waiting to revive in town.", "walk-arrival": "Walking to the town start.", "walk-storage": "Walking to the warehouse.",
-			"open-storage": "Opening the warehouse.", store: "Depositing loot.", "close-storage": "Finished at the warehouse.",
+			"service-wait": "Waiting for the town to load, then trying again.", "open-storage": "Opening the warehouse.", store: "Depositing loot.", "close-storage": "Finished at the warehouse.",
 			"walk-vendor": "Walking to the potion merchant.", "open-vendor": "Opening the potion shop.",
 			buy: "Buying supplies.", "close-vendor": "Finished buying supplies.",
 			"walk-smith": "Walking to the repair merchant.", "open-smith": "Opening the repair shop.",

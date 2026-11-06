@@ -8,6 +8,9 @@ const TOWN_SETTLE_MS = 60000;
 // Such a reload is done at most once in this time, so a game that never answers cannot reload the page in a loop.
 // The time of the last one is kept in localStorage under TOWN_STALL_KEY, across the reload.
 const TOWN_STALL_RELOAD_GAP_MS = 30 * 60000, TOWN_STALL_KEY = 'sro-lean-town-stall-reload';
+// A service NPC that would not open, mostly a town that is still loading: how long to wait before walking back to it,
+// and how many tries each service gets in one trip before the trip stops.
+const TOWN_OPEN_WAIT_MS = 60000, TOWN_OPEN_TRIES = 3;
 // The service each transaction phase belongs to, to start it over after a stalled transaction.
 const TOWN_SERVICE_OF = { store: 'storage', buy: 'vendor', sell: 'smith', ammo: 'smith' };
 const Town = {
@@ -518,10 +521,10 @@ const Town = {
   },
   open(role, kind) {
     const t = this.trip, gp = World.gp, npc = this.npc(role);
-    if (now() - t.at > 15000) { this.fail('Could not open ' + role + '.'); return false; }
+    if (now() - t.at > 15000) { this.openFailed(role, 'Could not open ' + role + '.'); return false; }
     if (!npc || gp.targetPending || gp.inventoryPending) return false;
     if (gp.target !== npc.gid) {
-      if (t.sent) { this.fail('Town NPC selection changed.'); return false; }
+      if (t.sent) { this.openFailed(role, 'Town NPC selection changed.'); return false; }
       if (Cmd.spaced('select')) Cmd.select(npc.gid);
       return false;
     }
@@ -537,6 +540,22 @@ const Town = {
     }
     if (role === 'storage') return gp.storage?.phase === 'open' && !gp.storage.guild && gp.storage.npc === npc.gid;
     return gp.shop?.npc === npc.gid && gp.shopCompletionRevision !== t.revision;
+  },
+  // Opening changes nothing in the bag, so unlike a stalled transaction it is safe to try again.
+  openFailed(role, reason) {
+    const t = this.trip, tries = t.openTries = t.openTries || {};
+    tries[role] = (tries[role] || 0) + 1;
+    if (tries[role] >= TOWN_OPEN_TRIES) return this.fail(reason);
+    this.enter('service-wait');
+    t.resume = 'walk-' + role;
+    this.message = 'Town cycle: the ' + this.role(role) + ' did not open; the town may still be loading. Waiting a minute (try ' + (tries[role] + 1) + ' of ' + TOWN_OPEN_TRIES + ' next).';
+    Log.warn(this.message);
+  },
+  serviceWait() {
+    const t = this.trip, gp = World.gp, npc = this.npc(t.resume.slice(5));
+    // Nothing may stay open for the retry, and that includes an answer that only arrives during the wait.
+    if ((gp.storage || Restock.activeShop() || npc && gp.target === npc.gid) && !gp.inventoryPending && now() >= t.retryAt && Cmd.raw({ kind: 'npc-close' }, 'Town: close NPC before trying again')) t.retryAt = now() + 5000;
+    if (now() - t.at >= TOWN_OPEN_WAIT_MS) this.enter(t.resume);
   },
   close(next) {
     const t = this.trip, gp = World.gp;
@@ -946,6 +965,7 @@ const Town = {
       const role = t.phase.slice(5), kind = role === 'storage' ? 'storage-open' : role === 'gate' ? 'npc-talk' : 'shop-open';
       if (this.open(role, kind) && this.trip) this.enter({ storage: 'store', vendor: 'buy', smith: 'sell', gate: 'reverse' }[role]);
     } else if (t.phase === 'settle') this.settle();
+    else if (t.phase === 'service-wait') this.serviceWait();
     else if (t.phase === 'pet-revive') this.revivePet();
     else if (t.phase === 'store') this.store();
     else if (t.phase === 'buy') this.buy();
