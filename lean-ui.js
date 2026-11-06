@@ -589,7 +589,7 @@ const UI = {
     } else if (this.current === 'Wardrobe') {
       LeanWardrobe.draw(this.pane);
     } else {
-      this.sections('settingsStats', 'settingsBehaviour', 'settingsObstacles', 'settingsAntiStuck', 'settingsMastery', 'settingsStatPoints', 'settingsProfiles', 'settingsShare', 'settingsReports', 'settingsActivity');
+      this.sections('settingsStats', 'settingsBehaviour', 'settingsObstacles', 'settingsAntiStuck', 'settingsMastery', 'settingsStatPoints', 'settingsProfiles', 'settingsShare', 'settingsAssistant', 'settingsReports', 'settingsActivity');
     }
     this.balance();
     this.update();
@@ -616,7 +616,7 @@ const UI = {
       { name: 'Auto alchemy', icon: 'action\\icon_cha_alchemy', pages: ['Alchemy'], draw() { Alchemy.draw(); } },
       { name: 'Stall', icon: 'action\\icon_cha_shop', pages: ['Stall'], draw() { Stall.draw(); } },
       { name: 'Extra', icon: 'action\\icon_cha_helper', pages: ['Settings'], sections: [
-        ['settingsStats'], ['settingsMastery'], ['settingsStatPoints'], ['settingsProfiles'], ['settingsShare'], ['settingsReports'], ['settingsActivity']] },
+        ['settingsStats'], ['settingsMastery'], ['settingsStatPoints'], ['settingsProfiles'], ['settingsShare'], ['settingsAssistant', 'Local assistant'], ['settingsReports'], ['settingsActivity']] },
       { name: 'Map', pages: ['Map'], draw() { LeanMap.draw(this.pane); } },
       { name: 'Auto trade', icon: 'action\\icon_cha_shop', pages: ['Trade'], draw() { Trade.draw(); } },
       { name: 'Wardrobe', icon: 'action\\icon_cha_shop', pages: ['Wardrobe'], draw() { LeanWardrobe.draw(this.pane); } },
@@ -1271,6 +1271,15 @@ const UI = {
   section_settingsShare(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
       ProfileShare.draw(host);
+  },
+  section_settingsAssistant(host) {
+    const status = el('p', '', 'muted'); status.setAttribute('role', 'status');
+    const test = this.button('Test connection', () => { void Assistant.test(status, test); });
+    host.append(this.group('Assistant (local)',
+      el('p', 'Point this at an OpenAI-compatible server on this machine or your local network (for example LM Studio) to enable assistant features. Public internet addresses are refused, and the test only asks for the models listing; nothing about the game is ever sent.', 'muted'),
+      this.text('Assistant endpoint', () => Settings.profile.assistant.endpoint, v => { Settings.profile.assistant.endpoint = v.trim(); }, 'http://127.0.0.1:1234'),
+      this.text('Model', () => Settings.profile.assistant.model, v => { Settings.profile.assistant.model = v.trim(); }, 'model id from your server'),
+      this.row(test), status));
   },
   section_settingsReports(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();

@@ -4,6 +4,7 @@ const CLASS_KEYS = ['normal', 'champion', 'giant', 'party', 'elite', 'unique'];
 const DEFAULT_PROFILE = {
   items: { rules: {}, balance: false, autoEquip: false, gear: { primaryWeapon: null, secondaryWeapon: null, shield: null } },
   sounds: { player: false, died: false, levelUp: false, unique: false },
+  assistant: { endpoint: '', model: '' },
   stall: { title: '', greeting: '', network: true, closeWhenEmpty: true, prices: {} },
   alchemy: { target: 3, limit: 20, elixir: 0, powder: false, use: { luck: false, steady: false, immortal: false, astral: false }, stones: { luck: 1, steady: 1, immortal: 1, astral: 1 }, stoneLimit: 0,
     // The plus from which each helper is used: a failure from +5 up can destroy the item (Steady and Immortal matter from there),
@@ -71,7 +72,7 @@ const DEFAULT_PROFILE = {
 function botProfile(input) {
   const result = deepMerge(DEFAULT_PROFILE, {});
   if (!input || typeof input !== 'object') return result;
-  for (const key of ['macro', 'potion', 'hunt', 'lure', 'pet', 'scroll', 'mall', 'wardrobe', 'party', 'alchemy', 'mastery', 'statPoints', 'trace', 'items', 'trade', 'stall', 'quest', 'sounds']) {
+  for (const key of ['macro', 'potion', 'hunt', 'lure', 'pet', 'scroll', 'mall', 'wardrobe', 'party', 'alchemy', 'mastery', 'statPoints', 'trace', 'items', 'trade', 'stall', 'quest', 'sounds', 'assistant']) {
     if (!input[key] || typeof input[key] !== 'object') continue;
     for (const field of Object.keys(DEFAULT_PROFILE[key])) {
       if (field in input[key]) result[key][field] = deepMerge(DEFAULT_PROFILE[key][field], input[key][field]);
