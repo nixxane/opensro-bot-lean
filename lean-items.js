@@ -144,7 +144,7 @@ const ItemRules = {
   // that receives, so loot keeps flowing. Protected gear, supplies the trip needs and worn gear never move.
   balanceTick() {
     const gp = World.gp, pet = Loot.pet();
-    if (!this.cfg().balance || !pet || !Hunt.running || Town.trip || !World.inWorld() || World.isDead() || !gp || gp.inventoryPending || gp.storage || gp.exchange?.open || Restock.activeShop()) return false;
+    if (!(this.cfg().balance || this.cfg().petToBag) || !pet || !Hunt.running || Town.trip || !World.inWorld() || World.isDead() || !gp || gp.inventoryPending || gp.storage || gp.exchange?.open || Restock.activeShop()) return false;
     const t = now(), b = this.balancing, equipped = gp.equipmentSlotCount || 13;
     if (b) {
       const moved = (b.toPet ? Loot.items(pet) : World.items()).some(i => i.slot === b.destination && i.refObjId === b.ref);
@@ -153,12 +153,16 @@ const ItemRules = {
       else { this.balancing = null; this.balanceBan.set(b.key, t + 30000); this.message = Items.name(b.ref) + ' was not moved; trying again in 30 s.'; Log.warn(this.message); }
     }
     const petInv = pet.rec.inventory || [], petFree = pet.rec.status - petInv.length, bagFree = World.freeBagSlots();
-    const toPet = bagFree - petFree <= -2 && petFree >= 2, toBag = petFree - bagFree <= -2 && bagFree >= 2;
+    // Pet to bag: when the pet bag is nearly full, any loot moves to the character bag while the bag keeps two free slots,
+    // so the bot stays at the spot until both are full. Rule items still go first.
+    const drain = !!this.cfg().petToBag && petFree <= Town.cfg().petFree + 2 && bagFree >= 3;
+    const toPet = !!this.cfg().balance && bagFree - petFree <= -2 && petFree >= 2, toBag = drain || !!this.cfg().balance && petFree - bagFree <= -2 && bagFree >= 2;
     if (!toPet && !toBag) return false;
     const key = i => (toPet ? 0 : pet.rec.gid) + ':' + i.slot + ':' + i.refObjId;
     const movable = i => ['store', 'sell'].includes(this.get(i.refObjId)?.act) && !this.guarded(i) && !(toPet && (Town.needed(i) || Alchemy.selected && Alchemy.selected.slot === i.slot)) &&
       (this.balanceBan.get(key(i)) || 0) <= t;
-    const item = (toPet ? World.items().filter(i => i.slot >= equipped) : petInv).find(movable);
+    const anyLoot = i => drain && !toPet && !this.guarded(i) && (this.balanceBan.get(key(i)) || 0) <= t;
+    const item = (toPet ? World.items().filter(i => i.slot >= equipped) : petInv).find(movable) || (!toPet && drain ? petInv.find(anyLoot) : null);
     if (!item) return false;
     const destination = toPet ? Town.free(petInv, 0, pet.rec.status) : Town.free(gp.inventory, equipped, gp.inventorySlotCount);
     if (destination === null) return false;

@@ -845,6 +845,17 @@ test('chosen primary and secondary gear is protected and balance moves rule item
   assert.equal(cmd.kind, 'cos-transfer'); assert.equal(cmd.toCos, true); assert.equal(cmd.source, 20, 'the rule item goes to the roomier pet');
   assert.ok(free >= 0);
 });
+test('pet to bag moves any pet loot to the bag when the pet is nearly full and the bag has room', () => {
+  const f = townFixture(), pet = f.pet;
+  pet.inventory.length = 0; pet.inventory.push({ slot: 0, refObjId: 3001, typeFlags: 108, quantity: 1 });
+  pet.status = 1; const n = f.commands.length;
+  f.ItemRules.balanceTick(); assert.equal(f.commands.length, n, 'off by default');
+  f.ItemRules.cfg().petToBag = true; f.ItemRules.balanceTick();
+  const cmd = f.commands.at(-1);
+  assert.equal(cmd.kind, 'cos-transfer'); assert.equal(cmd.toCos, false, 'a pet item with no rule goes to the bag'); assert.equal(cmd.source, 0);
+  pet.status = 40; f.ItemRules.balancing = null; const m = f.commands.length; f.ItemRules.balanceTick();
+  assert.equal(f.commands.length, m, 'a pet with room is left alone');
+});
 test('the chosen weapons and shield stay listed when worn, carried elsewhere or changed by alchemy', () => {
   const f = townFixture(), gp = f.World.gp, worn = gp.inventory[0];
   f.Items.name = id => 'Item ' + id;

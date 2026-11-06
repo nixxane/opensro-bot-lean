@@ -834,7 +834,9 @@ const UI = {
   section_lootBalance(host) {
     host.append(this.group('Bag and pet space',
       this.check('Balance free slots with the pickup pet', () => ItemRules.cfg().balance, v => ItemRules.cfg().balance = v),
-      el('p', 'While hunting, items with a Sell or Store rule move to the bag or pet, whichever has more free slots. Supplies and the weapons and shield chosen under Combat never move.', 'muted')),
+      el('p', 'While hunting, items with a Sell or Store rule move to the bag or pet, whichever has more free slots. Supplies and the weapons and shield chosen under Combat never move.', 'muted'),
+      this.check('Move pet loot to my bag when the pet is nearly full', () => ItemRules.cfg().petToBag, v => ItemRules.cfg().petToBag = v),
+      el('p', 'Stay at the hunting spot longer: when the pickup pet has almost no room left, its loot moves to your bag one item at a time (keeping two bag slots free), so the pet can keep collecting. The town trip starts once the bag is full too. The weapons and shield chosen under Combat never move.', 'muted')),
       this.group('Wear better gear',
         this.check('On town trips, wear carried gear with better stats; store the replaced piece', () => Settings.profile.items.autoEquip, v => Settings.profile.items.autoEquip = v),
         el('p', 'At the warehouse, a carried equipment piece whose real stats (attack rolls, plus, defence, known blues) beat the worn one in the same slot is worn, and the piece it replaces is deposited, never sold. Weapons follow the worn weapon\'s dominant attack. The chosen weapons and shield, buff-set gear, the alchemy item, Keep-rule items and pieces with an incomplete tooltip or an unmet level requirement are never touched. A swap the game refuses is skipped for the session.', 'muted')));
