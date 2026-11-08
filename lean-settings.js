@@ -17,7 +17,7 @@ const DEFAULT_PROFILE = {
   quest: { on: false, accept: true, picked: [], include: '', exclude: '', skip: [], learned: {}, targets: {} },
   trade: { from: 'CH', to: 'WC', trips: 1, potions: true, goods: 0 },
   trace: { enabled: false, name: '', distance: 12, fight: true },
-  mastery: { enabled: false, ids: [], gap: 0, skills: false, scope: 'rotation', reserve: 0, order: 'masteries' },
+  mastery: { enabled: false, ids: [], gap: 0, skills: false, scope: 'rotation', reserve: 0, order: 'masteries', max: false },
   lure: { enabled: false, points: [], taunt: { id: 0, group: 0 }, area: { id: 0, group: 0 }, holdS: 10, pauseEveryM: 10, pauseS: 4, radius: 15, returnHpPct: 50, stopAt: 0, stopOnPlayers: 0, stopAfter: 0 },
   pet: { attack: { on: false, recall: true, radius: 15, timeout: 3, resend: 5 } },
   scroll: { damageInc: false, damageAbs: false },

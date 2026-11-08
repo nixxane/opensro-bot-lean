@@ -3071,6 +3071,29 @@ test('Max every skill stops by itself when the game world is left', () => {
   f.intervals.at(-1).fn();
   assert.equal(f.AutoMastery.maxAll, false, 'the fast loop does not spin outside the world');
 });
+test('Max every skill is a saved switch: it starts on its own, stays on and spends new skill points later', () => {
+  const f = skillFixture({}, []);
+  f.Settings.profile.mastery.skills = false;
+  assert.equal(f.Settings.profile.mastery.max, false, 'off by default');
+  f.Controller.tick(); assert.deepEqual(skillTrains(f), [], 'nothing while off');
+  f.Settings.profile.mastery.max = true;
+  assert.equal(f.AutoMastery.active(), true);
+  f.Controller.tick(); assert.equal(f.AutoMastery.maxAll, true, 'switching on starts a pass without a button');
+  f.Controller.tick(); assert.deepEqual(skillTrains(f), [1001]);
+  f.World.applyGameplay({ ...f.World.gp, skills: [1001], progression: { ...f.World.gp.progression, skillPoints: 0 } }); f.Controller.tick();
+  assert.equal(f.AutoMastery.maxAll, false, 'the pass ends when nothing more is allowed');
+  assert.match(f.AutoMastery.maxMessage, /Stays on/);
+  const toasts = f.notices.length;
+  f.advance(1000); f.Controller.tick(); assert.equal(f.AutoMastery.maxAll, false, 'no new pass straight away');
+  f.advance(5000); f.Controller.tick(); f.Controller.tick();
+  assert.equal(f.AutoMastery.maxAll, false, 'a pass with nothing to do ends quietly');
+  assert.equal(f.notices.length, toasts, 'and does not toast every few seconds');
+  f.World.applyGameplay({ ...f.World.gp, progression: { ...f.World.gp.progression, skillPoints: 500 } });
+  f.advance(6000); f.Controller.tick(); f.Controller.tick();
+  assert.deepEqual(skillTrains(f).slice(-1), [1002], 'new skill points are spent later without pressing anything');
+  f.Settings.profile.mastery.max = false; f.AutoMastery.stopMax('', true);
+  f.advance(6000); f.Controller.tick(); assert.equal(f.AutoMastery.maxAll, false, 'switched off stays off');
+});
 test('Max every skill sees a refusal at once, does not repeat it and leaves other skills alone', () => {
   const f = skillFixture({}, []);
   f.Settings.profile.mastery.skills = false;

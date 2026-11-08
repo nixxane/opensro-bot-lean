@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         nixxane bot
 // @namespace    https://opensro.online/
-// @version      1.2.227
+// @version      1.2.228
 // @updateURL    https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.meta.js
 // @downloadURL  https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -22,7 +22,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[NIX] Another SRO assistant is active. Disable it and reload to use NIX.');
   return;
 }
-const VERSION = '1.2.227';
+const VERSION = '1.2.228';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -201,7 +201,7 @@ const DEFAULT_PROFILE = {
   quest: { on: false, accept: true, picked: [], include: '', exclude: '', skip: [], learned: {}, targets: {} },
   trade: { from: 'CH', to: 'WC', trips: 1, potions: true, goods: 0 },
   trace: { enabled: false, name: '', distance: 12, fight: true },
-  mastery: { enabled: false, ids: [], gap: 0, skills: false, scope: 'rotation', reserve: 0, order: 'masteries' },
+  mastery: { enabled: false, ids: [], gap: 0, skills: false, scope: 'rotation', reserve: 0, order: 'masteries', max: false },
   lure: { enabled: false, points: [], taunt: { id: 0, group: 0 }, area: { id: 0, group: 0 }, holdS: 10, pauseEveryM: 10, pauseS: 4, radius: 15, returnHpPct: 50, stopAt: 0, stopOnPlayers: 0, stopAfter: 0 },
   pet: { attack: { on: false, recall: true, radius: 15, timeout: 3, resend: 5 } },
   scroll: { damageInc: false, damageAbs: false },
@@ -12539,9 +12539,9 @@ const MASTERY_NAMES = { 257: 'Bicheon', 258: 'Heuksal', 259: 'Pacheon', 273: 'Co
   513: 'Warrior', 514: 'Wizard', 515: 'Rogue', 516: 'Warlock', 517: 'Bard', 518: 'Cleric' };
 const AutoMastery = {
   pending: null, blocked: new Map(), message: 'Auto mastery off.', lastAt: -Infinity, note: null, turn: 'masteries',
-  maxAll: false, maxMessage: '', maxNote: null, total: 0, fast: 0,
+  maxAll: false, maxMessage: '', maxNote: null, total: 0, fast: 0, auto: false, maxIdleAt: -Infinity,
   cfg() { return Settings.profile.mastery; },
-  active() { const c = this.cfg(); return !!(c.enabled || c.skills || this.maxAll); },
+  active() { const c = this.cfg(); return !!(c.enabled || c.skills || c.max || this.maxAll); },
   gap() { const g = Number(this.cfg().gap); return Number.isInteger(g) ? Math.max(0, Math.min(50, g)) : 0; },
   reserve() { const r = Number(this.cfg().reserve); return Number.isInteger(r) ? Math.max(0, r) : 0; },
   name(id) { return MASTERY_NAMES[id] || 'Mastery #' + id; },
@@ -12628,6 +12628,9 @@ const AutoMastery = {
     if (!this.active()) { this.pending = null; this.message = 'Auto mastery off.'; return; }
     const progression = gp?.progression;
     if (!World.inWorld() || World.isDead() || !progression || !Array.isArray(progression.masteries)) { this.message = 'Waiting for a living character.'; return; }
+    // The "Max every skill" switch: a pass starts on its own, and again a few seconds after the last one finished,
+    // so new skill points (a level up) are spent without pressing anything.
+    if (c.max && !this.maxAll && World.groups.size && now() - this.maxIdleAt > 5000) return this.startMax(true);
     const p = this.pending;
     if (p) {
       const mastery = p.kind === 'mastery-train', row = mastery ? this.rows().find(m => m.id === p.id) : null;
@@ -12656,24 +12659,26 @@ const AutoMastery = {
   },
   // ---- Max every skill: one button, one job. Every skill group gets its next level until nothing more is allowed. ----
   // A mastery is raised only when it is the one thing blocking a skill. The gap and reserve settings do not apply here.
-  startMax() {
+  startMax(auto) {
     if (this.maxAll) return;
-    if (!World.inWorld() || World.isDead() || !World.gp?.progression) return UI.toast('Enter the game with a living character first.', 'warn');
-    if (!World.groups.size) return UI.toast('The skill catalogue is not loaded yet.', 'warn');
-    this.maxAll = true; this.total = 0; this.pending = null; this.blocked.clear();
-    this.message = this.maxMessage = 'Max every skill: starting.';
+    if (!World.inWorld() || World.isDead() || !World.gp?.progression) return auto ? undefined : UI.toast('Enter the game with a living character first.', 'warn');
+    if (!World.groups.size) return auto ? undefined : UI.toast('The skill catalogue is not loaded yet.', 'warn');
+    // A switched-on pass keeps earlier refusals for their minute, so a refused level is not resent every few seconds.
+    this.maxAll = true; this.auto = !!auto; this.total = 0; this.pending = null; if (!auto) this.blocked.clear();
+    if (!auto || !this.maxMessage) this.message = this.maxMessage = 'Max every skill: starting.';
     Stats.loadLevels();
     this.fast = setInterval(() => {
       // Leaving the world (death screen, disconnect) must stop the 10 ms loop, not spin it forever.
-      if (!World.inWorld()) return this.stopMax('Max every skill stopped: the game world was left.');
+      if (!World.inWorld()) return this.stopMax('Max every skill stopped: the game world was left.', this.auto);
       this.tick();
     }, 10);
   },
-  stopMax(text) {
+  // quiet: only update the note, no toast or log line (a switched-on pass that found nothing new).
+  stopMax(text, quiet) {
     if (this.fast) { clearInterval(this.fast); this.fast = 0; }
     if (!this.maxAll) return;
-    this.maxAll = false; this.pending = null;
-    if (text) { this.message = this.maxMessage = text; UI.toast(text, 'info', 8000); Log.info(text); }
+    this.maxAll = false; this.pending = null; this.maxIdleAt = now();
+    if (text) { this.message = this.maxMessage = text; if (!quiet) { UI.toast(text, 'info', 8000); Log.info(text); } }
   },
   maxStep(progression) {
     if (!Stats.levels) { Stats.loadLevels(); this.message = 'Loading mastery prices.'; return; }
@@ -12694,7 +12699,8 @@ const AutoMastery = {
       add(this.name(need?.ID) + ' cannot be raised: ' + (stop || 'recently refused'));
     }
     const rest = [...left].map(([why, n]) => n + ' ' + why).join(', ');
-    this.stopMax('Max every skill: done, ' + this.total + ' learned or upgraded' + (rest ? '; still blocked: ' + rest : '') + '.');
+    const auto = this.auto && this.cfg().max;
+    this.stopMax('Max every skill: done, ' + this.total + ' learned or upgraded' + (rest ? '; still blocked: ' + rest : '') + '.' + (auto ? ' Stays on and spends new skill points as you get them.' : ''), auto && !this.total);
   },
   status() { return this.message; },
   draw(parent) {
@@ -12716,10 +12722,12 @@ const AutoMastery = {
     this.note = el('p', this.message, 'muted');
     box.append(this.note, el('p', 'Trains one level at a time and waits for each to be confirmed. Masteries are raised in the order you tick them until they reach your character level (or 120) minus the gap; level 0 is free, otherwise the price is the table cost of the current level. Skills are the next level of the attack, buff and imbue skills you already use, using the game\'s own requirements (mastery level, prerequisite skills, STR and INT, skill points). The reserve is never spent. Works while hunting is stopped and does nothing while you are dead. If the server refuses a level (for example its mastery total limit) the bot waits a minute before trying again. Off by default and saved per character.', 'muted'));
     parent.append(box);
-    const max = UI.group('Max every skill', el('p', 'Learns and upgrades every skill, level by level, as fast as the game answers, and raises a mastery only when it is what blocks a skill (up to your character level, or 120). Skill points, strength and intelligence limits still apply, and it tells you what is left.', 'muted'));
-    const button = UI.button(this.maxAll ? 'Stop' : 'Max every skill now', () => { if (this.maxAll) this.stopMax('Max every skill: stopped.'); else this.startMax(); button.textContent = this.maxAll ? 'Stop' : 'Max every skill now'; });
-    UI.refreshers.push(() => { button.textContent = this.maxAll ? 'Stop' : 'Max every skill now'; });
-    this.maxNote = el('p', this.maxMessage, 'muted'); max.append(button, this.maxNote); parent.append(max);
+    const max = UI.group('Max every skill', UI.check('Max every skill', () => !!this.cfg().max, v => {
+      this.cfg().max = v; this.maxIdleAt = -Infinity;
+      if (!v) { this.stopMax('', true); this.message = this.maxMessage = 'Max every skill: off.'; }
+    }), el('p', 'While on, learns and upgrades every skill, level by level, as fast as the game answers, and raises a mastery only when it is what blocks a skill (up to your character level, or 120). Skill points, strength and intelligence limits still apply, and it tells you what is left. It stays on: new skill points (a level up) are spent too. Off by default and saved per character.', 'muted'));
+    if (!this.maxMessage) this.maxMessage = this.cfg().max ? 'Max every skill: waiting for the game.' : 'Max every skill: off.';
+    this.maxNote = el('p', this.maxMessage, 'muted'); max.append(this.maxNote); parent.append(max);
   },
 };
 // Optional features run behind the controller's guard so a bug in one can never stop hunting.
@@ -15560,7 +15568,7 @@ const Alchemy = {
 };
 
 
-const RELEASE_NOTES = [{"version": "1.2.227", "title": "One switch for Reverse Return Scrolls", "items": ["Reverse Return Scrolls now have a single switch, on the Town page under \"Back to the hunting spot\": \"Buy Reverse Return Scrolls from the Item mall (silk)\". The old merchant switch is gone (no merchant sells them for gold, and it could start useless town trips); if it was on, the new switch is turned on for you.", "On a town trip without a reverse scroll, the bot now buys one from the Item mall after the services and reverses. Before, the mall only bought while hunting, so the trip often walked back instead. If the mall cannot deliver (budget, silk, full bag, refused), the trip walks back as before.", "The reverse switch works without the general \"Buy from the Item mall\" switch; it still uses the silk budget per bot run. \"Low stock ≤\" now really means \"or equal\". When the same item is listed more than once in the mall, the single-item package is bought."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.226", "title": "Move pet loot to your bag", "items": ["New option under Loot, Bag and pet space: \"Move pet loot to my bag when the pet is nearly full\". The pickup pet's items move to your bag one at a time, keeping two bag slots free, so the pet can keep collecting and the bot stays at the hunting spot longer.", "The town trip starts once the bag is full as well. The weapons and shield chosen under Combat never move. Off by default."], "note": "From a player request. Tested in simulation only, not in a live game."}, {"version": "1.2.225", "title": "Town trips wait when the warehouse will not open", "items": ["If the warehouse, a merchant or the world statue does not open, for example because the town is still loading, the bot no longer stops. It waits a minute, walks back and tries again.", "Each service gets three tries per trip. If the third one fails too, the bot stops with the same message as before.", "No new option."], "note": "From a player report. Tested in simulation only, not in a live game; a slow-loading town is the likely cause, not a confirmed one."}, {"version": "1.2.224", "title": "Reliability fixes for death, rebirth and quests", "items": ["If you die or change world while a buff-gear swap is pending, hunting can now start anyway. The gear is restored quietly once it is safe, not during town trips or open trade, stall or shop windows.", "Rebirth is now re-sent every 10 seconds while your character is still dead.", "Quest data that fails to load is retried after 10 minutes instead of on every tick.", "The reconnect message no longer includes your character's name, so it stays out of reports.", "Smaller fixes: the pet-bag-full toast works with the chime off, Max skills stops when you leave the world, and settings are saved when you close the page. The town tier is reset when you switch character.", "No new option."], "note": "Contributed by duan78 (#96). Tested in simulation only, not in a live game."}, {"version": "1.2.223", "title": "Town trips no longer hang before the return scroll", "items": ["If the game keeps showing a pending inventory or an open cast when the bot is about to read the return scroll, the town trip used to wait forever. It now shows \"Waiting for the game to settle before the return scroll.\"", "After a full minute of that, the trip stops cleanly and hunting stays off. The bot never sends the scroll twice. Reload the game and check your character.", "If the game refuses the return scroll three times without giving a reason, the message now says the game itself may be refusing it and suggests using the scroll by hand.", "No new option."], "note": "Contributed by duan78 (#95). Tested in simulation only, not in a live game."}, {"version": "1.2.222", "title": "Full bags now sell before pet loot on town trips", "items": ["With \"Sell ordinary gear from the character bag too\" on, the bot now sells your bag items at the repair merchant first, then moves the pet's loot into the freed slots and sells it.", "This fixes trips where a full bag left pet loot with no free slot, so nothing was sold.", "With that option off, nothing changes. Items the merchant refuses are still skipped, and the rest are sold."], "note": "Contributed by corevider (#94). Tested in simulation only, not in a live game."}, {"version": "1.2.221", "title": "Spare giants and party monsters near death", "items": ["New hunt option \"Spare engaged giant/party below % HP (0 = off)\", next to \"Avoid other players' targets\". The default is 50, and the highest value is 50.", "It applies when \"Avoided monsters\" is set to \"Normal & champion only\". A giant or party monster that another player is already fighting is now skipped once its health is at or below that percentage, because the drop is probably theirs by then. The bot goes for a fresh target instead.", "Above the cutoff, or when the monster's health is unknown, these monsters are still attacked as before. Elite, unique and titan monsters are not affected.", "Because the default is 50, existing characters on \"Normal & champion only\" will start sparing these monsters. Set it to 0 to turn this off."], "note": "Contributed by duan78 (#93). Tested in simulation only, not in a live game."}, {"version": "1.2.220", "title": "Pet loot now sells again on town trips", "items": ["Town trips no longer stall at the smith when your pet is carrying loot. The server refuses sales straight from the pet's bag, so the bot now moves each sellable pet item to a free slot in your own bag and sells it from there.", "If the server refuses a move, that item is skipped and the rest are still sold. If your bag has no free slot, the loot stays in the pet and the trip carries on.", "No new option; protected and valuable items are still left alone."], "note": "Contributed by duan78 (#92). Tested in simulation only, not in a live game."}];
+const RELEASE_NOTES = [{"version": "1.2.228", "title": "Max every skill is now a switch", "items": ["\"Max every skill\" (Settings, Auto mastery) is now an on/off switch instead of a one-time button. While it is on, it learns and upgrades every skill it is allowed to, then stays on and spends new skill points as you get them (after a level up, for example). Turn it off to stop.", "It is off by default and saved per character. Passes that find nothing new stay quiet (no toast every few seconds), and a level the game refused is not resent for a minute."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.227", "title": "One switch for Reverse Return Scrolls", "items": ["Reverse Return Scrolls now have a single switch, on the Town page under \"Back to the hunting spot\": \"Buy Reverse Return Scrolls from the Item mall (silk)\". The old merchant switch is gone (no merchant sells them for gold, and it could start useless town trips); if it was on, the new switch is turned on for you.", "On a town trip without a reverse scroll, the bot now buys one from the Item mall after the services and reverses. Before, the mall only bought while hunting, so the trip often walked back instead. If the mall cannot deliver (budget, silk, full bag, refused), the trip walks back as before.", "The reverse switch works without the general \"Buy from the Item mall\" switch; it still uses the silk budget per bot run. \"Low stock ≤\" now really means \"or equal\". When the same item is listed more than once in the mall, the single-item package is bought."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.226", "title": "Move pet loot to your bag", "items": ["New option under Loot, Bag and pet space: \"Move pet loot to my bag when the pet is nearly full\". The pickup pet's items move to your bag one at a time, keeping two bag slots free, so the pet can keep collecting and the bot stays at the hunting spot longer.", "The town trip starts once the bag is full as well. The weapons and shield chosen under Combat never move. Off by default."], "note": "From a player request. Tested in simulation only, not in a live game."}, {"version": "1.2.225", "title": "Town trips wait when the warehouse will not open", "items": ["If the warehouse, a merchant or the world statue does not open, for example because the town is still loading, the bot no longer stops. It waits a minute, walks back and tries again.", "Each service gets three tries per trip. If the third one fails too, the bot stops with the same message as before.", "No new option."], "note": "From a player report. Tested in simulation only, not in a live game; a slow-loading town is the likely cause, not a confirmed one."}, {"version": "1.2.224", "title": "Reliability fixes for death, rebirth and quests", "items": ["If you die or change world while a buff-gear swap is pending, hunting can now start anyway. The gear is restored quietly once it is safe, not during town trips or open trade, stall or shop windows.", "Rebirth is now re-sent every 10 seconds while your character is still dead.", "Quest data that fails to load is retried after 10 minutes instead of on every tick.", "The reconnect message no longer includes your character's name, so it stays out of reports.", "Smaller fixes: the pet-bag-full toast works with the chime off, Max skills stops when you leave the world, and settings are saved when you close the page. The town tier is reset when you switch character.", "No new option."], "note": "Contributed by duan78 (#96). Tested in simulation only, not in a live game."}, {"version": "1.2.223", "title": "Town trips no longer hang before the return scroll", "items": ["If the game keeps showing a pending inventory or an open cast when the bot is about to read the return scroll, the town trip used to wait forever. It now shows \"Waiting for the game to settle before the return scroll.\"", "After a full minute of that, the trip stops cleanly and hunting stays off. The bot never sends the scroll twice. Reload the game and check your character.", "If the game refuses the return scroll three times without giving a reason, the message now says the game itself may be refusing it and suggests using the scroll by hand.", "No new option."], "note": "Contributed by duan78 (#95). Tested in simulation only, not in a live game."}, {"version": "1.2.222", "title": "Full bags now sell before pet loot on town trips", "items": ["With \"Sell ordinary gear from the character bag too\" on, the bot now sells your bag items at the repair merchant first, then moves the pet's loot into the freed slots and sells it.", "This fixes trips where a full bag left pet loot with no free slot, so nothing was sold.", "With that option off, nothing changes. Items the merchant refuses are still skipped, and the rest are sold."], "note": "Contributed by corevider (#94). Tested in simulation only, not in a live game."}, {"version": "1.2.221", "title": "Spare giants and party monsters near death", "items": ["New hunt option \"Spare engaged giant/party below % HP (0 = off)\", next to \"Avoid other players' targets\". The default is 50, and the highest value is 50.", "It applies when \"Avoided monsters\" is set to \"Normal & champion only\". A giant or party monster that another player is already fighting is now skipped once its health is at or below that percentage, because the drop is probably theirs by then. The bot goes for a fresh target instead.", "Above the cutoff, or when the monster's health is unknown, these monsters are still attacked as before. Elite, unique and titan monsters are not affected.", "Because the default is 50, existing characters on \"Normal & champion only\" will start sparing these monsters. Set it to 0 to turn this off."], "note": "Contributed by duan78 (#93). Tested in simulation only, not in a live game."}];
 
 // Check trusted repository metadata; never execute downloaded update code.
 const Updates = {

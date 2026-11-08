@@ -7,9 +7,9 @@ const MASTERY_NAMES = { 257: 'Bicheon', 258: 'Heuksal', 259: 'Pacheon', 273: 'Co
   513: 'Warrior', 514: 'Wizard', 515: 'Rogue', 516: 'Warlock', 517: 'Bard', 518: 'Cleric' };
 const AutoMastery = {
   pending: null, blocked: new Map(), message: 'Auto mastery off.', lastAt: -Infinity, note: null, turn: 'masteries',
-  maxAll: false, maxMessage: '', maxNote: null, total: 0, fast: 0,
+  maxAll: false, maxMessage: '', maxNote: null, total: 0, fast: 0, auto: false, maxIdleAt: -Infinity,
   cfg() { return Settings.profile.mastery; },
-  active() { const c = this.cfg(); return !!(c.enabled || c.skills || this.maxAll); },
+  active() { const c = this.cfg(); return !!(c.enabled || c.skills || c.max || this.maxAll); },
   gap() { const g = Number(this.cfg().gap); return Number.isInteger(g) ? Math.max(0, Math.min(50, g)) : 0; },
   reserve() { const r = Number(this.cfg().reserve); return Number.isInteger(r) ? Math.max(0, r) : 0; },
   name(id) { return MASTERY_NAMES[id] || 'Mastery #' + id; },
@@ -96,6 +96,9 @@ const AutoMastery = {
     if (!this.active()) { this.pending = null; this.message = 'Auto mastery off.'; return; }
     const progression = gp?.progression;
     if (!World.inWorld() || World.isDead() || !progression || !Array.isArray(progression.masteries)) { this.message = 'Waiting for a living character.'; return; }
+    // The "Max every skill" switch: a pass starts on its own, and again a few seconds after the last one finished,
+    // so new skill points (a level up) are spent without pressing anything.
+    if (c.max && !this.maxAll && World.groups.size && now() - this.maxIdleAt > 5000) return this.startMax(true);
     const p = this.pending;
     if (p) {
       const mastery = p.kind === 'mastery-train', row = mastery ? this.rows().find(m => m.id === p.id) : null;
@@ -124,24 +127,26 @@ const AutoMastery = {
   },
   // ---- Max every skill: one button, one job. Every skill group gets its next level until nothing more is allowed. ----
   // A mastery is raised only when it is the one thing blocking a skill. The gap and reserve settings do not apply here.
-  startMax() {
+  startMax(auto) {
     if (this.maxAll) return;
-    if (!World.inWorld() || World.isDead() || !World.gp?.progression) return UI.toast('Enter the game with a living character first.', 'warn');
-    if (!World.groups.size) return UI.toast('The skill catalogue is not loaded yet.', 'warn');
-    this.maxAll = true; this.total = 0; this.pending = null; this.blocked.clear();
-    this.message = this.maxMessage = 'Max every skill: starting.';
+    if (!World.inWorld() || World.isDead() || !World.gp?.progression) return auto ? undefined : UI.toast('Enter the game with a living character first.', 'warn');
+    if (!World.groups.size) return auto ? undefined : UI.toast('The skill catalogue is not loaded yet.', 'warn');
+    // A switched-on pass keeps earlier refusals for their minute, so a refused level is not resent every few seconds.
+    this.maxAll = true; this.auto = !!auto; this.total = 0; this.pending = null; if (!auto) this.blocked.clear();
+    if (!auto || !this.maxMessage) this.message = this.maxMessage = 'Max every skill: starting.';
     Stats.loadLevels();
     this.fast = setInterval(() => {
       // Leaving the world (death screen, disconnect) must stop the 10 ms loop, not spin it forever.
-      if (!World.inWorld()) return this.stopMax('Max every skill stopped: the game world was left.');
+      if (!World.inWorld()) return this.stopMax('Max every skill stopped: the game world was left.', this.auto);
       this.tick();
     }, 10);
   },
-  stopMax(text) {
+  // quiet: only update the note, no toast or log line (a switched-on pass that found nothing new).
+  stopMax(text, quiet) {
     if (this.fast) { clearInterval(this.fast); this.fast = 0; }
     if (!this.maxAll) return;
-    this.maxAll = false; this.pending = null;
-    if (text) { this.message = this.maxMessage = text; UI.toast(text, 'info', 8000); Log.info(text); }
+    this.maxAll = false; this.pending = null; this.maxIdleAt = now();
+    if (text) { this.message = this.maxMessage = text; if (!quiet) { UI.toast(text, 'info', 8000); Log.info(text); } }
   },
   maxStep(progression) {
     if (!Stats.levels) { Stats.loadLevels(); this.message = 'Loading mastery prices.'; return; }
@@ -162,7 +167,8 @@ const AutoMastery = {
       add(this.name(need?.ID) + ' cannot be raised: ' + (stop || 'recently refused'));
     }
     const rest = [...left].map(([why, n]) => n + ' ' + why).join(', ');
-    this.stopMax('Max every skill: done, ' + this.total + ' learned or upgraded' + (rest ? '; still blocked: ' + rest : '') + '.');
+    const auto = this.auto && this.cfg().max;
+    this.stopMax('Max every skill: done, ' + this.total + ' learned or upgraded' + (rest ? '; still blocked: ' + rest : '') + '.' + (auto ? ' Stays on and spends new skill points as you get them.' : ''), auto && !this.total);
   },
   status() { return this.message; },
   draw(parent) {
@@ -184,10 +190,12 @@ const AutoMastery = {
     this.note = el('p', this.message, 'muted');
     box.append(this.note, el('p', 'Trains one level at a time and waits for each to be confirmed. Masteries are raised in the order you tick them until they reach your character level (or 120) minus the gap; level 0 is free, otherwise the price is the table cost of the current level. Skills are the next level of the attack, buff and imbue skills you already use, using the game\'s own requirements (mastery level, prerequisite skills, STR and INT, skill points). The reserve is never spent. Works while hunting is stopped and does nothing while you are dead. If the server refuses a level (for example its mastery total limit) the bot waits a minute before trying again. Off by default and saved per character.', 'muted'));
     parent.append(box);
-    const max = UI.group('Max every skill', el('p', 'Learns and upgrades every skill, level by level, as fast as the game answers, and raises a mastery only when it is what blocks a skill (up to your character level, or 120). Skill points, strength and intelligence limits still apply, and it tells you what is left.', 'muted'));
-    const button = UI.button(this.maxAll ? 'Stop' : 'Max every skill now', () => { if (this.maxAll) this.stopMax('Max every skill: stopped.'); else this.startMax(); button.textContent = this.maxAll ? 'Stop' : 'Max every skill now'; });
-    UI.refreshers.push(() => { button.textContent = this.maxAll ? 'Stop' : 'Max every skill now'; });
-    this.maxNote = el('p', this.maxMessage, 'muted'); max.append(button, this.maxNote); parent.append(max);
+    const max = UI.group('Max every skill', UI.check('Max every skill', () => !!this.cfg().max, v => {
+      this.cfg().max = v; this.maxIdleAt = -Infinity;
+      if (!v) { this.stopMax('', true); this.message = this.maxMessage = 'Max every skill: off.'; }
+    }), el('p', 'While on, learns and upgrades every skill, level by level, as fast as the game answers, and raises a mastery only when it is what blocks a skill (up to your character level, or 120). Skill points, strength and intelligence limits still apply, and it tells you what is left. It stays on: new skill points (a level up) are spent too. Off by default and saved per character.', 'muted'));
+    if (!this.maxMessage) this.maxMessage = this.cfg().max ? 'Max every skill: waiting for the game.' : 'Max every skill: off.';
+    this.maxNote = el('p', this.maxMessage, 'muted'); max.append(this.maxNote); parent.append(max);
   },
 };
 // Optional features run behind the controller's guard so a bug in one can never stop hunting.
