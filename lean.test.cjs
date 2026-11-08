@@ -3687,12 +3687,73 @@ test('battle scrolls are re-used only when their buff runs out', () => {
   f.ScrollBuff.tick();
   assert.match(f.ScrollBuff.message, /off/);
 });
-test('reverse return scrolls join the merchant restock list', () => {
+test('reverse return scrolls have one switch: the Item mall one; an old merchant switch carries over', () => {
   const f = fixture();
-  assert.equal(f.Restock.offerKind({ refObjId: 3795 }), 'reverse', 'the merchant offer is classified');
-  assert.equal(f.Restock.supplies().some(s => s.kind === 'reverse'), false, 'off by default');
   f.Settings.profile.potion.restock.reverse.on = true;
-  assert.deepEqual(JSON.parse(JSON.stringify(f.Restock.supplies().find(s => s.kind === 'reverse'))), { kind: 'reverse', on: true, refObjId: 3795, low: 10, target: 50 });
+  assert.equal(f.Restock.supplies().some(s => s.kind === 'reverse'), false, 'no merchant sells them for gold: never a restock supply or a trip reason');
+  const migrated = f.botProfile({ potion: { restock: { reverse: { on: true, low: 10, target: 50 } } } });
+  assert.equal(migrated.mall.reverse.on, true, 'the old merchant switch turns the mall switch on');
+  assert.equal(migrated.potion.restock.reverse.on, false);
+  assert.equal(f.botProfile({}).mall.reverse.on, false, 'off by default');
+});
+test('reverse scrolls buy from the mall with the general mall switch off, at the low mark inclusive', () => {
+  const f = mallFixture();
+  f.Settings.profile.mall.on = false;
+  f.Settings.profile.mall.reverse = { on: true, low: 1, target: 3 };
+  f.World.gp.inventory = [{ slot: 16, refObjId: 3795, typeFlags: 0x19ec, quantity: 1, name: 'Reverse' }];
+  f.Hunt.start(); f.MallBuyer.tick();
+  assert.deepEqual(JSON.parse(JSON.stringify(mallBuys(f).map(c => c.request.packageId))), [19974], 'one in the bag is "low stock ≤ 1"');
+  const g = mallFixture(); g.Settings.profile.mall.on = false; g.Settings.profile.mall.reverse.on = false;
+  g.Hunt.start(); g.MallBuyer.tick();
+  assert.equal(mallBuys(g).length, 0, 'HP bags still need the general switch');
+});
+test('the mall prefers a single-item package over a bundle or a pricier listing of the same item', () => {
+  const f = mallFixture();
+  f.World.gp.itemMall.offers = [
+    { group: 852, shop: 1, tab: 0, slot: 0, packageId: 500, name: 'Travel bundle', silk: 10, giftSilk: 0, purchaseLimit: 5, itemIds: [3795, 61] },
+    { group: 852, shop: 2, tab: 9, slot: 1, packageId: 501, name: 'Reverse (hot)', silk: 20, giftSilk: 0, purchaseLimit: 5, itemIds: [3795] },
+    { group: 852, shop: 2, tab: 1, slot: 5, packageId: 19974, name: 'Reverse Return Scroll', silk: 14, giftSilk: 0, purchaseLimit: 5, itemIds: [3795] },
+  ];
+  assert.equal(f.MallBuyer.offerFor(3795).packageId, 19974);
+});
+test('a town trip without a reverse scroll buys one from the mall, then reverses; a blocked mall walks back', () => {
+  const setup = () => {
+    const f = townFixture(), gp = f.World.gp;
+    gp.inventory = gp.inventory.filter(i => i.slot !== 14);
+    gp.inventory.find(i => i.refObjId === 15).quantity = 50; gp.inventory.find(i => i.slot === 6).durability = 10;
+    f.Settings.profile.mall = { on: false, budgetSilk: 100, hp: { on: false, low: 1, target: 2 }, mp: { on: false, low: 1, target: 2 }, damageInc: { on: false, low: 1, target: 2 }, damageAbs: { on: false, low: 1, target: 2 }, reverse: { on: true, low: 1, target: 5 } };
+    gp.itemMall = { tabs: [], silk: 50, giftSilk: 0, points: 0, pending: false, revision: 1,
+      offers: [{ group: 852, shop: 2, tab: 1, slot: 5, packageId: 19974, name: 'Reverse Return Scroll', silk: 14, giftSilk: 0, purchaseLimit: 5, itemIds: [3795] }] };
+    f.Town.begin();
+    return f;
+  };
+  let f = setup(), gp = f.World.gp;
+  assert.equal(f.Town.closeNext('close-smith'), 'mall-reverse', 'the mall is tried before walking');
+  // A town trip ticking the mall buyer must not hold the purchase in its calm window.
+  f.MallBuyer.tick();
+  f.Town.enter('mall-reverse'); f.advance(2000); f.Town.tick();
+  assert.deepEqual(JSON.parse(JSON.stringify(mallBuys(f).map(c => c.request.packageId))), [19974], f.Town.message);
+  assert.equal(f.Town.trip.phase, 'mall-reverse', 'waits for the delivery');
+  f.advance(1000);
+  f.World.applyGameplay({ ...gp, inventory: [...gp.inventory, { slot: 20, refObjId: 3795, typeFlags: 0x19ec, quantity: 1, name: 'Reverse' }], itemMall: { ...gp.itemMall, revision: 2, silk: 36 } });
+  f.Town.tick();
+  assert.equal(f.Town.trip.phase, 'walk-gate', 'with the scroll bought the trip goes to reverse');
+  assert.equal(f.MallBuyer.spentSilk, 14);
+
+  f = setup(); f.Settings.profile.mall.budgetSilk = 0;
+  assert.equal(f.Town.closeNext('close-smith'), 'leave', 'no budget: straight to the walk back');
+  f = setup(); f.World.gp.itemMall.silk = 5;
+  f.Town.enter('mall-reverse'); f.advance(2000); f.Town.tick();
+  assert.equal(f.Town.trip.phase, 'leave', 'an empty wallet walks back'); assert.match(f.notices.join(' | '), /silk.*Walking back/);
+  f = setup();
+  f.Town.enter('mall-reverse'); f.advance(2000); f.Town.tick();
+  assert.equal(mallBuys(f).length, 1);
+  f.advance(500);
+  f.World.applyGameplay({ ...f.World.gp, itemMall: { ...f.World.gp.itemMall, revision: 2, error: 'Mall purchase rejected: 128' } });
+  f.Town.tick(); f.Town.tick();
+  assert.equal(f.Town.trip.phase, 'leave', 'a refusal walks back'); assert.match(f.notices.join(' | '), /refused.*Walking back/);
+  f = setup(); f.Town.cfg().returnBy = 'walk';
+  assert.equal(f.Town.closeNext('close-smith'), 'leave', 'Walk never buys');
 });
 test('the mall buyer also refills MP bags and reverse scrolls from the live catalogue', () => {
   const f = mallFixture();

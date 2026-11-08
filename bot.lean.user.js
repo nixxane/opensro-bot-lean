@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         nixxane bot
 // @namespace    https://opensro.online/
-// @version      1.2.226
+// @version      1.2.227
 // @updateURL    https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.meta.js
 // @downloadURL  https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -22,7 +22,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[NIX] Another SRO assistant is active. Disable it and reload to use NIX.');
   return;
 }
-const VERSION = '1.2.226';
+const VERSION = '1.2.227';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -205,7 +205,7 @@ const DEFAULT_PROFILE = {
   lure: { enabled: false, points: [], taunt: { id: 0, group: 0 }, area: { id: 0, group: 0 }, holdS: 10, pauseEveryM: 10, pauseS: 4, radius: 15, returnHpPct: 50, stopAt: 0, stopOnPlayers: 0, stopAfter: 0 },
   pet: { attack: { on: false, recall: true, radius: 15, timeout: 3, resend: 5 } },
   scroll: { damageInc: false, damageAbs: false },
-  mall: { on: false, budgetSilk: 0, hp: { on: false, low: 10, target: 1000 }, mp: { on: false, low: 10, target: 1000 }, damageInc: { on: false, low: 5, target: 20 }, damageAbs: { on: false, low: 5, target: 20 }, reverse: { on: false, low: 10, target: 50 } },
+  mall: { on: false, budgetSilk: 0, hp: { on: false, low: 10, target: 1000 }, mp: { on: false, low: 10, target: 1000 }, damageInc: { on: false, low: 5, target: 20 }, damageAbs: { on: false, low: 5, target: 20 }, reverse: { on: false, low: 1, target: 5 } },
   party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', leaveIfNotLeader: false, onlyWhileRunning: false, acceptNames: '', autoRes: false, acceptRes: false, reviveWaitS: 20, resRadius: 300, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
     support: { enabled: false, whileStopped: false, range: 30, heal: { id: 0, group: 0, pct: 60, self: false }, group: { id: 0, group: 0, pct: 60, count: 2 }, buffs: [] } },
   wardrobe: { on: true, phantom: true, realAnim: true, hideAvatars: false,
@@ -274,6 +274,9 @@ function botProfile(input) {
   if (!Number.isInteger(result.potion.delayMs) || result.potion.delayMs < 0 || result.potion.delayMs > 60000) result.potion.delayMs = DEFAULT_PROFILE.potion.delayMs;
   if (!['death', 'recall'].includes(result.potion.restock.town.deathReturn)) result.potion.restock.town.deathReturn = 'recall';
   if (!['reverse', 'walk'].includes(result.potion.restock.town.returnBy)) result.potion.restock.town.returnBy = 'reverse';
+  // Reverse Return Scrolls used to have two switches: a gold-merchant one (no merchant sells them) and the Item mall
+  // one. Only the Item mall switch remains; an old merchant switch carries over to it.
+  if (result.potion.restock.reverse.on) { result.mall.reverse.on = true; result.potion.restock.reverse.on = false; }
   // The anti-KS scope only has the two meanings; anything else is the old full behavior.
   if (result.hunt.avoidKsScope !== 'minor') result.hunt.avoidKsScope = 'all';
   // The finish-steal cutoff stops at 50: above it the kill can still be won, so avoiding is pointless.
@@ -1532,7 +1535,7 @@ const Restock = {
   unbuyable: new Set(),
   supplies() {
     const c = this.cfg();
-    return ['hp', 'mp', 'vigor', 'cure', 'hgp', 'kit', 'reverse']
+    return ['hp', 'mp', 'vigor', 'cure', 'hgp', 'kit']
       .filter(k => c[k].on && !this.unbuyable.has(c[k].refObjId) && ((k === 'hgp' || k === 'kit') ? c[k].refObjId > 0 : true))
       .map(k => ({ kind: k, ...c[k], ...(k === 'cure' ? { refObjId: 58 } : {}) }));
   },
@@ -7549,7 +7552,7 @@ const Town = {
     const inTown = this.inTown(revival);
     const origin = revival || inTown ? (reverseChoice === TOWN_REVERSE.death ? this.deathPoint || Hunt.cfg().center : this.lastScrollPoint || Hunt.cfg().center) : World.pose();
     if (!origin) return this.fail(inTown ? 'No saved hunting point to return to; set the hunting area first.' : 'No saved hunting point for revival return.');
-    if (!this.walks() && !this.scroll(0x19ec)) Log.info('No reverse return scroll: unless one is bought in town, the trip walks back to the hunting spot after the services.');
+    if (!this.walks() && !this.scroll(0x19ec)) Log.info(MallBuyer.reverseBlocked() ? 'No reverse return scroll: the trip walks back to the hunting spot after the services.' : 'No reverse return scroll: one is bought from the Item mall after the services.');
     if (revival) Hunt.running = true;
     Restock.trip = null;
     Resurrect.cancelTrip('', true); Resurrect.holdUntil = 0; Loot.suspend();
@@ -7592,11 +7595,23 @@ const Town = {
     const order = !sellFirst ? ['storage', 'vendor', 'smith', 'gate'] : full ? ['smith', 'storage', 'vendor', 'gate'] : ['storage', 'smith', 'vendor', 'gate'];
     return order.filter(role => (role !== 'storage' || this.cfg().storage) && (role !== 'gate' || !this.walks()));
   },
-  // The service to walk to after closing a window. After the last one: the world statue to reverse, or the walk back
-  // when no reverse scroll is carried (none was bought in town either).
+  // The service to walk to after closing a window. After the last one: the world statue to reverse; without a reverse
+  // scroll, first an Item mall purchase when that switch is on, otherwise the walk back.
   closeNext(phase) {
     const order = this.trip?.order || this.order(false), role = phase.replace(/^close-/, ''), next = order[order.indexOf(role) + 1] || 'gate';
-    return next === 'gate' && !this.reverses() ? 'leave' : 'walk-' + next;
+    if (next !== 'gate' || this.reverses()) return 'walk-' + next;
+    return !this.walks() && !this.trip?.recovery && !MallBuyer.reverseBlocked() ? 'mall-reverse' : 'leave';
+  },
+  // Standing in town with the services done and no reverse scroll: order one from the Item mall, then reverse.
+  // Anything that stops the purchase (no offer, budget, wallet, refusal, slow delivery) walks back instead.
+  mallReverse() {
+    const t = this.trip, result = MallBuyer.townReverse(t.at);
+    if (result === 'done' || this.reverses()) { Log.info('Town: Reverse Return Scroll bought from the Item mall.'); this.enter('walk-gate'); return; }
+    if (result === 'wait') { this.message = 'Buying a Reverse Return Scroll from the Item mall.'; return; }
+    this.message = result + ' Walking back to the hunting spot.';
+    Log.info('Town: ' + this.message);
+    UI.toast(this.message, 'warn', 6000);
+    this.enter('leave');
   },
   // A supply the merchant does not sell, or the gold did not cover, was skipped on purpose and is not a reason to stop.
   supplyShort(t) { return t.supplies.some(s => !t.buySkipped?.includes(s.refObjId) && Restock.count(s.refObjId) < s.target); },
@@ -8140,6 +8155,7 @@ const Town = {
     else if (t.phase === 'ammo') this.ammo();
     else if (t.phase === 'repair') this.repair();
     else if (t.phase === 'leave') this.leave();
+    else if (t.phase === 'mall-reverse') this.mallReverse();
     else if (t.phase.startsWith('close-')) {
       if (now() - t.at > 15000) this.fail('NPC window did not close.');
       else this.close(this.closeNext(t.phase));
@@ -11026,12 +11042,30 @@ const MallProbe = {
 // full bag) backs that item off for a minute instead. The merchant town trips stay the primary supply: this never
 // blocks hunting, it just tops up mid-fight between targets.
 const MALL_HP_REF = 5912;   // HP SuperSet 5 bag (the X-Large stack the merchant route cannot sell)
+const MALL_REVERSE_REF = 3795; // ITEM_MALL_REVERSE_RETURN_SCROLL: Item mall only, never sold for gold
+const MALL_TOWN_REVERSE_MS = 30000; // how long a town trip waits for a mall reverse scroll before walking back
 const MALL_BUY_GAP_MS = 2000, MALL_REFUSE_BACKOFF_MS = 60000, MALL_TIMEOUT_MS = 9500, MALL_CALM_MS = 1500, MALL_PROBE_MS = 10000;
 const MallBuyer = {
   pending: null, spentSilk: 0, openedAt: -Infinity, lastAt: -Infinity, poison: false, refused: new Map(), goals: new Map(),
-  busyAt: -Infinity, probeAt: -Infinity, probeRevision: null, message: 'Item mall off.',
+  busyAt: -Infinity, probeAt: -Infinity, probeRevision: null, skipped: '', message: 'Item mall off.',
   cfg() { return Settings.profile.mall; },
-  on() { return !!this.cfg().on && (Number(this.cfg().budgetSilk) || 0) > 0; },
+  budget() { return Number(this.cfg().budgetSilk) || 0; },
+  // The Reverse Return Scroll switch is its own opt-in (the only place it can be bought: no merchant sells it for
+  // gold), so it buys even with the general "Buy from the Item mall" switch off. Both share the silk budget.
+  on() { return this.budget() > 0 && (!!this.cfg().on || !!this.cfg().reverse?.on); },
+  // Why reverse scrolls cannot be bought right now, or '' when they can be ordered.
+  reverseBlocked() {
+    const c = this.cfg();
+    if (!c.reverse?.on) return 'Reverse Return Scroll buying is off.';
+    if (this.budget() <= 0) return 'Set an Item mall silk budget to buy Reverse Return Scrolls.';
+    if (this.poison) return 'Item mall buying is blocked after an unconfirmed order.';
+    if ((this.refused.get(MALL_REVERSE_REF) ?? 0) > now()) return 'The Item mall refused the last Reverse Return Scroll order.';
+    return '';
+  },
+  reverseBuyer(target) {
+    const c = this.cfg().reverse, low = Math.max(0, Number(c.low) || 0);
+    return { label: 'Reverse Return Scroll', ref: MALL_REVERSE_REF, low, target: target ?? Math.max(low + 1, Number(c.target) || 0), count: () => this.count(MALL_REVERSE_REF) };
+  },
   state() { return World.gp?.itemMall ?? null; },
   silk() { return Number(this.state()?.silk ?? 0); },
   count(ref) { return World.items().filter(i => i.refObjId === ref).reduce((n, i) => n + (i.quantity ?? 1), 0); },
@@ -11040,20 +11074,54 @@ const MallBuyer = {
   reset() { if (this.pending) this.spentSilk += this.pending.silk; this.pending = null; this.openedAt = -Infinity; this.lastAt = -Infinity; this.refused.clear(); this.goals.clear(); this.message = 'Item mall off.'; },
   newRun() { this.spentSilk = 0; },
   unpoison() { this.poison = false; this.probeRevision = null; },
-  // The live offer whose package contains this item. Never a remembered address: the server stale-checks packageId.
-  offerFor(ref) { return (this.state()?.offers || []).find(o => (o.itemIds || []).includes(ref) && (o.silk || 0) > 0) || null; },
+  // The live offer for this item. Never a remembered address: the server stale-checks packageId. The same item can
+  // be listed more than once (its own tab, a "hot" tab, a bundle with other items): prefer a package of only this
+  // item, then the cheapest.
+  offerFor(ref) {
+    const offers = (this.state()?.offers || []).filter(o => (o.itemIds || []).includes(ref) && (o.silk || 0) > 0);
+    const only = o => (o.itemIds || []).every(id => id === ref) ? 0 : 1;
+    return offers.sort((a, b) => only(a) - only(b) || a.silk - b.silk)[0] || null;
+  },
   // What may be bought right now, in priority order. HP/MP count the whole potion stock, mall bags included.
   buyers() {
     const c = this.cfg(), out = [];
+    if (c.on) this.generalBuyers(c, out);
+    if (c.reverse?.on) out.push(this.reverseBuyer());
+    return out;
+  },
+  generalBuyers(c, out) {
     if (c.hp?.on) out.push({ label: 'HP potion bag', ref: MALL_HP_REF, low: c.hp.low, target: c.hp.target, count: () => Potion.count('hp') });
     if (c.mp?.on) out.push({ label: 'MP potion bag', ref: 5913, low: c.mp.low, target: c.mp.target, count: () => Potion.count('mp') });
     if (c.damageInc?.on) out.push({ label: '20% damage scroll pack', ref: 3767, low: c.damageInc.low, target: c.damageInc.target, count: () => this.count(3767) });
     if (c.damageAbs?.on) out.push({ label: '20% resistance scroll pack', ref: 3768, low: c.damageAbs.low, target: c.damageAbs.target, count: () => this.count(3768) });
-    if (c.reverse?.on) out.push({ label: 'Reverse Return Scroll pack', ref: 3795, low: c.reverse.low, target: c.reverse.target, count: () => this.count(3795) });
     return out;
   },
   tick() {
-    if (!World.inWorld() || World.isDead() || !Hunt.running || Town.trip || Restock.trip || Restock.activeShop() || World.gp?.inventoryPending || World.gp?.storage) { this.busyAt = now(); return false; }
+    // Only inventory activity arms the calm window: a town trip must not, or its own mall reverse purchase
+    // (townReverse) would wait forever.
+    if (World.gp?.inventoryPending || World.gp?.storage || Restock.activeShop()) { this.busyAt = now(); return false; }
+    if (!World.inWorld() || World.isDead() || !Hunt.running || Town.trip || Restock.trip) return false;
+    return this.drive(this.buyers());
+  },
+  // Town trip, after the services and before the way back: buy one Reverse Return Scroll so the trip reverses
+  // instead of walking. The hunting top-up refills to the target later. Returns 'wait' while an order can still
+  // arrive, 'done' once one is in the bag, or the reason it cannot be bought (the trip then walks back).
+  townReverse(since) {
+    const have = () => this.count(MALL_REVERSE_REF) > 0;
+    if (have() && !this.pending) return 'done';
+    const blocked = this.reverseBlocked();
+    if (blocked) return have() ? 'done' : blocked;
+    if (now() - since > MALL_TOWN_REVERSE_MS && !this.pending) return 'The Item mall did not deliver a Reverse Return Scroll in time.';
+    if (!World.inWorld() || World.isDead() || Restock.activeShop() || World.gp?.inventoryPending || World.gp?.storage || World.isCasting()) { this.busyAt = now(); return 'wait'; }
+    const b = this.reverseBuyer(1);
+    this.goals.set(b.ref, Math.max(1, this.goals.get(b.ref) ?? 0));
+    this.drive([b]);
+    // A pass that skipped the only buyer for a hard reason (no offer, budget, wallet, bag) will not change by waiting.
+    if (have()) return 'done';
+    return !this.pending && this.skipped ? this.skipped : 'wait';
+  },
+  drive(buyers) {
+    this.skipped = '';
     if (this.poison) {
       // An unconfirmed order may simply never have reached the server: the worker refuses gameplay mall
       // commands while an inventory transaction is open and answers nothing. A read-only catalogue open
@@ -11117,27 +11185,27 @@ const MallBuyer = {
     }
     if (this.state().pending) return false; // the game's own basket has an order out; leave it alone
     if (now() - this.lastAt < MALL_BUY_GAP_MS) return false;
-    for (const b of this.buyers()) {
+    for (const b of buyers) {
       if ((this.refused.get(b.ref) ?? 0) > now()) continue;
       const count = b.count();
-      // Crossing the low mark arms a refill all the way to the target, like the merchant restock's low/target pair.
-      if (count < b.low) this.goals.set(b.ref, b.target);
+      // Reaching the low mark (the panel's "low stock ≤") arms a refill all the way to the target, like the
+      // merchant restock's low/target pair.
+      if (count <= b.low) this.goals.set(b.ref, b.target);
       if (count >= (this.goals.get(b.ref) ?? 0)) continue;
       const offer = this.offerFor(b.ref);
-      if (!offer) { this.message = 'No Item mall offer for ' + b.label + ' right now.'; continue; }
+      if (!offer) { this.message = this.skipped = 'No Item mall offer for ' + b.label + ' right now.'; continue; }
       const price = Number(offer.silk) || 0;
       if (price <= 0) continue;
       // The client refuses to even send an order the wallet cannot honour in its other currencies, and the
       // game would read that as an unconfirmed purchase: skip such offers here.
-      if ((Number(offer.giftSilk) || 0) > (Number(this.state()?.giftSilk) || 0)) { this.message = 'Not enough gift silk for ' + b.label + '.'; continue; }
-      const budget = Number(this.cfg().budgetSilk) || 0;
-      if (this.spentSilk + price > budget || price > this.silk()) {
-        this.message = 'The silk budget or balance stops ' + b.label + '.';
+      if ((Number(offer.giftSilk) || 0) > (Number(this.state()?.giftSilk) || 0)) { this.message = this.skipped = 'Not enough gift silk for ' + b.label + '.'; continue; }
+      if (this.spentSilk + price > this.budget() || price > this.silk()) {
+        this.message = this.skipped = (price > this.silk() ? 'Not enough silk for ' : 'The silk budget for this run is used up: no more ') + b.label + '.';
         continue;
       }
       // Delivery lands in the bag: a free slot is needed unless the same stack has room.
       const stack = World.items().find(i => i.refObjId === b.ref);
-      if (!stack && World.freeBagSlots() < 1) { this.message = 'No free bag slot for ' + b.label + '.'; continue; }
+      if (!stack && World.freeBagSlots() < 1) { this.message = this.skipped = 'No free bag slot for ' + b.label + '.'; continue; }
       const request = { group: offer.group, shop: offer.shop, tab: offer.tab, slot: offer.slot, quantity: 1, points: 0, packageId: offer.packageId };
       if (Cmd.spaced('mall-buy') && Cmd.raw({ kind: 'mall-buy', request }, 'Item mall: ' + b.label)) {
         this.pending = { label: b.label, ref: b.ref, silk: price, before: count, countFn: b.count, revision: this.state().revision, at: now() };
@@ -15492,7 +15560,7 @@ const Alchemy = {
 };
 
 
-const RELEASE_NOTES = [{"version": "1.2.226", "title": "Move pet loot to your bag", "items": ["New option under Loot, Bag and pet space: \"Move pet loot to my bag when the pet is nearly full\". The pickup pet's items move to your bag one at a time, keeping two bag slots free, so the pet can keep collecting and the bot stays at the hunting spot longer.", "The town trip starts once the bag is full as well. The weapons and shield chosen under Combat never move. Off by default."], "note": "From a player request. Tested in simulation only, not in a live game."}, {"version": "1.2.225", "title": "Town trips wait when the warehouse will not open", "items": ["If the warehouse, a merchant or the world statue does not open, for example because the town is still loading, the bot no longer stops. It waits a minute, walks back and tries again.", "Each service gets three tries per trip. If the third one fails too, the bot stops with the same message as before.", "No new option."], "note": "From a player report. Tested in simulation only, not in a live game; a slow-loading town is the likely cause, not a confirmed one."}, {"version": "1.2.224", "title": "Reliability fixes for death, rebirth and quests", "items": ["If you die or change world while a buff-gear swap is pending, hunting can now start anyway. The gear is restored quietly once it is safe, not during town trips or open trade, stall or shop windows.", "Rebirth is now re-sent every 10 seconds while your character is still dead.", "Quest data that fails to load is retried after 10 minutes instead of on every tick.", "The reconnect message no longer includes your character's name, so it stays out of reports.", "Smaller fixes: the pet-bag-full toast works with the chime off, Max skills stops when you leave the world, and settings are saved when you close the page. The town tier is reset when you switch character.", "No new option."], "note": "Contributed by duan78 (#96). Tested in simulation only, not in a live game."}, {"version": "1.2.223", "title": "Town trips no longer hang before the return scroll", "items": ["If the game keeps showing a pending inventory or an open cast when the bot is about to read the return scroll, the town trip used to wait forever. It now shows \"Waiting for the game to settle before the return scroll.\"", "After a full minute of that, the trip stops cleanly and hunting stays off. The bot never sends the scroll twice. Reload the game and check your character.", "If the game refuses the return scroll three times without giving a reason, the message now says the game itself may be refusing it and suggests using the scroll by hand.", "No new option."], "note": "Contributed by duan78 (#95). Tested in simulation only, not in a live game."}, {"version": "1.2.222", "title": "Full bags now sell before pet loot on town trips", "items": ["With \"Sell ordinary gear from the character bag too\" on, the bot now sells your bag items at the repair merchant first, then moves the pet's loot into the freed slots and sells it.", "This fixes trips where a full bag left pet loot with no free slot, so nothing was sold.", "With that option off, nothing changes. Items the merchant refuses are still skipped, and the rest are sold."], "note": "Contributed by corevider (#94). Tested in simulation only, not in a live game."}, {"version": "1.2.221", "title": "Spare giants and party monsters near death", "items": ["New hunt option \"Spare engaged giant/party below % HP (0 = off)\", next to \"Avoid other players' targets\". The default is 50, and the highest value is 50.", "It applies when \"Avoided monsters\" is set to \"Normal & champion only\". A giant or party monster that another player is already fighting is now skipped once its health is at or below that percentage, because the drop is probably theirs by then. The bot goes for a fresh target instead.", "Above the cutoff, or when the monster's health is unknown, these monsters are still attacked as before. Elite, unique and titan monsters are not affected.", "Because the default is 50, existing characters on \"Normal & champion only\" will start sparing these monsters. Set it to 0 to turn this off."], "note": "Contributed by duan78 (#93). Tested in simulation only, not in a live game."}, {"version": "1.2.220", "title": "Pet loot now sells again on town trips", "items": ["Town trips no longer stall at the smith when your pet is carrying loot. The server refuses sales straight from the pet's bag, so the bot now moves each sellable pet item to a free slot in your own bag and sells it from there.", "If the server refuses a move, that item is skipped and the rest are still sold. If your bag has no free slot, the loot stays in the pet and the trip carries on.", "No new option; protected and valuable items are still left alone."], "note": "Contributed by duan78 (#92). Tested in simulation only, not in a live game."}, {"version": "1.2.219", "title": "Town trips no longer stop at the smith after a skipped supply", "items": ["Fixes the character standing still at the repair merchant at the end of a town trip with \"Final supply, repair or travel-scroll check failed\".", "It happened when a supply was skipped on purpose in the shop (a merchant that does not sell Reverse Return Scrolls, HGP potions or pet kits, or gold that ran short). The last check still counted that supply as missing. Skipped supplies no longer block the walk back or the reverse."]}];
+const RELEASE_NOTES = [{"version": "1.2.227", "title": "One switch for Reverse Return Scrolls", "items": ["Reverse Return Scrolls now have a single switch, on the Town page under \"Back to the hunting spot\": \"Buy Reverse Return Scrolls from the Item mall (silk)\". The old merchant switch is gone (no merchant sells them for gold, and it could start useless town trips); if it was on, the new switch is turned on for you.", "On a town trip without a reverse scroll, the bot now buys one from the Item mall after the services and reverses. Before, the mall only bought while hunting, so the trip often walked back instead. If the mall cannot deliver (budget, silk, full bag, refused), the trip walks back as before.", "The reverse switch works without the general \"Buy from the Item mall\" switch; it still uses the silk budget per bot run. \"Low stock ≤\" now really means \"or equal\". When the same item is listed more than once in the mall, the single-item package is bought."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.226", "title": "Move pet loot to your bag", "items": ["New option under Loot, Bag and pet space: \"Move pet loot to my bag when the pet is nearly full\". The pickup pet's items move to your bag one at a time, keeping two bag slots free, so the pet can keep collecting and the bot stays at the hunting spot longer.", "The town trip starts once the bag is full as well. The weapons and shield chosen under Combat never move. Off by default."], "note": "From a player request. Tested in simulation only, not in a live game."}, {"version": "1.2.225", "title": "Town trips wait when the warehouse will not open", "items": ["If the warehouse, a merchant or the world statue does not open, for example because the town is still loading, the bot no longer stops. It waits a minute, walks back and tries again.", "Each service gets three tries per trip. If the third one fails too, the bot stops with the same message as before.", "No new option."], "note": "From a player report. Tested in simulation only, not in a live game; a slow-loading town is the likely cause, not a confirmed one."}, {"version": "1.2.224", "title": "Reliability fixes for death, rebirth and quests", "items": ["If you die or change world while a buff-gear swap is pending, hunting can now start anyway. The gear is restored quietly once it is safe, not during town trips or open trade, stall or shop windows.", "Rebirth is now re-sent every 10 seconds while your character is still dead.", "Quest data that fails to load is retried after 10 minutes instead of on every tick.", "The reconnect message no longer includes your character's name, so it stays out of reports.", "Smaller fixes: the pet-bag-full toast works with the chime off, Max skills stops when you leave the world, and settings are saved when you close the page. The town tier is reset when you switch character.", "No new option."], "note": "Contributed by duan78 (#96). Tested in simulation only, not in a live game."}, {"version": "1.2.223", "title": "Town trips no longer hang before the return scroll", "items": ["If the game keeps showing a pending inventory or an open cast when the bot is about to read the return scroll, the town trip used to wait forever. It now shows \"Waiting for the game to settle before the return scroll.\"", "After a full minute of that, the trip stops cleanly and hunting stays off. The bot never sends the scroll twice. Reload the game and check your character.", "If the game refuses the return scroll three times without giving a reason, the message now says the game itself may be refusing it and suggests using the scroll by hand.", "No new option."], "note": "Contributed by duan78 (#95). Tested in simulation only, not in a live game."}, {"version": "1.2.222", "title": "Full bags now sell before pet loot on town trips", "items": ["With \"Sell ordinary gear from the character bag too\" on, the bot now sells your bag items at the repair merchant first, then moves the pet's loot into the freed slots and sells it.", "This fixes trips where a full bag left pet loot with no free slot, so nothing was sold.", "With that option off, nothing changes. Items the merchant refuses are still skipped, and the rest are sold."], "note": "Contributed by corevider (#94). Tested in simulation only, not in a live game."}, {"version": "1.2.221", "title": "Spare giants and party monsters near death", "items": ["New hunt option \"Spare engaged giant/party below % HP (0 = off)\", next to \"Avoid other players' targets\". The default is 50, and the highest value is 50.", "It applies when \"Avoided monsters\" is set to \"Normal & champion only\". A giant or party monster that another player is already fighting is now skipped once its health is at or below that percentage, because the drop is probably theirs by then. The bot goes for a fresh target instead.", "Above the cutoff, or when the monster's health is unknown, these monsters are still attacked as before. Elite, unique and titan monsters are not affected.", "Because the default is 50, existing characters on \"Normal & champion only\" will start sparing these monsters. Set it to 0 to turn this off."], "note": "Contributed by duan78 (#93). Tested in simulation only, not in a live game."}, {"version": "1.2.220", "title": "Pet loot now sells again on town trips", "items": ["Town trips no longer stall at the smith when your pet is carrying loot. The server refuses sales straight from the pet's bag, so the bot now moves each sellable pet item to a free slot in your own bag and sells it from there.", "If the server refuses a move, that item is skipped and the rest are still sold. If your bag has no free slot, the loot stays in the pet and the trip carries on.", "No new option; protected and valuable items are still left alone."], "note": "Contributed by duan78 (#92). Tested in simulation only, not in a live game."}];
 
 // Check trusted repository metadata; never execute downloaded update code.
 const Updates = {
@@ -17639,11 +17707,7 @@ const UI = {
         this.select('Recovery kit', () => [[0, 'Choose the merchant\'s pet kits'], ...C().offers.filter(o => o.kind === 'kit').map(o => [o.refObjId, o.name])], () => C().kit.refObjId, v => C().kit.refObjId = Number(v)),
         this.number('Kits low stock ≤', () => C().kit.low, v => C().kit.low = v, 0, 9999),
         this.number('Kits refill to', () => C().kit.target, v => C().kit.target = v, 1, 10000),
-        el('p', 'Pet recovery kits for the attack and pickup pets, bought on the same refill trips as the pet food; a merchant without them skips them with a notice. Using them is set under Automatic potion use.', 'muted'),
-        this.check('Buy Reverse Return Scrolls', () => C().reverse.on, v => C().reverse.on = v),
-        this.number('Reverse scrolls low stock ≤', () => C().reverse.low, v => C().reverse.low = v, 0, 999),
-        this.number('Reverse scrolls refill to', () => C().reverse.target, v => C().reverse.target = v, 1, 9999),
-        el('p', 'Refills Reverse Return Scrolls at the recorded merchant with gold; a merchant without them skips it with a notice (the trip can still walk back).', 'muted'));
+        el('p', 'Pet recovery kits for the attack and pickup pets, bought on the same refill trips as the pet food; a merchant without them skips them with a notice. Using them is set under Automatic potion use.', 'muted'));
       shop.append(el('p', 'Refill targets are total potion counts, including what is already in your bag. Used for low-supply, full-bag and revival trips, and walking-route restock when the town cycle is off. Set MP refill to 1000 for 1,000 MP potions. Changes apply to the next trip.', 'muted'));
       host.append(shop);
   },
@@ -17653,7 +17717,7 @@ const UI = {
       this.check('Buy from the Item mall', () => M().on, v => M().on = v),
       this.number('Silk budget per bot run (0 = never buy)', () => M().budgetSilk, v => M().budgetSilk = v, 0, 100000),
       this.mallNote = el('p', '', 'muted'),
-      el('p', 'The mall wallet is shared by every character on the account and nothing refills it in the game, so every purchase is bounded by the budget above and one order is in flight at a time. Orders land straight in the bag while hunting; they never interrupt combat or a town trip, and the merchant stays the primary supply. An unconfirmed order blocks mall buying until you re-enter the game (the game itself demands that resync).', 'muted'),
+      el('p', 'The switch above covers the potion bags and battle scrolls below. The mall wallet is shared by every character on the account and nothing refills it in the game, so every purchase is bounded by the budget above and one order is in flight at a time. Orders land straight in the bag while hunting; they never interrupt combat or a town trip, and the merchant stays the primary supply. An unconfirmed order blocks mall buying until you re-enter the game (the game itself demands that resync).', 'muted'),
       this.check('Buy HP potion bags when the total HP stock is low', () => M().hp.on, v => M().hp.on = v),
       this.number('HP low stock ≤', () => M().hp.low, v => M().hp.low = v, 0, 9999),
       this.number('HP refill to', () => M().hp.target, v => M().hp.target = v, 1, 100000),
@@ -17666,9 +17730,7 @@ const UI = {
       this.check('Buy 20% resistance scrolls', () => M().damageAbs.on, v => M().damageAbs.on = v),
       this.number('Resistance scrolls low stock ≤', () => M().damageAbs.low, v => M().damageAbs.low = v, 0, 999),
       this.number('Resistance scrolls refill to', () => M().damageAbs.target, v => M().damageAbs.target = v, 1, 9999),
-      this.check('Buy Reverse Return Scrolls here (the merchant with gold stays cheaper)', () => M().reverse.on, v => M().reverse.on = v),
-      this.number('Reverse scrolls low stock ≤', () => M().reverse.low, v => M().reverse.low = v, 0, 999),
-      this.number('Reverse scrolls refill to', () => M().reverse.target, v => M().reverse.target = v, 1, 9999),
+      el('p', 'Reverse Return Scrolls are set on the Town page, next to Back to the hunting spot. They use this silk budget.', 'muted'),
       el('p', 'Merchant first, mall second: keep these low marks BELOW the potion restock marks above and the merchant refills with gold while the mall only steps in when that was not enough. Raise a mark above the merchant one and the mall spends silk first instead — for wallets that can afford it. One bag or pack is bought per order and the delivered amount is measured from the inventory, so an unknown pack size only means another order. Prices come from the live catalogue, never from remembered addresses.', 'muted')),
       el('p', 'Keeping the scrolls active is set under Automatic potion use above; the switches here only refill the stock.', 'muted'));
   },
@@ -17682,7 +17744,7 @@ const UI = {
         ['mall_warehouse_ticket', 'Warehouse', () => town().storage ? 'saved' : 'not saved'],
         ['all_potion_03', 'Potions', () => town().vendor ? 'saved' : 'not saved'],
         ['mall_repair_hammer', 'Repair', () => town().smith ? 'saved' : 'not saved'],
-        ['mall_reverse_return_scroll', 'Way back', () => Town.walks() ? 'walks back' : count(0x19ec) ? count(0x19ec) + ' reverse in bag' : 'no reverse: walks back']]) {
+        ['mall_reverse_return_scroll', 'Way back', () => Town.walks() ? 'walks back' : count(0x19ec) ? count(0x19ec) + ' reverse in bag' : MallBuyer.reverseBlocked() ? 'no reverse: walks back' : 'buys one from the mall']]) {
         const step = el('li'), slot = el('span', null, 'skill-icon'), note = el('small', detail());
         slot.append(el('span', label[0], 'fallback')); Icons.paint(slot, `item\\etc\\${icon}.ddj`);
         step.append(slot, el('strong', label), note); flow.append(step);
@@ -17718,6 +17780,13 @@ const UI = {
       const services = this.group('Scroll town cycle',
         this.check('Use return scroll → town services → back to the hunting spot', () => town().enabled, v => { town().enabled = v; this.draw(); }),
         this.select('Back to the hunting spot', [['reverse', 'Reverse return scroll (walks when none is carried)'], ['walk', 'Walk']], () => town().returnBy, v => { town().returnBy = v; this.draw(); }),
+        ...(town().returnBy === 'walk' ? [] : [
+          this.check('Buy Reverse Return Scrolls from the Item mall (silk)', () => Settings.profile.mall.reverse.on, v => { Settings.profile.mall.reverse.on = v; this.draw(); }),
+          this.number('Silk budget per bot run (shared with the Item mall)', () => Settings.profile.mall.budgetSilk, v => Settings.profile.mall.budgetSilk = v, 0, 100000),
+          this.number('Reverse scrolls low stock ≤', () => Settings.profile.mall.reverse.low, v => Settings.profile.mall.reverse.low = v, 0, 999),
+          this.number('Reverse scrolls refill to', () => Settings.profile.mall.reverse.target, v => Settings.profile.mall.reverse.target = v, 1, 9999),
+          this.reverseNote = el('p', '', 'muted'),
+          el('p', 'No merchant sells Reverse Return Scrolls for gold; they come from the Item mall only. While hunting, the bot tops them up when the stock reaches the low mark. On a town trip without one, it buys one after the services, then reverses; if the mall cannot deliver (budget, silk, full bag), the trip walks back.', 'muted')]),
         this.check('Deposit SoX gear in the warehouse (character and pet bags)', () => town().storeSox, v => town().storeSox = v),
         this.check('Sell Star gear too (instead of depositing it)', () => town().sellStar, v => town().sellStar = v),
         this.check('Sell ordinary gear from the character bag too', () => town().sellBag, v => town().sellBag = v),
@@ -18187,6 +18256,10 @@ const UI = {
         ? MallBuyer.message + ' Spent ' + MallBuyer.spentSilk + ' silk this run; wallet ' + (World.gp?.itemMall?.silk ?? '—') + ' silk.'
         : 'Item mall buying off.';
       this.mallNote.textContent = this.mallNote.title = m();
+    }
+    if (this.is('Town') && this.reverseNote) {
+      const count = MallBuyer.count(MALL_REVERSE_REF), blocked = MallBuyer.reverseBlocked();
+      this.reverseNote.textContent = this.reverseNote.title = count + ' in bag. ' + (blocked || (MallBuyer.pending?.ref === MALL_REVERSE_REF ? MallBuyer.message : 'Ready to buy; ' + MallBuyer.spentSilk + ' of ' + MallBuyer.budget() + ' silk spent this run.'));
     }
     if (this.is('Supplies') && this.speedNote) this.speedNote.textContent = SpeedScroll.message;
     if (this.is('Supplies') && this.hammerNote) this.hammerNote.textContent = RepairHammer.message;

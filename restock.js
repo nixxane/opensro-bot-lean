@@ -72,7 +72,7 @@ const Restock = {
   unbuyable: new Set(),
   supplies() {
     const c = this.cfg();
-    return ['hp', 'mp', 'vigor', 'cure', 'hgp', 'kit', 'reverse']
+    return ['hp', 'mp', 'vigor', 'cure', 'hgp', 'kit']
       .filter(k => c[k].on && !this.unbuyable.has(c[k].refObjId) && ((k === 'hgp' || k === 'kit') ? c[k].refObjId > 0 : true))
       .map(k => ({ kind: k, ...c[k], ...(k === 'cure' ? { refObjId: 58 } : {}) }));
   },

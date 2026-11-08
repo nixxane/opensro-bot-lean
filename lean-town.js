@@ -382,7 +382,7 @@ const Town = {
     const inTown = this.inTown(revival);
     const origin = revival || inTown ? (reverseChoice === TOWN_REVERSE.death ? this.deathPoint || Hunt.cfg().center : this.lastScrollPoint || Hunt.cfg().center) : World.pose();
     if (!origin) return this.fail(inTown ? 'No saved hunting point to return to; set the hunting area first.' : 'No saved hunting point for revival return.');
-    if (!this.walks() && !this.scroll(0x19ec)) Log.info('No reverse return scroll: unless one is bought in town, the trip walks back to the hunting spot after the services.');
+    if (!this.walks() && !this.scroll(0x19ec)) Log.info(MallBuyer.reverseBlocked() ? 'No reverse return scroll: the trip walks back to the hunting spot after the services.' : 'No reverse return scroll: one is bought from the Item mall after the services.');
     if (revival) Hunt.running = true;
     Restock.trip = null;
     Resurrect.cancelTrip('', true); Resurrect.holdUntil = 0; Loot.suspend();
@@ -425,11 +425,23 @@ const Town = {
     const order = !sellFirst ? ['storage', 'vendor', 'smith', 'gate'] : full ? ['smith', 'storage', 'vendor', 'gate'] : ['storage', 'smith', 'vendor', 'gate'];
     return order.filter(role => (role !== 'storage' || this.cfg().storage) && (role !== 'gate' || !this.walks()));
   },
-  // The service to walk to after closing a window. After the last one: the world statue to reverse, or the walk back
-  // when no reverse scroll is carried (none was bought in town either).
+  // The service to walk to after closing a window. After the last one: the world statue to reverse; without a reverse
+  // scroll, first an Item mall purchase when that switch is on, otherwise the walk back.
   closeNext(phase) {
     const order = this.trip?.order || this.order(false), role = phase.replace(/^close-/, ''), next = order[order.indexOf(role) + 1] || 'gate';
-    return next === 'gate' && !this.reverses() ? 'leave' : 'walk-' + next;
+    if (next !== 'gate' || this.reverses()) return 'walk-' + next;
+    return !this.walks() && !this.trip?.recovery && !MallBuyer.reverseBlocked() ? 'mall-reverse' : 'leave';
+  },
+  // Standing in town with the services done and no reverse scroll: order one from the Item mall, then reverse.
+  // Anything that stops the purchase (no offer, budget, wallet, refusal, slow delivery) walks back instead.
+  mallReverse() {
+    const t = this.trip, result = MallBuyer.townReverse(t.at);
+    if (result === 'done' || this.reverses()) { Log.info('Town: Reverse Return Scroll bought from the Item mall.'); this.enter('walk-gate'); return; }
+    if (result === 'wait') { this.message = 'Buying a Reverse Return Scroll from the Item mall.'; return; }
+    this.message = result + ' Walking back to the hunting spot.';
+    Log.info('Town: ' + this.message);
+    UI.toast(this.message, 'warn', 6000);
+    this.enter('leave');
   },
   // A supply the merchant does not sell, or the gold did not cover, was skipped on purpose and is not a reason to stop.
   supplyShort(t) { return t.supplies.some(s => !t.buySkipped?.includes(s.refObjId) && Restock.count(s.refObjId) < s.target); },
@@ -973,6 +985,7 @@ const Town = {
     else if (t.phase === 'ammo') this.ammo();
     else if (t.phase === 'repair') this.repair();
     else if (t.phase === 'leave') this.leave();
+    else if (t.phase === 'mall-reverse') this.mallReverse();
     else if (t.phase.startsWith('close-')) {
       if (now() - t.at > 15000) this.fail('NPC window did not close.');
       else this.close(this.closeNext(t.phase));
