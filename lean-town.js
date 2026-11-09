@@ -527,7 +527,12 @@ const Town = {
     const t = this.trip, pose = World.pose();
     // Permit a reachable nearby approach, but always stay in service range.
     const radius = Math.max(0, Math.min(60, 190 - dist2D(dest, dest.npc || dest)));
-    if (dist2D(pose, dest) <= Math.max(12, radius) && dist2D(pose, dest.npc || dest) <= 200) return true;
+    if (dist2D(pose, dest) <= Math.max(12, radius) && dist2D(pose, dest.npc || dest) <= 200) {
+      // A spot that replaced a blocked saved one and got the character here is kept for the next trips.
+      const role = t.phase.slice(5), swapped = t.stand?.[role];
+      if (swapped && dest === swapped && this.cfg()[role]) { this.cfg()[role] = { ...swapped }; Settings.saveProfile(); Log.info('Town: the saved spot of the ' + this.role(t.phase) + ' was replaced by one that works.'); }
+      return true;
+    }
     if (!Number.isFinite(dist2D(pose, dest))) { this.fail('Town service is in another world.'); return false; }
     if (!t.lastPose || dist2D(t.lastPose, pose) > 3) { t.lastPose = { ...pose }; t.progressAt = now(); }
     if (now() < t.retryAt) return false;
@@ -538,6 +543,13 @@ const Town = {
     }
     if (!World.isSitting() && Navigation.watch(t, pose, t.movedAt, t.travel?.route[t.travel.index] || dest) === 'giveup') {
       if (this.viaArrival()) return false;
+      const role = t.phase.slice(5);
+      if (role !== 'arrival' && this.nextStand(role, dest)) {
+        t.travel = null; t.stall = null; t.avoid = []; t.progressAt = now();
+        this.message = 'Town movement to the ' + this.role(t.phase) + ': blocked, trying another spot beside the merchant.';
+        Log.info(this.message); UI.toast(this.message, 'warn', 4000);
+        return false;
+      }
       // The warehouse is optional: a blocked walk to it skips the deposit so the potions, repairs and the way back still happen.
       if (t.phase === 'walk-storage') {
         this.enter(this.closeNext('close-storage'));
@@ -562,7 +574,29 @@ const Town = {
     return false;
   },
   // A saved service, or a merchant only this trip visits (zero-setup leveling's armour and accessory merchants).
-  point(role) { return this.cfg()[role] || this.trip?.shops?.[role] || null; },
+  point(role) { return this.trip?.stand?.[role] || this.cfg()[role] || this.trip?.shops?.[role] || null; },
+  // The standing point of a service was blocked (the saved one can be a spot the first trip never verified, inside a
+  // forge or a fence): try another place around the merchant, nearest to the way in first, a few times, before giving up.
+  // Returns true when there is a new point to walk to. One that gets the character to the merchant is saved.
+  nextStand(role, dest) {
+    const t = this.trip, npc = dest.npc || dest, tried = (t.tried ||= {})[role] ||= [{ ...dest }];
+    if (tried.length > 6) return false;
+    const from = this.cfg().arrival || World.pose(), toward = regionDelta(npc, from) || [1, 0], base = Math.atan2(toward[1], toward[0]);
+    let pick = null;
+    for (const distance of [30, 50, 70, 90]) for (const turn of [0, 0.5, -0.5, 1, -1, 1.5, -1.5, 2, -2, 2.5, -2.5, Math.PI]) {
+      const angle = base + turn, x = npc.x + Math.cos(angle) * distance, z = npc.z + Math.sin(angle) * distance;
+      const sx = Math.floor(x / SECTOR), sz = Math.floor(z / SECTOR);
+      const point = { regionId: ((npc.regionId & 255) + sx) | (((npc.regionId >>> 8) + sz) << 8), x: x - sx * SECTOR, y: npc.y, z: z - sz * SECTOR };
+      if (tried.some(p => dist2D(p, point) < 30)) continue;
+      const local = Navigation.scene && Navigation.local(point);
+      if (local && !Navigation.open(local.x, local.z)) continue;
+      pick = point; break;
+    }
+    if (!pick) return false;
+    tried.push(pick);
+    (t.stand ||= {})[role] = { ...dest, ...pick, npc: { ...npc } };
+    return true;
+  },
   serviceEntity(role, entity) { return !!entity && (entity.kind === 'npc' || role === 'gate' && entity.kind === 'teleport'); },
   npc(role) {
     const saved = this.point(role);

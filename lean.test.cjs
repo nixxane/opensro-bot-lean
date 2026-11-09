@@ -5499,10 +5499,26 @@ test('a warehouse walk that cannot get around an obstacle is skipped, other serv
   const f = townFixture(); f.Town.begin(); f.Town.enter('walk-storage'); f.World.gp.pose.x = 50;
   f.Navigation.watch = () => 'giveup';
   f.Town.tick();
+  assert.equal(f.Town.trip.phase, 'walk-storage', 'first another spot beside the merchant is tried'); assert.ok(f.Town.trip.stand.storage);
+  f.Town.trip.tried.storage.length = 7; delete f.Town.trip.stand.storage; // the other spots tried too
+  f.Town.tick();
   assert.ok(f.Town.trip, 'the trip carries on'); assert.equal(f.Town.trip.phase, 'walk-vendor');
   const g = townFixture(); g.Town.begin(); g.Town.enter('walk-vendor'); g.World.gp.pose.x = 50;
   g.Navigation.watch = () => 'giveup';
-  g.Town.tick(); assert.equal(g.Town.trip, null); assert.match(g.Town.message, /Blocked on the way to the potion merchant/);
+  g.Town.tick(); g.Town.trip.tried.vendor.length = 7; delete g.Town.trip.stand.vendor; g.Town.tick();
+  assert.equal(g.Town.trip, null); assert.match(g.Town.message, /Blocked on the way to the potion merchant/);
+});
+test('a blocked standing point is replaced by another beside the merchant, and the one that works is saved', () => {
+  const f = townFixture(), original = { ...f.Town.cfg().vendor };
+  f.Town.begin(); f.Town.enter('walk-vendor'); f.World.gp.pose.x = 50;
+  f.Navigation.watch = () => 'giveup';
+  f.Town.tick();
+  const swapped = f.Town.trip.stand.vendor;
+  assert.ok(swapped && (swapped.x !== original.x || swapped.z !== original.z), 'a different spot');
+  assert.equal(swapped.refObjId, original.refObjId, 'the same merchant');
+  f.Navigation.watch = () => ''; f.World.gp.pose = { ...f.World.gp.pose, regionId: swapped.regionId, x: swapped.x, y: swapped.y, z: swapped.z };
+  f.Town.tick();
+  assert.equal(f.Town.cfg().vendor.x, swapped.x, 'the spot that works is kept for the next trips');
 });
 test('town movement retries blocked routes at intervals and remains cancellable', () => {
   const f = townFixture(); f.Town.begin(); f.Town.enter('walk-storage'); f.World.gp.pose.x = 50;
@@ -7441,7 +7457,9 @@ test('a town walk that is stuck goes to the town start first, then on to the ser
   assert.equal(f.Town.trip.phase, 'walk-arrival'); assert.match(f.Town.message, /no way to the warehouse from here; going to the town start first/);
   f.World.gp.pose.x = 100; f.Town.tick(); assert.equal(f.Town.trip.phase, 'walk-storage', 'at the town start it heads for the service again');
   f.World.gp.pose.x = 40; stuck = 1; f.Town.tick();
-  assert.equal(f.Town.trip.phase, 'walk-vendor', 'stuck again on the same walk: the old fallback, no second detour');
+  assert.equal(f.Town.trip.phase, 'walk-storage', 'stuck again: another spot beside the merchant, no second detour');
+  f.Town.trip.tried.storage.length = 7; delete f.Town.trip.stand.storage; stuck = 1; f.Town.tick();
+  assert.equal(f.Town.trip.phase, 'walk-vendor', 'every spot tried: the old fallback');
   const g = townFixture(); g.Town.begin(); g.Town.enter('walk-vendor');
   let plans = 0; g.Navigation.next = () => { plans++; return { error: 'No walkable route found.' }; };
   for (let i = 0; i < 6; i++) { g.advance(100); g.Town.tick(); }
