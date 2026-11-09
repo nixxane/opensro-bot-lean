@@ -292,6 +292,9 @@ const Town = {
   },
   // Whether a trip could empty any of the pet's slots (sell or store something). A pet full of protected items would
   // otherwise send the bot to town again and again for nothing.
+  // Bag selling is always on for zero-setup leveling: its bag fills with spare gear, and a full bag leaves no room for the
+  // pet's loot to pass through on its way to the merchant or the warehouse (the trip used to stop: "free a character bag slot").
+  sellsBag() { return !!this.cfg().sellBag || !!Leveling.cfg().on; },
   petClearable(pet) { return pet.rec.inventory.some(i => this.sellable(i) || this.eligible(i)); },
   autoRevive() { return this.cfg().enabled && this.cfg().revive; },
   // A dead companion waits in the bag as its summoner item with summon state 4; a Grass of life
@@ -397,7 +400,7 @@ const Town = {
     this.trip = { phase: 'recall', at: now(), started: now(), origin: { ...origin }, revival, inTown, reverseChoice, why,
       huntArea: (revival || inTown) && !(reverseChoice === TOWN_REVERSE.death && this.deathPoint) && Hunt.cfg().center ? { center: { ...Hunt.cfg().center }, radius: Hunt.cfg().radius } : null,
       manualAt: Manual.lastAt, character: World.charName, petRef: Loot.pet()?.rec.refObjId,
-      config: JSON.stringify(this.cfg()), leveling: !!Leveling.cfg().on, supplies: this.supplies(), sellFirst: !!this.cfg().sellBag };
+      config: JSON.stringify(this.cfg()), leveling: !!Leveling.cfg().on, supplies: this.supplies(), sellFirst: this.sellsBag() };
     Leveling.begin(this.trip);
     Hunt.targetGid = Hunt.lootGid = 0;
     // Bag selling reads codenames from the item catalogue: start loading it now, well before the merchant.

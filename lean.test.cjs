@@ -3859,7 +3859,7 @@ test('a gear plan starts one town trip and visits the armour merchant before the
   f.Town.begin();
   assert.deepEqual([...f.Town.trip.gear.map(w => w.row[0])], [74, 396, 400]);
   f.Town.arrived();
-  assert.deepEqual([...f.Town.trip.order], ['vendor', 'smith', 'armor'], 'the armour merchant is the last stop: leveling walks back, so there is no statue; nothing to store, so no warehouse');
+  assert.deepEqual([...f.Town.trip.order], ['smith', 'vendor', 'armor'], 'leveling sells the bag first (the weapon merchant), the armour merchant is the last stop: leveling walks back, so there is no statue; nothing to store, so no warehouse');
   assert.equal(f.Town.point('armor').refObjId, 640, 'its place comes from the game data, not from the saved town');
   assert.equal(f.Town.cfg().armor, undefined, 'and nothing is saved in the town settings');
   f.Town.trip = null; f.Leveling.checkAt = 0;
@@ -9173,4 +9173,16 @@ test('a character leveling before this update gets the elements once, only if it
   f.Settings.profile.mastery.ids = [259]; f.Settings.profile.leveling.elements = '';
   f.advance(6000); f.Leveling.skillTick();
   assert.deepEqual([...f.Settings.profile.mastery.ids], [259], 'the player\'s own list is left alone');
+});
+
+test('zero-setup leveling sells the bag first, so a full bag no longer stops the trip and the pet can be emptied', () => {
+  let f = townFixture(); f.World.freeBagSlots = () => 0;
+  assert.equal(f.Town.cfg().sellBag, false);
+  f.Town.begin(); f.Town.arrived();
+  assert.equal(f.Town.trip, null, 'leveling off: unchanged, the full bag stops the trip');
+  assert.match(f.Town.message, /free a character bag slot/);
+  f = townFixture(); f.World.freeBagSlots = () => 0; f.Settings.profile.leveling.on = true;
+  f.Town.begin(); assert.equal(f.Town.trip.sellFirst, true);
+  f.Town.arrived();
+  assert.ok(f.Town.trip, f.Town.message); assert.equal(f.Town.trip.phase, 'walk-smith', 'the merchant first: it frees the bag for the pet loot');
 });
