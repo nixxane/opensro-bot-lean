@@ -11,7 +11,7 @@
 // armour or accessory socket is filled. Purchases happen on any town trip, in the shop, one confirmed transaction at a
 // time; the new piece is worn at once and the old one sold back there. A plan the town can pay for starts a trip by
 // itself, once per plan.
-const LEVEL_SPOT_BELOW = 5, LEVEL_SPOT_ABOVE = 2, LEVEL_SPOT_KEEP = 2, LEVEL_GEAR_MAX_PLUS = 3, LEVEL_GEAR_CHECK_MS = 20000;
+const LEVEL_SPOT_REACH_M = 5000, LEVEL_SPOT_BELOW = 5, LEVEL_SPOT_ABOVE = 2, LEVEL_SPOT_KEEP = 2, LEVEL_GEAR_MAX_PLUS = 3, LEVEL_GEAR_CHECK_MS = 20000;
 // Equipment sockets by TID4 (OpenSRO inventory/slots.go, native sub_594980): armour parts and accessories.
 // The mastery each weapon type trains (TID4 of the weapon; OpenSRO masteries 257-276 Chinese, 513-518 European), and the
 // European masteries that fight with Intelligence.
@@ -40,17 +40,17 @@ const Leveling = {
   spot(level) {
     const home = this.home();
     if (!home || !Number.isInteger(level)) return null;
-    const base = clamp(Number(this.cfg().maxM) || 400, 50, 5000);
+    // Reach: no distance limit where the game's route data covers both the town and the spot (one connected area: the
+    // walk is long but it is a walk, and the score already weighs a level far above distance). Without route data for it,
+    // up to LEVEL_SPOT_REACH_M, so a spot on another continent is never picked. Few towns have a spot at every level
+    // within 400 m (Jangan's level 5 one is 407 m away, its level 8 one 903 m).
+    const far = LEVEL_SPOT_REACH_M * 10, routes = Route.areas?.length > 0;
     // above: when nothing at or below the level is in reach (a new character), the nearest few levels up.
     let best = null, fallback = null, above = null;
-    // Reach: 4 times the chosen distance (at most 5 km). Few towns have a spot at every level within 400 m (Jangan's
-    // level 5 one is 407 m away, its level 8 one 903 m), and the score already weighs a level above distance, so a
-    // level 5 character does not stay on the level 2 spot beside the town.
-    const far = Math.min(base * 4, 5000) * 10;
     for (const s of this.spots) {
       if (s[4] > level + LEVEL_SPOT_ABOVE || this.skipped.has(this.key(s))) continue;
       const center = { regionId: s[0], x: s[1], y: s[2], z: s[3] }, d = dist2D(home, center);
-      if (!(d <= far)) continue;
+      if (!(d <= far) && !(Number.isFinite(d) && routes && Route.commonArea(home, center))) continue;
       const pick = { level: s[4], center, key: this.key(s), auto: true, score: s[4] * 400 + Math.min(s[7], 12) * 40 - d / 30 };
       if (s[4] > level) { pick.score = -s[4] * 400 + Math.min(s[7], 12) * 40 - d / 30; if (!above || pick.score > above.score) above = pick; continue; }
       if (s[4] < level - LEVEL_SPOT_BELOW) { if (!fallback || pick.score > fallback.score) fallback = pick; continue; }
@@ -360,7 +360,6 @@ const Leveling = {
       el('p', 'For levelling a character with no setup: the bot picks a hunting spot for your level from the game data, moves on as you level, and buys the next tier of weapon, armour and accessories from the town merchants on its town trips. Nothing better than ordinary +' + LEVEL_GEAR_MAX_PLUS + ' gear is ever replaced or sold. It can also raise your weapon\'s mastery, learn its skills, put new attack skills and buffs to use and spend stat points (Strength, or Intelligence for a caster); what you already set up there is kept.', 'muted'),
       UI.check('Level up by itself', () => c().on, v => this.enable(v)),
       UI.check('Pick hunting spots for my level', () => c().spots, v => { c().spots = v; this.reset(); }),
-      UI.number('Spots at most this far from town (m)', () => c().maxM, v => { c().maxM = v; this.reset(); }, 50, 5000, 50),
       UI.check('Buy better gear from the town merchants', () => c().gear, v => { c().gear = v; }),
       UI.check('Also buy earrings, necklaces and rings', () => c().accessories, v => { c().accessories = v; }),
       UI.check('Sell the replaced piece back', () => c().sellOld, v => { c().sellOld = v; }),

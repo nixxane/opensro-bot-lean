@@ -3728,10 +3728,13 @@ test('zero-setup leveling picks a spot for the level from the game data, keeps i
   assert.equal(pick.center.x, 400, 'more spawns and nearer win between equal levels');
   f.Leveling.reset();
   assert.equal(f.Leveling.spot(3), null, 'nothing under the lowest spot');
-  f.Settings.profile.leveling.maxM = 50; f.Town.cfg().arrival = { regionId: 1, x: 100, y: 0, z: 5000 };
+  f.Town.cfg().arrival = { regionId: 7681, x: 100, y: 0, z: 100 }; // about 5.7 km from every spot, no route data
   f.Leveling.reset();
-  assert.equal(f.Leveling.spot(10), null, 'spots beyond the distance limit are never used');
-  f.Settings.profile.leveling.maxM = 400; f.Town.cfg().arrival = { regionId: 1, x: 100, y: 0, z: 100 }; f.Leveling.reset();
+  assert.equal(f.Leveling.spot(10), null, 'spots beyond the reach are not used without route data');
+  f.Route.setAreas([{ name: 'x', nodes: 1 }]); f.Route.commonArea = () => ({ name: 'x' });
+  assert.equal(f.Leveling.spot(10).level, 9, 'inside one route area there is no distance limit');
+  f.Route.setAreas([]); f.Route.commonArea = () => null;
+  f.Town.cfg().arrival = { regionId: 1, x: 100, y: 0, z: 100 }; f.Leveling.reset();
   f.Hunt.start();
   f.advance(4000);
   assert.equal(f.LevelSpot.tick(), true, 'the spot is applied with the level spot rules');
@@ -9165,10 +9168,8 @@ test('a level 5 character takes the level 5 spot just outside 400 m, not the lev
   f.Leveling.reset();
   assert.equal(f.Leveling.spot(2).level, 2, 'a level 2 character still takes the nearby spot');
   f.Leveling.reset();
-  f.Leveling.spots = [[1, 300, 0, 300, 2, 2, 2, 9], [2561, 100, 0, 600, 5, 5, 5, 9]]; // about 1.8 km: beyond 4 times 400 m
-  assert.equal(f.Leveling.spot(5).level, 2, 'nothing in the widened range: the old fallback');
-  f.Leveling.reset(); f.Settings.profile.leveling.maxM = 1000;
-  assert.equal(f.Leveling.spot(5).level, 5, 'a larger chosen distance reaches it too');
+  f.Leveling.spots = [[1, 300, 0, 300, 2, 2, 2, 9], [7681, 100, 0, 600, 5, 5, 5, 9]]; // about 5.7 km: beyond the reach without route data
+  assert.equal(f.Leveling.spot(5).level, 2, 'nothing in reach: the old fallback');
 });
 test('zero-setup leveling puts a learned imbue in the imbue slot once, and a mage also gets Cold, Lightning and Fire', () => {
   const f = levelingSkillFixture(11);
