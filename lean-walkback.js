@@ -74,18 +74,40 @@ const WalkBack = {
     const check = RouteCheck.available();
     let planned = null;
     if (!check) { try { planned = Route.plan(pose, dest); } catch { planned = null; } }
-    if (planned) return this.useNav(planned, pose);
+    if (planned) { if (this.ferry(planned)) return; return this.useNav(planned, pose); }
     const a = this.active, token = {};
     a.plan = { at: now(), token, limit: check ? CHECK_MS + 5000 : WALK_PLAN_MS };
     a.source = 'planning';
     Log.info('Route: loading navdata for ' + routeArea.name + (check ? ' and checking it against the game map.' : '.'));
-    Route.checked(pose, dest).then(next => {
+    // A ferry is weighed first, from the route areas of both ends (one area's box can hold both banks of a river), so a
+    // spot across the water does not wait for, or walk, a corridor check the long way round.
+    (Travel.on() ? Travel.load(pose, dest) : Promise.resolve()).then(() => {
+      if (this.active !== a || a.plan?.token !== token || this.ferry(undefined)) return null;
+      return Route.checked(pose, dest);
+    }).then(next => {
       if (this.active !== a || a.plan?.token !== token) return;
+      if (this.ferry(next)) return;
       if (next) this.useNav(next, World.pose());
       else this.useLegs();
     }, () => {
       if (this.active === a && a.plan?.token === token) this.useLegs();
     });
+  },
+  // The route data can join two banks of a river only the long way round, or not at all (live: from Jangan to the west
+  // bank it went north into the Water Ghost Marshland, which has no way across). With the real walk known, a ferry or
+  // teleport that is cheaper takes over the walk, with this walk's own arrival and failure handlers.
+  // route: the planned walk (null: none walks; undefined: not planned yet, the route areas alone decide).
+  ferry(route) {
+    const a = this.active, pose = World.pose();
+    // Auto trade walks with its transport, which no teleport or ferry takes: it keeps its own walks.
+    if (!a || !pose || !Travel.on() || Travel.active || Trade.run) return false;
+    const walk = route === undefined ? null : route?.length ? route.length + (dist2D(route.points[route.points.length - 1], a.destination) || 0) : Infinity;
+    const steps = Travel.plan(pose, a.destination, new Set(), Travel.walks(pose, a.destination, walk));
+    if (!steps?.some(s => s.kind === 'hop')) return false;
+    Log.info('Route: ' + (Number.isFinite(walk) ? 'the walk is ' + Math.round(walk / 10) + ' m the long way round' : 'no walk reaches it') + '; taking a ferry or teleport instead.');
+    if (route === undefined) a.plan = null;
+    this.active = null;
+    return Travel.start(steps, a.destination, a.resume, a.onDone || a.onFail ? { label: a.label, onDone: a.onDone, onFail: a.onFail } : {});
   },
   cancel(reason = '', halt = true) {
     if (!this.active) return;

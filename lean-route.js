@@ -5,6 +5,7 @@
 // falls back to the leg chaining in WalkBack.
 const ROUTE_PAD = 800;        // internal units outside an area's bounds still snap
 const ROUTE_SNAP = 900;       // farthest start/end snap to a graph node
+const ROUTE_REACH_SNAP = 3000; // the same for reach(): a hunting spot can sit in open ground far from the corridors
 const ROUTE_SPACING = 150;    // thinned waypoint spacing
 const ROUTE_SEGMENT = 450;    // never skip a longer gap, so local A* stays cheap
 const ROUTE_VISITED = 150000;
@@ -238,6 +239,55 @@ const Route = {
       }
     }
     return null;
+  },
+  // Walking distance through a loaded route area from one point to any other point in it: a function of the other point
+  // that gives the distance, Infinity when no path joins them (or the point has no route node near it although the area's
+  // box holds it: then it lies across a river or a cliff from this area's walkable ground), or null when the point is
+  // outside the area's box. One Dijkstra over the area per call. Travel weighs a walk against a ferry with it: an area's
+  // box can hold both banks of a river, joined only the long way round or not at all.
+  // meta defaults to from's own area. null when from itself has no route node near it or the area is not loaded.
+  reach(from, meta = this.areaFor(from)) {
+    const area = meta && this.cache.get(meta.name), here = this.absolute(from);
+    if (!area || !here) return null;
+    const graph = this.graph(area), start = this.nearest(graph, here.x, here.z, ROUTE_REACH_SNAP);
+    if (!start) return null;
+    const banned = this.banned.get(meta.name), dist = new Float64Array(graph.count).fill(Infinity), heap = [];
+    const push = (d, node) => {
+      heap.push([d, node]);
+      for (let i = heap.length - 1; i;) { const up = (i - 1) >> 1; if (heap[up][0] <= heap[i][0]) break; [heap[up], heap[i]] = [heap[i], heap[up]]; i = up; }
+    };
+    const pop = () => {
+      const top = heap[0], last = heap.pop();
+      if (heap.length) {
+        heap[0] = last;
+        for (let i = 0; ;) {
+          const l = i * 2 + 1, r = l + 1; let m = i;
+          if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
+          if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
+          if (m === i) break;
+          [heap[i], heap[m]] = [heap[m], heap[i]]; i = m;
+        }
+      }
+      return top;
+    };
+    dist[start.node] = 0; push(0, start.node);
+    while (heap.length) {
+      const [d, node] = pop();
+      if (d > dist[node]) continue;
+      for (let k = graph.offsets[node]; k < graph.offsets[node + 1]; k++) {
+        const next = graph.neighbours[k];
+        if (banned?.has(node + '>' + next)) continue;
+        const value = d + Math.hypot(graph.x[next] - graph.x[node], graph.z[next] - graph.z[node]);
+        if (value < dist[next]) { dist[next] = value; push(value, next); }
+      }
+    }
+    const covers = p => p.x >= meta.minX - ROUTE_PAD && p.x <= meta.maxX + ROUTE_PAD && p.z >= meta.minZ - ROUTE_PAD && p.z <= meta.maxZ + ROUTE_PAD;
+    return to => {
+      const there = this.absolute(to);
+      if (!there || !covers(there)) return null;
+      const end = this.nearest(graph, there.x, there.z, ROUTE_REACH_SNAP);
+      return end ? dist[end.node] + start.distance + end.distance : Infinity;
+    };
   },
   pose(x, z, y) {
     const rx = Math.floor(x / SECTOR), rz = Math.floor(z / SECTOR);

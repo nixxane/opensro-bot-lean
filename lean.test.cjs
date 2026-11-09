@@ -4881,6 +4881,40 @@ function travelFixture() {
   f.Settings.profile.hunt.center = { ...spot };
   return { ...f, near, far, spot };
 }
+test('both banks in one route area: a walk the long way round, or none, gives way to the ferry (live: Jangan, north into the Water Ghost Marshland)', () => {
+  const f = travelFixture();
+  f.Travel.walkable = () => true; // the route area's box holds both banks
+  const walk = (route, opts) => { f.Travel.active = null; f.WalkBack.active = { destination: { ...f.spot }, resume: true, label: 'the hunting spot', ...opts }; return f.WalkBack.ferry(route); };
+  assert.equal(walk({ length: 900, points: [{ ...f.spot }] }), false, 'a walk about as long as the straight line stays a walk');
+  assert.equal(f.Travel.active, null);
+  assert.equal(walk({ length: 60000, points: [{ ...f.spot }] }), true, 'a long detour takes the ferry');
+  assert.equal(f.Travel.active.steps.map(x => x.kind).join(), 'walk,hop,walk');
+  assert.equal(walk(null), true, 'no walk found at all: the ferry');
+  let done = 0, failed = '';
+  assert.equal(walk(null, { label: 'the Donwhang world statue', resume: false, onDone: () => done++, onFail: r => { failed = r; } }), true);
+  const a = f.Travel.active;
+  assert.equal(a.label, 'the Donwhang world statue');
+  a.index = a.steps.length; f.Travel.next();
+  assert.equal(done, 1, 'the caller hears of the arrival');
+  walk(null, { onDone: () => {}, onFail: r => { failed = r; } }); f.Travel.fail('the ferry refused');
+  assert.match(failed, /ferry refused/, 'and of a failure');
+  f.Settings.profile.hunt.travel = false;
+  assert.equal(walk(null), false, 'travel switched off: never');
+});
+test('real route data: the level 21 spot west of Jangan is reached by the China East Ferry, not on foot or by the statue', () => {
+  const fs = require('fs'), path = require('path');
+  const f = fixture(); f.World.gp.progression.gold = '100000';
+  for (const m of f.Route.areas) f.Route.cache.set(m.name, f.Route.decode(fs.readFileSync(path.join(__dirname, 'navdata-lean', m.file)), m));
+  const ch = f.Town.towns.find(t => t.key === 'CH');
+  f.Town.cfg().arrival = { ...ch.arrival }; f.Settings.profile.leveling.on = true;
+  const spot = f.Leveling.spot(21).center, walks = f.Travel.walks(ch.arrival, spot);
+  assert.equal(walks.from(spot), Infinity, 'no walk joins Jangan and the spot, although one route area box holds both');
+  const steps = f.Travel.plan(ch.arrival, spot, new Set(), walks);
+  assert.equal(steps.map(x => x.kind === 'hop' ? x.from.id + '>' + x.to.id : x.kind).join(), 'walk,3>9,walk', 'the 500 gold ferry, not the 5000 gold statue');
+  f.Leveling.current = null;
+  const near = f.Leveling.spot(16).center;
+  assert.equal(f.Travel.plan(ch.arrival, near, new Set(), f.Travel.walks(ch.arrival, near)).map(x => x.kind).join(), 'walk', 'a spot on foot stays a walk');
+});
 test('travel walks to the teleporter, opens its menu, hops, walks on and resumes hunting', () => {
   const f = travelFixture(), gp = f.World.gp;
   f.WalkBack.start(true);

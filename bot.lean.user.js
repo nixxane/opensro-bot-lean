@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         nixxane bot
 // @namespace    https://opensro.online/
-// @version      1.2.246
+// @version      1.2.247
 // @updateURL    https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.meta.js
 // @downloadURL  https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -22,7 +22,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[NIX] Another SRO assistant is active. Disable it and reload to use NIX.');
   return;
 }
-const VERSION = '1.2.246';
+const VERSION = '1.2.247';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -5387,6 +5387,7 @@ const NAVDATA_AREAS = [
 // falls back to the leg chaining in WalkBack.
 const ROUTE_PAD = 800;        // internal units outside an area's bounds still snap
 const ROUTE_SNAP = 900;       // farthest start/end snap to a graph node
+const ROUTE_REACH_SNAP = 3000; // the same for reach(): a hunting spot can sit in open ground far from the corridors
 const ROUTE_SPACING = 150;    // thinned waypoint spacing
 const ROUTE_SEGMENT = 450;    // never skip a longer gap, so local A* stays cheap
 const ROUTE_VISITED = 150000;
@@ -5620,6 +5621,55 @@ const Route = {
       }
     }
     return null;
+  },
+  // Walking distance through a loaded route area from one point to any other point in it: a function of the other point
+  // that gives the distance, Infinity when no path joins them (or the point has no route node near it although the area's
+  // box holds it: then it lies across a river or a cliff from this area's walkable ground), or null when the point is
+  // outside the area's box. One Dijkstra over the area per call. Travel weighs a walk against a ferry with it: an area's
+  // box can hold both banks of a river, joined only the long way round or not at all.
+  // meta defaults to from's own area. null when from itself has no route node near it or the area is not loaded.
+  reach(from, meta = this.areaFor(from)) {
+    const area = meta && this.cache.get(meta.name), here = this.absolute(from);
+    if (!area || !here) return null;
+    const graph = this.graph(area), start = this.nearest(graph, here.x, here.z, ROUTE_REACH_SNAP);
+    if (!start) return null;
+    const banned = this.banned.get(meta.name), dist = new Float64Array(graph.count).fill(Infinity), heap = [];
+    const push = (d, node) => {
+      heap.push([d, node]);
+      for (let i = heap.length - 1; i;) { const up = (i - 1) >> 1; if (heap[up][0] <= heap[i][0]) break; [heap[up], heap[i]] = [heap[i], heap[up]]; i = up; }
+    };
+    const pop = () => {
+      const top = heap[0], last = heap.pop();
+      if (heap.length) {
+        heap[0] = last;
+        for (let i = 0; ;) {
+          const l = i * 2 + 1, r = l + 1; let m = i;
+          if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
+          if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
+          if (m === i) break;
+          [heap[i], heap[m]] = [heap[m], heap[i]]; i = m;
+        }
+      }
+      return top;
+    };
+    dist[start.node] = 0; push(0, start.node);
+    while (heap.length) {
+      const [d, node] = pop();
+      if (d > dist[node]) continue;
+      for (let k = graph.offsets[node]; k < graph.offsets[node + 1]; k++) {
+        const next = graph.neighbours[k];
+        if (banned?.has(node + '>' + next)) continue;
+        const value = d + Math.hypot(graph.x[next] - graph.x[node], graph.z[next] - graph.z[node]);
+        if (value < dist[next]) { dist[next] = value; push(value, next); }
+      }
+    }
+    const covers = p => p.x >= meta.minX - ROUTE_PAD && p.x <= meta.maxX + ROUTE_PAD && p.z >= meta.minZ - ROUTE_PAD && p.z <= meta.maxZ + ROUTE_PAD;
+    return to => {
+      const there = this.absolute(to);
+      if (!there || !covers(there)) return null;
+      const end = this.nearest(graph, there.x, there.z, ROUTE_REACH_SNAP);
+      return end ? dist[end.node] + start.distance + end.distance : Infinity;
+    };
   },
   pose(x, z, y) {
     const rx = Math.floor(x / SECTOR), rz = Math.floor(z / SECTOR);
@@ -5948,18 +5998,40 @@ const WalkBack = {
     const check = RouteCheck.available();
     let planned = null;
     if (!check) { try { planned = Route.plan(pose, dest); } catch { planned = null; } }
-    if (planned) return this.useNav(planned, pose);
+    if (planned) { if (this.ferry(planned)) return; return this.useNav(planned, pose); }
     const a = this.active, token = {};
     a.plan = { at: now(), token, limit: check ? CHECK_MS + 5000 : WALK_PLAN_MS };
     a.source = 'planning';
     Log.info('Route: loading navdata for ' + routeArea.name + (check ? ' and checking it against the game map.' : '.'));
-    Route.checked(pose, dest).then(next => {
+    // A ferry is weighed first, from the route areas of both ends (one area's box can hold both banks of a river), so a
+    // spot across the water does not wait for, or walk, a corridor check the long way round.
+    (Travel.on() ? Travel.load(pose, dest) : Promise.resolve()).then(() => {
+      if (this.active !== a || a.plan?.token !== token || this.ferry(undefined)) return null;
+      return Route.checked(pose, dest);
+    }).then(next => {
       if (this.active !== a || a.plan?.token !== token) return;
+      if (this.ferry(next)) return;
       if (next) this.useNav(next, World.pose());
       else this.useLegs();
     }, () => {
       if (this.active === a && a.plan?.token === token) this.useLegs();
     });
+  },
+  // The route data can join two banks of a river only the long way round, or not at all (live: from Jangan to the west
+  // bank it went north into the Water Ghost Marshland, which has no way across). With the real walk known, a ferry or
+  // teleport that is cheaper takes over the walk, with this walk's own arrival and failure handlers.
+  // route: the planned walk (null: none walks; undefined: not planned yet, the route areas alone decide).
+  ferry(route) {
+    const a = this.active, pose = World.pose();
+    // Auto trade walks with its transport, which no teleport or ferry takes: it keeps its own walks.
+    if (!a || !pose || !Travel.on() || Travel.active || Trade.run) return false;
+    const walk = route === undefined ? null : route?.length ? route.length + (dist2D(route.points[route.points.length - 1], a.destination) || 0) : Infinity;
+    const steps = Travel.plan(pose, a.destination, new Set(), Travel.walks(pose, a.destination, walk));
+    if (!steps?.some(s => s.kind === 'hop')) return false;
+    Log.info('Route: ' + (Number.isFinite(walk) ? 'the walk is ' + Math.round(walk / 10) + ' m the long way round' : 'no walk reaches it') + '; taking a ferry or teleport instead.');
+    if (route === undefined) a.plan = null;
+    this.active = null;
+    return Travel.start(steps, a.destination, a.resume, a.onDone || a.onFail ? { label: a.label, onDone: a.onDone, onFail: a.onFail } : {});
   },
   cancel(reason = '', halt = true) {
     if (!this.active) return;
@@ -9274,6 +9346,9 @@ const TRAVEL_TABLE = {"nodes":[{"id":1,"refObjId":2094,"name":"SN_ZONE_22001"},{
 // its menu, send travel-gate type 2 with the destination's teleport id, and confirm the arrival.
 const TRAVEL_HOP = 3000;        // a hop (menu and load screen) weighs like this much walking
 const TRAVEL_WALK = 1.3;        // a walk is longer than the straight line
+const TRAVEL_GOLD = 5;          // a gold coin of fee weighs like this much walking (game units): a trip is paid on every
+                                // town trip, so Jangan's 500 gold ferry beats its 5000 gold statue teleport for a spot
+                                // across the river
 const TRAVEL_REACH = 150;       // stop this close to the teleporter: it stands on a dock or a ship; the game talks within 20 m
 const TRAVEL_FIND = 300;        // the teleporter stands within this of its table position
 const TRAVEL_STEP_MS = 15000;   // selecting, the menu, and the hop starting
@@ -9305,7 +9380,9 @@ const Travel = {
   },
   // Cheapest mix of walks and hops (Dijkstra over the start, the goal and every teleporter). Steps alternate between
   // { kind: 'walk', to } and { kind: 'hop', from, to, fee }; null when no mix reaches the goal.
-  plan(from, to, banned = new Set()) {
+  // walks (optional, from walks()): real walking distances through the loaded route area, from the start and from the
+  // goal. walkable() only knows both ends lie in one route area, and an area can hold both banks of a river.
+  plan(from, to, banned = new Set(), walks = null) {
     if (!from || !to || ((from.regionId | to.regionId) & DUNGEON)) return null;
     const nodes = [...this.nodes().values()], gold = toBigInt(World.gp?.progression?.gold ?? 0);
     const points = [{ pose: from }, { pose: to }, ...nodes.map(node => ({ pose: node.pose, node }))];
@@ -9316,6 +9393,12 @@ const Travel = {
       hops.get(source).push({ destination, fee });
     }
     const cost = points.map(() => Infinity), came = [], done = [];
+    // Real walks, once per point: from the start (vf) and from the goal (vt); null where the route data cannot say.
+    const known = v => v !== null && v !== undefined;
+    const vf = points.map(p => walks?.from ? walks.from(p.pose) : null), vt = points.map(p => walks?.to ? walks.to(p.pose) : null);
+    // Two points on different sides of the start's (or the goal's) walkable ground: no walk joins them, whatever the
+    // route area's box says (the near ferry dock and a spot across the river).
+    const apart = (i, j) => [vf, vt].some(v => known(v[i]) && known(v[j]) && Number.isFinite(v[i]) !== Number.isFinite(v[j]));
     cost[0] = 0;
     for (;;) {
       let i = -1;
@@ -9324,11 +9407,20 @@ const Travel = {
       done[i] = true;
       const relax = (j, value, step) => { if (value < cost[j]) { cost[j] = value; came[j] = { from: i, step }; } };
       for (let j = 1; j < points.length; j++) {
-        if (j !== i && !done[j] && this.walkable(points[i].pose, points[j].pose)) relax(j, cost[i] + dist2D(points[i].pose, points[j].pose) * TRAVEL_WALK, { kind: 'walk' });
+        if (j === i || done[j]) continue;
+        // A walk from the start or to the goal: its real length where the route data knows it.
+        let real = i === 0 && j === 1 && Number.isFinite(walks?.direct) ? walks.direct : null;
+        if (!known(real) && i === 0) real = vf[j];
+        if (!known(real) && j === 1) real = vt[i];
+        if (known(real)) { if (Number.isFinite(real)) relax(j, cost[i] + real, { kind: 'walk' }); continue; }
+        if (apart(i, j) || !this.walkable(points[i].pose, points[j].pose)) continue;
+        // Never shorter than the difference of two real walks from the start or the goal (no detour through a dock).
+        const floor = Math.max(0, ...[vf, vt].filter(v => Number.isFinite(v[i]) && Number.isFinite(v[j])).map(v => Math.abs(v[i] - v[j])));
+        relax(j, cost[i] + Math.max(dist2D(points[i].pose, points[j].pose) * TRAVEL_WALK, floor), { kind: 'walk' });
       }
       for (const hop of points[i].node ? hops.get(points[i].node.id) || [] : []) {
         const j = index.get(hop.destination);
-        relax(j, cost[i] + TRAVEL_HOP + hop.fee, { kind: 'hop', fee: hop.fee });
+        relax(j, cost[i] + TRAVEL_HOP + hop.fee * TRAVEL_GOLD, { kind: 'hop', fee: hop.fee });
       }
     }
     if (cost[1] === Infinity) return null;
@@ -9342,10 +9434,27 @@ const Travel = {
   },
   // WalkBack asks first: true when the walk needs a teleport or a ferry and the trip has started here instead.
   begin(pose, dest, resume) {
-    if (!this.on() || !Number.isFinite(dist2D(pose, dest)) || this.walkable(pose, dest)) return false;
-    const steps = this.plan(pose, dest);
+    if (!this.on() || !Number.isFinite(dist2D(pose, dest))) return false;
+    if (!this.walkable(pose, dest)) return this.start(this.plan(pose, dest), dest, resume);
+    // One route area holds both ends: with that area loaded, its real walks can still make a ferry the better way.
+    const walks = dist2D(pose, dest) > WALK_LEG ? this.walks(pose, dest) : null;
+    return !!walks && this.start(this.plan(pose, dest, new Set(), walks), dest, resume);
+  },
+  // Real walking distances from each end through its own route area (Route.reach), or null when neither is loaded.
+  // direct: the length of a route already planned between them (Infinity: none).
+  walks(from, to, direct = null) {
+    const a = Route.reach(from), b = Route.reach(to);
+    return a || b || direct !== null ? { from: a || null, to: b || null, direct } : null;
+  },
+  // The route areas both ends stand in, loaded (WalkBack waits for them before it weighs a ferry).
+  load(from, to) {
+    return Promise.all([from, to].map(p => Route.areaFor(p)).filter(Boolean).map(a => Route.load(a.name).catch(() => null)));
+  },
+  // A plan with at least one hop becomes the trip. opts (from a WalkBack.startTo caller): label, onDone, onFail.
+  start(steps, dest, resume, opts = {}) {
     if (!steps?.some(s => s.kind === 'hop')) return false;
-    this.active = { dest: { ...dest }, resume, steps, index: 0, phase: '', at: now(), banned: new Set(), replans: 0, manualAt: Manual.lastAt };
+    this.active = { dest: { ...dest }, resume, steps, index: 0, phase: '', at: now(), banned: new Set(), replans: 0, manualAt: Manual.lastAt,
+      label: opts.label || '', onDone: opts.onDone || null, onFail: opts.onFail || null };
     const hops = steps.filter(s => s.kind === 'hop'), fees = hops.reduce((n, s) => n + s.fee, 0);
     Log.info('Travel: the hunting spot needs ' + hops.length + ' teleport' + (hops.length === 1 ? '' : 's') + ' or ferr' + (hops.length === 1 ? 'y' : 'ies') + (fees ? ' (' + fees + ' gold)' : '') + '.');
     this.next();
@@ -9355,14 +9464,16 @@ const Travel = {
     const a = this.active, step = a?.steps[a.index];
     if (!a) return;
     if (!step) {
-      this.active = null; this.message = 'Back at the hunting spot.';
+      this.active = null;
+      if (a.onDone) { this.message = ''; return a.onDone(); }
+      this.message = 'Back at the hunting spot.';
       UI.toast(this.message, 'info', 2500);
       if (a.resume) Hunt.start();
       return;
     }
     a.phase = step.kind === 'walk' ? 'walk' : 'select'; a.at = now(); a.gid = 0; a.talked = false; a.transition = false; a.refused = '';
     if (step.kind === 'hop') { this.message = 'Travel: using ' + step.from.label + (step.fee ? ' (' + step.fee + ' gold).' : '.'); return; }
-    const last = a.index === a.steps.length - 1, label = last ? 'the hunting spot' : step.node?.label || 'the teleporter';
+    const last = a.index === a.steps.length - 1, label = last ? a.label || 'the hunting spot' : step.node?.label || 'the teleporter';
     this.message = 'Travel: walking to ' + label + '.';
     WalkBack.startTo(step.to, { label, stop: last ? 12 : TRAVEL_REACH,
       onDone: () => { if (this.active === a) { a.index++; this.next(); } },
@@ -9433,11 +9544,13 @@ const Travel = {
     return false;
   },
   fail(reason) {
-    if (!this.active) return;
+    const a = this.active;
+    if (!a) return;
     this.active = null;
     WalkBack.cancel('', false);
     this.message = 'Travel stopped: ' + reason + '.';
     Log.warn(this.message); UI.toast(this.message, 'warn', 6000);
+    a.onFail?.(this.message);
   },
   cancel() { this.active = null; },
   status() { return this.active ? this.message : ''; },
@@ -16185,7 +16298,7 @@ const Alchemy = {
 };
 
 
-const RELEASE_NOTES = [{"version": "1.2.246", "title": "Leveling moves on to the next town", "items": ["With Level up by itself on, a character no longer stays in its first town forever. Once that town sells nothing better and the next town's gear is open (Jangan's ends at level 21, Donwhang's next tier opens at 24), it walks to the next town's world statue, makes it the return point, and sets up its warehouse, merchants and statue there. From then on its town trips, hunting spots and gear come from the new town: Jangan, then Donwhang, then Hotan.", "If the character dies on the way, it revives as usual and tries again later. If the move fails any other way, it stays where it was and does not try that town again until the bot is reloaded.", "A new switch, \"Move to the next town when this one has no better gear\", is on by default.", "Not in NIX Deck's headless mode yet."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.245", "title": "Leveling goes to town for gear less often", "items": ["Town gear unlocks over a few levels (in Jangan the level 16 tier opens with the weapon and gloves at 16 and ends with the chest at 21). With Level up by itself on, a trip just for gear used to happen at almost every level. It now waits until the last piece of the tier is open, then buys the whole set in one trip.", "Any trip that happens anyway (after a death, for potions or repairs) still buys whatever is already open."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.244", "title": "Leveling replaces Seal gear too", "items": ["With Level up by itself on, Seal (SOX) and other rare pieces were never replaced, so a Seal blade, sword or a level 1 Seal necklace stayed on for good while ordinary pieces were upgraded. They are now replaced like any other piece when the town sells a higher level. The Seal piece goes to your bag and is never sold.", "Gear above +3 and gear you protect are still never replaced.", "If the walk to a picked hunting spot fails five times in a row, the bot stops trying new spots instead of wandering the map. Reaching a spot resets the count."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.243", "title": "Leveling: a rescued merchant trip keeps going, and unreachable spots are skipped", "items": ["When a merchant's standing spot was blocked and the bot found another one that worked, the trip ended a moment later with \"Settings or character changed\". It now carries on and the working spot is kept.", "With Level up by itself on, if the walk to the chosen hunting spot gives up (a spot behind a river or cliff), the bot skips that spot and tries the next best one instead of staying put.", "Small clean-ups: a leftover distance setting is gone from the defaults, and the wide settings panel lays out its boxes faster."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.242", "title": "Leveling has no distance limit for its spots", "items": ["The \"Spots at most this far from town\" setting is gone. With Level up by itself on, the bot picks the best spot for your level anywhere the game's route data connects to your town, and walks there however far it is. Without route data for the area it looks up to 5 km, so it never picks a spot on another continent.", "The level still counts far more than distance, so it does not cross the map for one level."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.241", "title": "A blocked town merchant tries another spot", "items": ["\"Town cycle stopped: Blocked on the way to the repair merchant\" with nothing in the way: the saved standing point beside a merchant can be a place the first trip never checked (inside a forge or a fence). The trip now tries other spots around the merchant, nearest to the way in first, before giving up. A spot that works replaces the saved one.", "If every spot fails, behaviour is as before: the warehouse is skipped, other services stop the trip."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.240", "title": "Faster route check on repeat trips, and clearer leveling gear buying", "items": ["The route check now remembers every stretch that walked, so after the first trip to a spot the way back no longer waits for it. While the character only waits for the check, it also runs faster.", "Leveling gear buying needs one free bag slot per piece instead of two, so a nearly full bag no longer leaves out rings or armour.", "Each leveling town trip now logs why a piece is not bought (kept because it is enhanced, rare or sealed; already as good as town sells; or the town has none at your level). At level 8 the town sells only a weapon, shield, gloves and rings; chest, boots and the rest come later."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.239", "title": "Fixes a leveling stop in town, and the route check wait is back", "items": ["Fixed \"Bot stopped: Cannot read properties of null (reading 'npc')\". With Level up by itself on, a town trip where every stop had nothing to do (nothing to sell, buy, repair or store) went to a stop that does not exist. It now goes straight on to the walk back.", "Reverted 1.2.237's 20 second limit on the route check. The shortened check made the character walk in legs, which got stuck in town (\"no walkable route to the hunting spot\"). The route is checked against the game map in full again, as before, and the walk waits for it."], "note": "Tested in simulation only, not in a live game."}];
+const RELEASE_NOTES = [{"version": "1.2.247", "title": "Spots across the river take the ferry", "items": ["A hunting spot across the river from Jangan (level 21 and up) made the bot check a walking route north into the Water Ghost Marshland, where there is no way across. The route data for one area can hold both banks of a river, and the bot took that to mean it could walk there. It now measures the real walk on the route data from both ends. When a spot cannot be reached on foot, or only the long way round, it takes the ferry: from Jangan, the China East Ferry to the far bank.", "This is decided before the slow route check, so the character no longer stands waiting for a walk that would never work.", "A ferry or teleport fee now counts for more when choosing the way, so the bot prefers a 500 gold ferry over a 5000 gold statue teleport. It pays that fee on every town trip.", "Auto trade keeps walking as before (no teleport or ferry takes a trade transport)."], "note": "Tested in simulation with the game's real route data, not in a live game."}, {"version": "1.2.246", "title": "Leveling moves on to the next town", "items": ["With Level up by itself on, a character no longer stays in its first town forever. Once that town sells nothing better and the next town's gear is open (Jangan's ends at level 21, Donwhang's next tier opens at 24), it walks to the next town's world statue, makes it the return point, and sets up its warehouse, merchants and statue there. From then on its town trips, hunting spots and gear come from the new town: Jangan, then Donwhang, then Hotan.", "If the character dies on the way, it revives as usual and tries again later. If the move fails any other way, it stays where it was and does not try that town again until the bot is reloaded.", "A new switch, \"Move to the next town when this one has no better gear\", is on by default.", "Not in NIX Deck's headless mode yet."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.245", "title": "Leveling goes to town for gear less often", "items": ["Town gear unlocks over a few levels (in Jangan the level 16 tier opens with the weapon and gloves at 16 and ends with the chest at 21). With Level up by itself on, a trip just for gear used to happen at almost every level. It now waits until the last piece of the tier is open, then buys the whole set in one trip.", "Any trip that happens anyway (after a death, for potions or repairs) still buys whatever is already open."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.244", "title": "Leveling replaces Seal gear too", "items": ["With Level up by itself on, Seal (SOX) and other rare pieces were never replaced, so a Seal blade, sword or a level 1 Seal necklace stayed on for good while ordinary pieces were upgraded. They are now replaced like any other piece when the town sells a higher level. The Seal piece goes to your bag and is never sold.", "Gear above +3 and gear you protect are still never replaced.", "If the walk to a picked hunting spot fails five times in a row, the bot stops trying new spots instead of wandering the map. Reaching a spot resets the count."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.243", "title": "Leveling: a rescued merchant trip keeps going, and unreachable spots are skipped", "items": ["When a merchant's standing spot was blocked and the bot found another one that worked, the trip ended a moment later with \"Settings or character changed\". It now carries on and the working spot is kept.", "With Level up by itself on, if the walk to the chosen hunting spot gives up (a spot behind a river or cliff), the bot skips that spot and tries the next best one instead of staying put.", "Small clean-ups: a leftover distance setting is gone from the defaults, and the wide settings panel lays out its boxes faster."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.242", "title": "Leveling has no distance limit for its spots", "items": ["The \"Spots at most this far from town\" setting is gone. With Level up by itself on, the bot picks the best spot for your level anywhere the game's route data connects to your town, and walks there however far it is. Without route data for the area it looks up to 5 km, so it never picks a spot on another continent.", "The level still counts far more than distance, so it does not cross the map for one level."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.241", "title": "A blocked town merchant tries another spot", "items": ["\"Town cycle stopped: Blocked on the way to the repair merchant\" with nothing in the way: the saved standing point beside a merchant can be a place the first trip never checked (inside a forge or a fence). The trip now tries other spots around the merchant, nearest to the way in first, before giving up. A spot that works replaces the saved one.", "If every spot fails, behaviour is as before: the warehouse is skipped, other services stop the trip."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.240", "title": "Faster route check on repeat trips, and clearer leveling gear buying", "items": ["The route check now remembers every stretch that walked, so after the first trip to a spot the way back no longer waits for it. While the character only waits for the check, it also runs faster.", "Leveling gear buying needs one free bag slot per piece instead of two, so a nearly full bag no longer leaves out rings or armour.", "Each leveling town trip now logs why a piece is not bought (kept because it is enhanced, rare or sealed; already as good as town sells; or the town has none at your level). At level 8 the town sells only a weapon, shield, gloves and rings; chest, boots and the rest come later."], "note": "Tested in simulation only, not in a live game."}];
 
 // Check trusted repository metadata; never execute downloaded update code.
 const Updates = {
