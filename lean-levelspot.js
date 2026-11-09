@@ -66,8 +66,11 @@ const LevelSpot = {
     if (!(this.cfg().on || Leveling.spotsOn()) || now() < this.nextAt) return false;
     this.nextAt = now() + 3000;
     const level = World.gp?.progression?.level;
-    if (!World.inWorld() || World.isDead() || !Hunt.running || !Number.isInteger(level)) return false;
-    if (Town.trip || Restock.trip || WalkBack.active || Travel.active || Quest.trip || Resurrect.trip || Controller.resumeAfterRevive) return false;
+    // With zero-setup spots, a walk back to an old spot (one saved by hand, say) is turned to the spot for the level
+    // at once, instead of first walking to the old one.
+    const walking = Leveling.spotsOn() && WalkBack.active?.resume && !Travel.active;
+    if (!World.inWorld() || World.isDead() || !(Hunt.running || walking) || !Number.isInteger(level)) return false;
+    if (Town.trip || Restock.trip || WalkBack.active && !walking || Travel.active || Quest.trip || Resurrect.trip || Controller.resumeAfterRevive) return false;
     const spot = (Leveling.spotsOn() ? null : this.heldSpot()) || this.spotFor(level), H = Hunt.cfg();
     if (!spot || this.same(spot.center, H.center)) return false;
     H.center = { ...spot.center };
@@ -75,7 +78,7 @@ const LevelSpot = {
     this.message = spot.auto ? 'Level ' + level + ': hunting moved to a level ' + spot.level + ' spot.' : 'Level ' + level + ': moved the hunting spot to the one from level ' + spot.level + '.';
     Log.info('Level spot: ' + this.message); UI.toast(this.message, 'info', 5000);
     const pose = World.pose();
-    if (pose && dist2D(pose, H.center) > Math.max(H.radius, 100)) WalkBack.start(true);
+    if (walking || pose && dist2D(pose, H.center) > Math.max(H.radius, 100)) WalkBack.start(true);
     return true;
   },
 };

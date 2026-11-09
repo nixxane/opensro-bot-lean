@@ -3757,6 +3757,36 @@ test('zero-setup leveling picks a spot for the level from the game data, keeps i
   f.Settings.profile.leveling.on = false;
   assert.equal(f.LevelSpot.spotFor(15), null, 'off: the saved list (empty here) is used again');
 });
+test('a new character with no spot at its level takes the nearest one a level or two up, not the saved spot', () => {
+  const f = mallFixture(), H = f.Settings.profile.hunt;
+  f.Town.cfg().arrival = { regionId: 1, x: 100, y: 0, z: 100 };
+  f.Leveling.spots = [[1, 300, 0, 300, 2, 2, 2, 3], [1, 350, 0, 100, 3, 3, 3, 9], [1, 400, 0, 400, 5, 5, 5, 9]];
+  f.Settings.profile.leveling.on = true;
+  assert.equal(f.Leveling.spot(1).level, 2, 'the lowest level above wins, not the bigger spot further up');
+  f.Leveling.reset();
+  assert.equal(f.Leveling.spot(2).level, 2, 'at its own level it is a normal pick');
+  f.Leveling.reset();
+  f.Leveling.spots = [[1, 400, 0, 400, 5, 5, 5, 9]];
+  assert.equal(f.Leveling.spot(1), null, 'never more than two levels up');
+});
+test('with zero-setup spots, a walk back to an old saved spot turns to the spot for the level at once', () => {
+  const f = mallFixture(), H = f.Settings.profile.hunt;
+  f.Town.cfg().arrival = { regionId: 1, x: 100, y: 0, z: 100 };
+  f.Leveling.spots = [[1, 300, 0, 300, 1, 1, 1, 5]];
+  f.Settings.profile.leveling.on = true;
+  f.World.gp.progression = { ...(f.World.gp.progression || {}), level: 1 };
+  H.center = { regionId: 1, x: 5000, y: 0, z: 5000 };
+  f.Hunt.start(); f.WalkBack.start(true);
+  assert.ok(f.WalkBack.active, 'walking to the old spot');
+  f.Hunt.running = false; // the walk holds hunting until it arrives
+  f.advance(4000);
+  assert.equal(f.LevelSpot.tick(), true, 'the leveling check runs during the walk');
+  assert.equal(H.center.x, 300, 'and the walk now goes to the spot for the level');
+  f.Settings.profile.leveling.on = false;
+  H.center = { regionId: 1, x: 5000, y: 0, z: 5000 };
+  f.advance(4000);
+  assert.equal(f.LevelSpot.tick(), false, 'without zero-setup spots a walk back is never interrupted');
+});
 function gearFixture() {
   const f = townFixture(), gp = f.World.gp;
   f.pet.inventory = [];

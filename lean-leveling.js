@@ -11,7 +11,7 @@
 // armour or accessory socket is filled. Purchases happen on any town trip, in the shop, one confirmed transaction at a
 // time; the new piece is worn at once and the old one sold back there. A plan the town can pay for starts a trip by
 // itself, once per plan.
-const LEVEL_SPOT_BELOW = 5, LEVEL_SPOT_KEEP = 2, LEVEL_GEAR_MAX_PLUS = 3, LEVEL_GEAR_CHECK_MS = 20000;
+const LEVEL_SPOT_BELOW = 5, LEVEL_SPOT_ABOVE = 2, LEVEL_SPOT_KEEP = 2, LEVEL_GEAR_MAX_PLUS = 3, LEVEL_GEAR_CHECK_MS = 20000;
 // Equipment sockets by TID4 (OpenSRO inventory/slots.go, native sub_594980): armour parts and accessories.
 // The mastery each weapon type trains (TID4 of the weapon; OpenSRO masteries 257-276 Chinese, 513-518 European), and the
 // European masteries that fight with Intelligence.
@@ -37,16 +37,18 @@ const Leveling = {
     const home = this.home();
     if (!home || !Number.isInteger(level)) return null;
     const far = clamp(Number(this.cfg().maxM) || 400, 50, 5000) * 10;
-    let best = null, fallback = null;
+    // above: when nothing at or below the level is in reach (a new character), the nearest few levels up.
+    let best = null, fallback = null, above = null;
     for (const s of this.spots) {
-      if (s[4] > level || this.skipped.has(this.key(s))) continue;
+      if (s[4] > level + LEVEL_SPOT_ABOVE || this.skipped.has(this.key(s))) continue;
       const center = { regionId: s[0], x: s[1], y: s[2], z: s[3] }, d = dist2D(home, center);
       if (!(d <= far)) continue;
       const pick = { level: s[4], center, key: this.key(s), auto: true, score: s[4] * 400 + Math.min(s[7], 12) * 40 - d / 30 };
+      if (s[4] > level) { pick.score = -s[4] * 400 + Math.min(s[7], 12) * 40 - d / 30; if (!above || pick.score > above.score) above = pick; continue; }
       if (s[4] < level - LEVEL_SPOT_BELOW) { if (!fallback || pick.score > fallback.score) fallback = pick; continue; }
       if (!best || pick.score > best.score) best = pick;
     }
-    best ||= fallback;
+    best ||= above || fallback;
     const cur = this.current, H = Hunt.cfg();
     if (cur && cur.owner === World.charName && !this.skipped.has(cur.key) && cur.level <= level && LevelSpot.same(cur.center, H.center) &&
         (!best || best.level - cur.level <= LEVEL_SPOT_KEEP)) return cur;
