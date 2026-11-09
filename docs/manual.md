@@ -256,6 +256,16 @@ Updates, suggestions and bug reports are on Discord (https://discord.gg/Y5H5ZyfQ
 
 If something stalls, use **Settings → Send bug report**, which opens a draggable report window over the game. Preview the diagnostics, optionally add an explanation and screenshot, then click **Send to developer**. Check screenshots for private details. Nothing sends automatically.
 
+## Zero-setup leveling
+
+On the **Setup** page, **Zero-setup leveling → Level up by itself** lets a character level with no hunting spot or gear planning. It is off by default and saved per character. Turning it on also sets **No XP → Move to the next level spot** and, if town trips are off, sets up the town picked on the Setup page.
+
+- **Hunting spots:** the bot picks a spot from the game's own monster spawn data: ordinary monsters at most 5 levels under yours, within **Spots at most this far from town** (400 m by default) of the town your return scroll lands in. Higher level wins first, then more monsters, then nearer. It keeps the spot until one at least 3 levels better is available, then walks there. A spot that gives no XP for the set time is passed over for the rest of the session. The saved **Spot by level** list (Map page) is not used while this is on.
+- **Gear:** on any town trip, the bot buys the next tier of NPC gear: the same weapon type, the same armour material and part (empty parts are filled), and with **Also buy earrings, necklaces and rings** the accessories. It wears each piece at once in the shop and, with **Sell the replaced piece back**, sells the old one there. Only ordinary worn pieces up to +3 are replaced: Seal gear, rare items, your chosen primary/secondary weapon and shield, buff-set gear and items with a Keep rule are never touched. **Always keep this much gold** (5,000 by default) is never spent. When a new tier is affordable, the bot starts a town trip for it by itself, once per plan.
+- A piece the game will not let you wear is sold back and not bought again that session. A purchase the merchant refuses is skipped and the trip carries on.
+
+Limits: the spot distance is measured from your town, so a character that outlevels the area around its town keeps the last spot in reach; bind your return scroll to the next town and press **Set up town** again. Spots come from spawn positions, not from live crowding.
+
 ## Auto mastery and skills
 
 Under **Settings → Auto mastery and skills** the bot can spend skill points for you, one confirmed level at a time. It is off by default and saved per character.

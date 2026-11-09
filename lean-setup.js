@@ -117,7 +117,7 @@ const Setup = {
       this.previewNote, this.previewList, UI.row(this.apply, this.cancel),
       UI.button('Undo last change', () => { if (ProfileShare.undo()) UI.draw(); }),
       el('p', 'Have settings from someone else? Settings → Share and import settings.', 'muted'));
-    parent.append(hero, list, presets);
+    parent.append(hero, Leveling.draw(), list, presets);
     this.render(); this.drawPreview();
     Store.set('setup:seen', true);
   },

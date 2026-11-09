@@ -9,7 +9,8 @@ const LevelSpot = {
   cfg() { return Settings.profile.hunt.levelSpots; },
   list() { return (this.cfg().list || []).filter(s => Number.isInteger(s?.level) && s.center).sort((a, b) => a.level - b.level); },
   // The spot that applies at this level, or null below the lowest one.
-  spotFor(level) { return this.list().filter(s => s.level <= level).pop() || null; },
+  // Zero-setup leveling replaces the saved list with spots picked from the game data (lean-leveling.js).
+  spotFor(level) { return Leveling.spotsOn() ? Leveling.spot(level) : this.list().filter(s => s.level <= level).pop() || null; },
   // The hold ends the moment the character reaches the held spot's level: from there the level rule alone
   // picks the spot, so it moves on to a higher entry instead of staying pinned until a reload.
   heldSpot() {
@@ -24,6 +25,18 @@ const LevelSpot = {
   advanceOnNoXp() {
     const level = World.gp?.progression?.level;
     if (!Number.isInteger(level)) return false;
+    if (Leveling.spotsOn()) {
+      const next = Leveling.advance(level);
+      if (!next) return false;
+      const H = Hunt.cfg();
+      H.center = { ...next.center };
+      Settings.saveProfile(); bus.emit('center');
+      this.message = 'No XP: hunting moved to another level ' + next.level + ' spot.';
+      Log.info('Level spot: ' + this.message); UI.toast(this.message, 'info', 5000);
+      const pose = World.pose();
+      if (pose && dist2D(pose, H.center) > Math.max(H.radius, 100)) WalkBack.start(true);
+      return true;
+    }
     const current = this.heldSpot() || this.spotFor(level);
     const next = this.list().find(s => s.level > (current?.level ?? 0));
     if (!next) return false;
@@ -50,16 +63,16 @@ const LevelSpot = {
   },
   remove(level) { this.cfg().list = this.cfg().list.filter(s => s.level !== level); Settings.saveProfile(); },
   tick() {
-    if (!this.cfg().on || now() < this.nextAt) return false;
+    if (!(this.cfg().on || Leveling.spotsOn()) || now() < this.nextAt) return false;
     this.nextAt = now() + 3000;
     const level = World.gp?.progression?.level;
     if (!World.inWorld() || World.isDead() || !Hunt.running || !Number.isInteger(level)) return false;
     if (Town.trip || Restock.trip || WalkBack.active || Travel.active || Quest.trip || Resurrect.trip || Controller.resumeAfterRevive) return false;
-    const spot = this.heldSpot() || this.spotFor(level), H = Hunt.cfg();
+    const spot = (Leveling.spotsOn() ? null : this.heldSpot()) || this.spotFor(level), H = Hunt.cfg();
     if (!spot || this.same(spot.center, H.center)) return false;
     H.center = { ...spot.center };
     Settings.saveProfile(); bus.emit('center');
-    this.message = 'Level ' + level + ': moved the hunting spot to the one from level ' + spot.level + '.';
+    this.message = spot.auto ? 'Level ' + level + ': hunting moved to a level ' + spot.level + ' spot.' : 'Level ' + level + ': moved the hunting spot to the one from level ' + spot.level + '.';
     Log.info('Level spot: ' + this.message); UI.toast(this.message, 'info', 5000);
     const pose = World.pose();
     if (pose && dist2D(pose, H.center) > Math.max(H.radius, 100)) WalkBack.start(true);

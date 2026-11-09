@@ -3,7 +3,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(__dirname + '/bot.lean.user.js', 'utf8');
 const isolated = source.slice(0, source.lastIndexOf('installWorkerHook();')) +
-  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, ScrollBuff, boot, Ticker, Sound, LeanMap};\n})();';
+  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, Leveling, ScrollBuff, boot, Ticker, Sound, LeanMap};\n})();';
 function fixture(document, sharedStorage) {
   let time = 100000;
   const storage = sharedStorage || new Map(), commands = [], notices = [], intervals = [], timers = [];
@@ -3654,6 +3654,168 @@ test('the hunting spot follows the character level and walks to the new spot', (
   f.Settings.profile.hunt.levelSpots.on = true; f.Hunt.stop();
   f.advance(4000);
   assert.equal(f.LevelSpot.tick(), false, 'only while hunting');
+});
+test('zero-setup leveling picks a spot for the level from the game data, keeps it for a while and moves on', () => {
+  const f = mallFixture(), H = f.Settings.profile.hunt;
+  f.Town.cfg().arrival = { regionId: 1, x: 100, y: 0, z: 100 };
+  // [regionId, x, y, z, level, lowest, highest, spawn points]
+  f.Leveling.spots = [[1, 300, 0, 300, 6, 6, 6, 9], [1, 400, 0, 100, 9, 8, 10, 6], [1, 900, 0, 900, 9, 9, 9, 3], [1, 1000, 0, 100, 12, 12, 12, 9], [1, 100, 0, 9000, 30, 30, 30, 9]];
+  f.Settings.profile.leveling.on = true;
+  f.World.gp.progression = { ...(f.World.gp.progression || {}), level: 10 };
+  const pick = f.Leveling.spot(10);
+  assert.equal(pick.level, 9, 'the highest level at or below the character');
+  assert.equal(pick.center.x, 400, 'more spawns and nearer win between equal levels');
+  f.Leveling.reset();
+  assert.equal(f.Leveling.spot(3), null, 'nothing under the lowest spot');
+  f.Settings.profile.leveling.maxM = 50; f.Town.cfg().arrival = { regionId: 1, x: 100, y: 0, z: 5000 };
+  f.Leveling.reset();
+  assert.equal(f.Leveling.spot(10), null, 'spots beyond the distance limit are never used');
+  f.Settings.profile.leveling.maxM = 400; f.Town.cfg().arrival = { regionId: 1, x: 100, y: 0, z: 100 }; f.Leveling.reset();
+  f.Hunt.start();
+  f.advance(4000);
+  assert.equal(f.LevelSpot.tick(), true, 'the spot is applied with the level spot rules');
+  assert.equal(H.center.x, 400);
+  f.World.gp.progression.level = 11;
+  f.Leveling.spots.push([1, 500, 0, 100, 11, 11, 11, 9]);
+  f.advance(4000);
+  assert.equal(f.LevelSpot.tick(), false, 'a spot two levels better is not worth the walk yet');
+  assert.equal(H.center.x, 400);
+  f.Leveling.spots.pop();
+  f.World.gp.progression.level = 13;
+  f.advance(4000);
+  assert.equal(f.LevelSpot.tick(), true, 'three levels better is');
+  assert.equal(H.center.x, 1000);
+  f.World.gp.progression.level = 15;
+  f.Leveling.spots.push([1, 1100, 0, 100, 15, 15, 15, 9]);
+  f.advance(4000);
+  f.WalkBack.active = null; f.Hunt.start(); // arrived at the level 12 spot; hunting resumes
+  assert.equal(f.LevelSpot.tick(), true, 'a clearly better spot moves hunting');
+  assert.equal(H.center.x, 1100);
+  assert.equal(f.LevelSpot.advanceOnNoXp(), true, 'no XP passes over the spot');
+  assert.equal(H.center.x, 1000, 'and takes the next best one');
+  f.Settings.profile.leveling.on = false;
+  assert.equal(f.LevelSpot.spotFor(15), null, 'off: the saved list (empty here) is used again');
+});
+function gearFixture() {
+  const f = townFixture(), gp = f.World.gp;
+  f.pet.inventory = [];
+  gp.inventory.find(i => i.slot === 15).quantity = 40; // enough MP potions: no other reason for a trip
+  f.Settings.profile.leveling.on = true; f.Settings.profile.leveling.reserve = 1000; f.Settings.profile.leveling.accessories = false;
+  f.Leveling.town = () => ({ key: 'T', name: 'Test' });
+  // [refObjId, shop, TID3, TID4, country, sex, level, price]
+  f.Leveling.gear = { T: [[71, 'smith', 6, 2, 0, 2, 1, 900], [74, 'smith', 6, 2, 0, 2, 8, 3500], [75, 'smith', 6, 3, 0, 2, 8, 3500],
+    [395, 'armor', 3, 3, 0, 1, 1, 520], [396, 'armor', 3, 3, 0, 1, 8, 2000], [397, 'armor', 3, 3, 0, 0, 8, 2000], [400, 'armor', 3, 4, 0, 1, 6, 1500],
+    [1799, 'accessory', 5, 3, 0, 2, 1, 365]] };
+  f.Leveling.shopsData = { T: { armor: { refObjId: 640, regionId: 1, x: 400, y: 0, z: 100 } } };
+  f.Leveling.index = null;
+  const sword = gp.inventory.find(i => i.slot === 6);
+  Object.assign(sword, { refObjId: 71, typeFlags: 44 | (6 << 7) | (2 << 11), plus: 0, tooltip: { fields: { ...sword.tooltip.fields, rarity: 0, reqLevelType1: 1, requiredLevel: 1 } } });
+  gp.inventory.push({ slot: 1, refObjId: 395, typeFlags: 44 | (3 << 7) | (3 << 11), plus: 0, magic: [], tooltip: { fields: { canRepair: 0, rarity: 0, reqLevelType1: 1, requiredLevel: 1 } } });
+  gp.progression = { ...(gp.progression || {}), level: 8, gold: '10000' };
+  return f;
+}
+test('the gear plan buys the next tier of the same kind, fills empty armour parts and stays inside the gold', () => {
+  const f = gearFixture(), gp = f.World.gp;
+  const plan = () => f.Leveling.plan().map(w => w.socket + ':' + w.row[0]).join(' ');
+  assert.equal(plan(), '6:74 1:396 4:400', 'same weapon type, same material and sex, the empty legs are filled');
+  f.Settings.profile.leveling.accessories = true; gp.progression.gold = '8000';
+  assert.equal(plan(), '6:74 1:396 4:400', 'accessories are bought only while the gold lasts');
+  gp.progression.gold = '100000';
+  assert.equal(plan(), '6:74 1:396 4:400 11:1799 12:1799', 'both ring hands are filled');
+  f.Settings.profile.leveling.accessories = false;
+  gp.progression.gold = '5000';
+  assert.equal(plan(), '6:74', 'what the gold above the reserve cannot pay for waits');
+  gp.progression.gold = '100000';
+  gp.inventory.find(i => i.slot === 6).plus = 5;
+  assert.equal(plan().includes('6:'), false, 'an enhanced weapon is never replaced');
+  gp.inventory.find(i => i.slot === 6).plus = 0;
+  gp.inventory.find(i => i.slot === 6).tooltip.fields.rarity = 2;
+  assert.equal(plan().includes('6:'), false, 'a Seal weapon is never replaced');
+  gp.inventory.find(i => i.slot === 6).tooltip.fields.rarity = 0;
+  gp.progression.level = 7;
+  assert.equal(plan(), '4:400', 'level 7: only the empty legs, nothing above the worn tier yet');
+  f.Settings.profile.leveling.gear = false;
+  f.Leveling.checkAt = 0;
+  assert.equal(f.Leveling.due(), '', 'gear buying off: no trip');
+});
+test('a gear plan starts one town trip and visits the armour merchant before the way back', () => {
+  const f = gearFixture(), gp = f.World.gp;
+  gp.progression.gold = '100000';
+  assert.match(f.Town.reason(), /better gear to buy/);
+  f.Town.begin();
+  assert.deepEqual([...f.Town.trip.gear.map(w => w.row[0])], [74, 396, 400]);
+  f.Town.arrived();
+  assert.deepEqual([...f.Town.trip.order], ['storage', 'vendor', 'smith', 'armor', 'gate'], 'the armour merchant is visited before the statue');
+  assert.equal(f.Town.point('armor').refObjId, 640, 'its place comes from the game data, not from the saved town');
+  assert.equal(f.Town.cfg().armor, undefined, 'and nothing is saved in the town settings');
+  f.Town.trip = null; f.Leveling.checkAt = 0;
+  assert.doesNotMatch(f.Town.reason() || '', /better gear/, 'the same plan never starts a second trip');
+});
+function smithShop(f, price) {
+  const gp = f.World.gp;
+  gp.progression.gold = '100000';
+  f.Town.begin(); f.Town.arrived();
+  f.Town.trip.gear = f.Town.trip.gear.filter(w => w.role === 'smith');
+  gp.target = 62;
+  gp.shop = { npc: 62, name: 'smith', offers: [{ tab: 0, slot: 4, refObjId: 74, name: 'Sword', price, currency: 1, maxStack: 1 }] };
+  f.Restock.activeShop = () => gp.shop;
+}
+test('in the shop the bot buys, wears and sells back the old piece, one confirmed step at a time', () => {
+  const f = gearFixture(), gp = f.World.gp;
+  smithShop(f, '3500');
+  f.Town.enter('sell'); f.Town.afterSell();
+  assert.equal(f.Town.trip.phase, 'gear');
+  f.Leveling.shop(f.Town.trip);
+  assert.deepEqual({ ...f.commands.at(-1) }, { kind: 'shop-buy', tab: 0, slot: 4, quantity: 1 });
+  f.Leveling.shop(f.Town.trip);
+  assert.equal(f.commands.filter(c => c.kind === 'shop-buy').length, 1, 'nothing is sent again before the result');
+  gp.inventory.push({ slot: 20, refObjId: 74, typeFlags: 44 | (6 << 7) | (2 << 11), plus: 0, quantity: 1 });
+  f.advance(600); f.Leveling.shop(f.Town.trip);
+  f.Leveling.shop(f.Town.trip);
+  assert.deepEqual({ ...f.commands.at(-1) }, { kind: 'inventory-move', source: 20, destination: 6, quantity: 0 });
+  const bought = gp.inventory.find(i => i.slot === 20), old = gp.inventory.find(i => i.slot === 6);
+  bought.slot = 6; old.slot = 20;
+  old.codename = 'ITEM_CH_SWORD_01_A'; old.tooltip.fields.canSell = 1;
+  f.advance(600); f.Leveling.shop(f.Town.trip);
+  f.Leveling.shop(f.Town.trip);
+  assert.deepEqual({ ...f.commands.at(-1) }, { kind: 'shop-sell', slot: 20, quantity: 1 }, 'the old sword goes back to the merchant');
+  gp.inventory = gp.inventory.filter(i => i.slot !== 20);
+  f.advance(600); f.Leveling.shop(f.Town.trip);
+  f.Leveling.shop(f.Town.trip);
+  assert.equal(f.Town.trip.phase, 'repair', 'then the smith repairs as before');
+});
+test('a piece the game will not let the character wear is sold back and never bought again', () => {
+  const f = gearFixture(), gp = f.World.gp;
+  smithShop(f, '3500');
+  f.Town.enter('gear'); f.Town.trip.gearRole = 'smith';
+  f.Leveling.shop(f.Town.trip);
+  gp.inventory.push({ slot: 20, refObjId: 74, codename: 'ITEM_CH_SWORD_02_A', typeFlags: 44 | (6 << 7) | (2 << 11), plus: 0, quantity: 1, tooltip: { fields: { canSell: 1, rarity: 0 } } });
+  f.advance(600); f.Leveling.shop(f.Town.trip);
+  f.Leveling.shop(f.Town.trip);
+  assert.equal(f.commands.at(-1).kind, 'inventory-move');
+  gp.error = 'Requirement not met'; f.advance(600); f.Leveling.shop(f.Town.trip);
+  gp.error = ''; f.Leveling.shop(f.Town.trip);
+  assert.deepEqual({ ...f.commands.at(-1) }, { kind: 'shop-sell', slot: 20, quantity: 1 }, 'the unwearable piece goes back');
+  assert.equal(f.Leveling.plan().some(w => w.row[0] === 74), false, 'and is left out of every later plan');
+});
+test('a refused or unaffordable purchase is skipped and the trip carries on', () => {
+  const f = gearFixture();
+  smithShop(f, '99500');
+  f.Town.enter('gear'); f.Town.trip.gearRole = 'smith';
+  f.Leveling.shop(f.Town.trip);
+  assert.equal(f.commands.some(c => c.kind === 'shop-buy'), false, 'the live price above the gold and reserve is not paid');
+  assert.match(f.Leveling.message, /not enough gold/);
+  f.Leveling.shop(f.Town.trip);
+  assert.equal(f.Town.trip.phase, 'repair');
+  const g = gearFixture();
+  smithShop(g, '3500');
+  g.Town.enter('gear'); g.Town.trip.gearRole = 'smith';
+  g.Leveling.shop(g.Town.trip);
+  g.World.gp.error = 'Not enough room'; g.advance(600); g.Leveling.shop(g.Town.trip);
+  assert.match(g.Leveling.message, /refused/);
+  g.World.gp.error = ''; g.Leveling.shop(g.Town.trip);
+  assert.equal(g.Town.trip?.phase, 'repair', 'the trip goes on without it');
+  assert.equal(g.commands.filter(c => c.kind === 'shop-buy').length, 1, 'never sent twice');
 });
 test('icon paths accept names with or without the .ddj extension (setup checklist icons were blank)', () => {
   const f = fixture(), base = '/assets/images/Media_extracted/icon/';

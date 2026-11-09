@@ -12,6 +12,8 @@ const DEFAULT_PROFILE = {
     // Attribute percentages: the lowest variance value (0 to 31) wanted per NATTR_ name, 0 or missing = leave it alone.
     attr: { targets: {}, limit: 100 } },
   statPoints: { enabled: false, str: 1, int: 0, reserve: 0 },
+  // Zero-setup leveling (lean-leveling.js): spots from the game data and NPC gear upgrades.
+  leveling: { on: false, spots: true, gear: true, accessories: true, sellOld: true, reserve: 5000, maxM: 400 },
   // Auto Quest: learned tokens bind a quest codename (QNO_...) to its refId, and learned targets
   // name the monster types whose kills advance each refId. Both fill themselves while playing.
   quest: { on: false, accept: true, picked: [], include: '', exclude: '', skip: [], learned: {}, targets: {} },
@@ -71,7 +73,7 @@ const DEFAULT_PROFILE = {
 function botProfile(input) {
   const result = deepMerge(DEFAULT_PROFILE, {});
   if (!input || typeof input !== 'object') return result;
-  for (const key of ['macro', 'potion', 'hunt', 'lure', 'pet', 'scroll', 'mall', 'wardrobe', 'party', 'alchemy', 'mastery', 'statPoints', 'trace', 'items', 'trade', 'stall', 'quest', 'sounds']) {
+  for (const key of ['macro', 'potion', 'hunt', 'lure', 'pet', 'scroll', 'mall', 'wardrobe', 'party', 'alchemy', 'mastery', 'statPoints', 'leveling', 'trace', 'items', 'trade', 'stall', 'quest', 'sounds']) {
     if (!input[key] || typeof input[key] !== 'object') continue;
     for (const field of Object.keys(DEFAULT_PROFILE[key])) {
       if (field in input[key]) result[key][field] = deepMerge(DEFAULT_PROFILE[key][field], input[key][field]);

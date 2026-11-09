@@ -1,0 +1,261 @@
+// Zero-setup leveling: the bot picks its own hunting spot for the character's level and buys the next tier of NPC gear.
+//
+// Spots come from LEVEL_SPOTS (gen-leveling.py: clusters of ordinary monster spawns with their level). The spot is the
+// best one at most LEVEL_SPOT_BELOW levels under the character, within the chosen distance of the town the return
+// scroll lands in: higher level first, then more spawns, then nearer. LevelSpot applies it like a saved level spot,
+// so the walk there, the "no XP" move and the map all work the same way.
+//
+// Gear comes from LEVEL_GEAR (the town's smith, armour and accessory merchants). A worn piece is replaced only when
+// the town sells the same kind (same weapon type, same armour material and part) for a higher required level, the
+// worn piece is ordinary (no Seal, no rare codename, at most +LEVEL_GEAR_MAX_PLUS) and nothing protects it; an empty
+// armour or accessory socket is filled. Purchases happen on any town trip, in the shop, one confirmed transaction at a
+// time; the new piece is worn at once and the old one sold back there. A plan the town can pay for starts a trip by
+// itself, once per plan.
+const LEVEL_SPOT_BELOW = 5, LEVEL_SPOT_KEEP = 2, LEVEL_GEAR_MAX_PLUS = 3, LEVEL_GEAR_CHECK_MS = 20000;
+// Equipment sockets by TID4 (OpenSRO inventory/slots.go, native sub_594980): armour parts and accessories.
+const LEVEL_ARMOUR_SOCKET = { 1: 0, 2: 2, 3: 1, 4: 4, 5: 3, 6: 5 }, LEVEL_ACCESSORY_SOCKETS = { 1: [9], 2: [10], 3: [11, 12] };
+const Leveling = {
+  // The generated tables, as properties so a test can lay its own over them.
+  spots: LEVEL_SPOTS, gear: LEVEL_GEAR, shopsData: LEVEL_SHOPS,
+  current: null, skipped: new Set(), tried: new Set(), refused: new Set(), checkAt: 0, due_: '', index: null, message: '',
+  cfg() { return Settings.profile.leveling; },
+  spotsOn() { const c = this.cfg(); return !!(c.on && c.spots); },
+  gearOn() { const c = this.cfg(); return !!(c.on && c.gear); },
+  reset() { this.current = null; this.skipped.clear(); this.tried.clear(); this.refused.clear(); this.due_ = ''; this.checkAt = 0; },
+
+  // ---- spots
+  key(s) { return s[0] + ':' + s[1] + ':' + s[3]; },
+  home() { return Town.cfg().arrival || World.pose(); },
+  // The spot for this level, or null when the data has none in reach. The spot in use is kept while the best choice is
+  // at most LEVEL_SPOT_KEEP levels above it, so the bot does not walk across the map for every level.
+  spot(level) {
+    const home = this.home();
+    if (!home || !Number.isInteger(level)) return null;
+    const far = clamp(Number(this.cfg().maxM) || 400, 50, 5000) * 10;
+    let best = null, fallback = null;
+    for (const s of this.spots) {
+      if (s[4] > level || this.skipped.has(this.key(s))) continue;
+      const center = { regionId: s[0], x: s[1], y: s[2], z: s[3] }, d = dist2D(home, center);
+      if (!(d <= far)) continue;
+      const pick = { level: s[4], center, key: this.key(s), auto: true, score: s[4] * 400 + Math.min(s[7], 12) * 40 - d / 30 };
+      if (s[4] < level - LEVEL_SPOT_BELOW) { if (!fallback || pick.score > fallback.score) fallback = pick; continue; }
+      if (!best || pick.score > best.score) best = pick;
+    }
+    best ||= fallback;
+    const cur = this.current, H = Hunt.cfg();
+    if (cur && cur.owner === World.charName && !this.skipped.has(cur.key) && cur.level <= level && LevelSpot.same(cur.center, H.center) &&
+        (!best || best.level - cur.level <= LEVEL_SPOT_KEEP)) return cur;
+    if (best) this.current = { ...best, owner: World.charName };
+    return best;
+  },
+  // "No XP" in auto mode: pass over the spot in use for this session and take the next best one.
+  advance(level) {
+    const cur = this.current;
+    if (cur) this.skipped.add(cur.key);
+    this.current = null;
+    const next = this.spot(level);
+    if (!next || cur && next.key === cur.key) return null;
+    return next;
+  },
+
+  // ---- gear
+  row(ref) {
+    if (!this.index) {
+      this.index = new Map();
+      for (const rows of Object.values(this.gear)) for (const r of rows) this.index.set(r[0], r);
+    }
+    return this.index.get(ref) || null;
+  },
+  reqLevel(item) { return Town.requiredLevel(item) ?? this.row(item.refObjId)?.[6] ?? null; },
+  tids(item) { const tf = item.typeFlags >>> 0; return [(tf >>> 7) & 15, (tf >>> 11) & 31]; },
+  town() { const c = Town.cfg(); return Town.detect(c.vendor || c.smith || c.arrival || World.pose()); },
+  // Race and sex from what the character wears: the gear table first, the codename otherwise. Null when unknown.
+  who() {
+    let country = null, sex = null;
+    for (const i of (World.gp?.inventory || []).filter(i => i.slot < 13)) {
+      const r = this.row(i.refObjId), code = i.codename || Items.data?.get(i.refObjId)?.code || '';
+      if (country === null) country = r ? (r[4] === 3 ? null : r[4]) : /^ITEM_CH_/.test(code) ? 0 : /^ITEM_EU_/.test(code) ? 1 : null;
+      if (sex === null) sex = r ? (r[5] === 2 ? null : r[5]) : /_M_/.test(code) ? 1 : /_W_/.test(code) ? 0 : null;
+    }
+    return { country, sex };
+  },
+  // A worn piece the plan may replace: ordinary, low plus, known level, and nothing the player protects.
+  replaceable(item) {
+    if (Equip.protected(item) || Items.soxOf(item) > 0 || (item.plus ?? 0) > LEVEL_GEAR_MAX_PLUS) return false;
+    if (item.tooltip?.fields?.rarity !== undefined && item.tooltip.fields.rarity !== 0) return false;
+    if (/_(RARE|MAGIC|LEGEND|MYTH|HONOR)/i.test(item.codename || Items.data?.get(item.refObjId)?.code || '')) return false;
+    return Number.isInteger(this.reqLevel(item));
+  },
+  // What to buy now: [{ row, socket, role }], best piece per socket, weapon first, within the gold above the reserve.
+  plan() {
+    const gp = World.gp, level = gp?.progression?.level, town = this.town();
+    if (!gp || !Number.isInteger(level) || !town) return [];
+    const { country, sex } = this.who();
+    if (country === null) return [];
+    const rows = (this.gear[town.key] || []).filter(r => (r[4] === country || r[4] === 3) && (r[5] === 2 || sex === null || r[5] === sex) && r[6] <= level && !this.refused.has(r[0]));
+    const worn = new Map((gp.inventory || []).filter(i => i.slot < 13).map(i => [i.slot, i]));
+    const best = (tid3, tid4) => rows.filter(r => r[2] === tid3 && r[3] === tid4).sort((a, b) => b[6] - a[6] || b[7] - a[7])[0] || null;
+    const wants = [];
+    const consider = (socket, tid3, tid4, fill) => {
+      const r = best(tid3, tid4), item = worn.get(socket);
+      if (!r) return;
+      if (!item) { if (fill) wants.push({ row: r, socket, role: r[1] }); return; }
+      if (item.refObjId !== r[0] && this.replaceable(item) && r[6] > this.reqLevel(item)) wants.push({ row: r, socket, role: r[1] });
+    };
+    const weapon = worn.get(6);
+    if (weapon) consider(6, 6, this.tids(weapon)[1], false);
+    const second = worn.get(7);
+    if (second && ItemType.isEquipment(second.typeFlags) && this.tids(second)[0] === 4) consider(7, 4, this.tids(second)[1], false);
+    // Armour: the material most of the worn pieces have; empty parts are filled with it.
+    const materials = {};
+    for (const s of [0, 1, 2, 3, 4, 5]) { const i = worn.get(s); if (i) { const t3 = this.tids(i)[0]; materials[t3] = (materials[t3] || 0) + 1; } }
+    const material = Number(Object.keys(materials).sort((a, b) => materials[b] - materials[a])[0]);
+    if (material) for (const [tid4, socket] of Object.entries(LEVEL_ARMOUR_SOCKET)) consider(socket, material, Number(tid4), true);
+    if (this.cfg().accessories) {
+      const tid3 = country === 1 ? 12 : 5;
+      for (const [tid4, sockets] of Object.entries(LEVEL_ACCESSORY_SOCKETS)) for (const socket of sockets) consider(socket, tid3, Number(tid4), true);
+    }
+    let budget = toBigInt(gp.progression?.gold ?? 0) - BigInt(Math.max(0, Number(this.cfg().reserve) || 0));
+    const out = [];
+    for (const w of wants) {
+      const price = BigInt(Math.max(0, w.row[7]));
+      if (price > budget) continue;
+      budget -= price; out.push(w);
+    }
+    return out;
+  },
+  // A town trip reason when the plan has something new to buy. Each plan starts at most one trip.
+  due() {
+    if (!this.gearOn() || Town.trip) return '';
+    if (now() < this.checkAt) return this.due_;
+    this.checkAt = now() + LEVEL_GEAR_CHECK_MS;
+    const plan = this.plan(), key = World.charName + '|' + plan.map(w => w.socket + ':' + w.row[0]).join(',');
+    this.due_ = plan.length && !this.tried.has(key) ? 'better gear to buy (level ' + World.gp.progression.level + ')' : '';
+    this.dueKey = key;
+    return this.due_;
+  },
+  // Town.begin: the plan this trip carries, and where the armour and accessory merchants stand.
+  begin(t) {
+    t.gear = [];
+    if (!this.gearOn()) return;
+    t.gear = this.plan().map(w => ({ ...w }));
+    this.tried.add(World.charName + '|' + t.gear.map(w => w.socket + ':' + w.row[0]).join(','));
+    this.due_ = ''; this.checkAt = now() + LEVEL_GEAR_CHECK_MS;
+    const town = this.town(), shops = this.shopsData[town?.key] || {};
+    t.shops = {};
+    for (const role of ['armor', 'accessory']) {
+      const s = shops[role];
+      if (!s || !t.gear.some(w => w.role === role)) continue;
+      const stand = Town.standPoint(s, Town.cfg().arrival || s);
+      t.shops[role] = { ...stand.point, refObjId: s.refObjId, name: town.name + ' ' + (role === 'armor' ? 'armour merchant' : 'accessory merchant'), npc: { regionId: s.regionId, x: s.x, y: s.y, z: s.z } };
+    }
+    if (t.gear.length) Log.info('Leveling: this trip buys ' + t.gear.length + ' piece' + (t.gear.length === 1 ? '' : 's') + ' of gear.');
+  },
+  wants(t, role) { return (t.gear || []).filter(w => w.role === role && !['skip', 'done'].includes(w.state)); },
+  bagCount(ref) { return World.items().filter(i => i.refObjId === ref).length; },
+  skip(t, w, why) {
+    w.state = 'skip'; t.pending = null;
+    this.message = 'Gear: ' + Items.name(w.row[0]) + ' not bought, ' + why + '.';
+    Log.warn(this.message);
+  },
+  // The gear phase in an open shop: buy, wear, sell the old piece, one confirmed step at a time. Never resends.
+  shop(t) {
+    const gp = World.gp, role = t.gearRole, shop = Restock.activeShop(), npc = Town.npc(role);
+    if (!shop || !npc || shop.npc !== npc.gid || shop.error) return Town.fail(shop?.error || 'Gear merchant selection changed.');
+    const p = t.pending;
+    if (p) {
+      if (gp.inventoryPending || now() - p.at < 500) { if (now() - p.at > 15000) Town.fail('Gear purchase was not confirmed. Nothing was sent twice.'); return; }
+      const w = p.want;
+      if (p.kind === 'gear-buy') {
+        if (this.bagCount(p.ref) > p.before) {
+          const item = World.items().find(i => i.refObjId === p.ref && !p.slots.includes(i.slot));
+          w.state = 'bought'; w.bagSlot = item?.slot; t.pending = null;
+          Log.info('Leveling: bought ' + Items.name(p.ref) + '.');
+        } else if (gp.error) this.skip(t, w, 'the merchant refused (' + gp.error + ')');
+        else if (now() - p.at > 15000) Town.fail('Gear purchase was not confirmed. Nothing was sent twice.');
+        return;
+      }
+      if (p.kind === 'gear-wear') {
+        if (gp.inventory?.some(i => i.slot === p.socket && i.refObjId === p.ref)) {
+          w.state = 'worn'; t.pending = null;
+          w.old = p.old ? { slot: p.from, ref: p.old } : null;
+          this.message = 'Gear: now wearing ' + Items.name(p.ref) + '.';
+          Log.info('Leveling: ' + this.message); UI.toast(this.message, 'info', 4000);
+        } else if (gp.error || now() - p.at > 15000) {
+          // The game will not let the character wear it (a mastery requirement, say): never buy it again this session,
+          // and sell this one back like a replaced piece.
+          this.refused.add(p.ref); w.state = 'worn'; t.pending = null;
+          w.old = World.items().some(i => i.slot === p.from && i.refObjId === p.ref) ? { slot: p.from, ref: p.ref } : null;
+          Log.warn('Leveling: the game would not let the character wear ' + Items.name(p.ref) + '; selling it back.');
+        }
+        return;
+      }
+      if (p.kind === 'gear-sell') {
+        if (!World.items().some(i => i.slot === p.slot && i.refObjId === p.ref) || gp.error || now() - p.at > 15000) { w.state = 'done'; t.pending = null; }
+        return;
+      }
+    }
+    if (gp.inventoryPending) return;
+    for (const w of this.wants(t, role)) {
+      if (!w.state) {
+        const offer = shop.offers.find(o => o.refObjId === w.row[0] && (o.currency === undefined || o.currency === 1) &&
+          (!o.contents?.length || o.contents.length === 1 && o.contents[0].refObjId === o.refObjId));
+        if (!offer) { this.skip(t, w, 'this merchant does not sell it'); return; }
+        const gold = toBigInt(gp.progression?.gold ?? 0), reserve = BigInt(Math.max(0, Number(this.cfg().reserve) || 0));
+        if (toBigInt(offer.price) + reserve > gold) { this.skip(t, w, 'not enough gold'); return; }
+        if (World.freeBagSlots() < 2) { this.skip(t, w, 'the bag is full'); return; }
+        const slots = World.items().filter(i => i.refObjId === w.row[0]).map(i => i.slot);
+        if (Cmd.raw({ kind: 'shop-buy', tab: offer.tab, slot: offer.slot, quantity: 1 }, 'Leveling: buy ' + Items.name(w.row[0])))
+          t.pending = { kind: 'gear-buy', want: w, ref: w.row[0], before: slots.length, slots, at: now() };
+        return;
+      }
+      if (w.state === 'bought') {
+        const item = World.items().find(i => i.slot === w.bagSlot && i.refObjId === w.row[0]);
+        if (!item) { w.state = 'done'; return; }
+        const old = gp.inventory?.find(i => i.slot === w.socket);
+        if (Cmd.raw({ kind: 'inventory-move', source: item.slot, destination: w.socket, quantity: 0 }, 'Leveling: wear ' + Items.name(w.row[0])))
+          t.pending = { kind: 'gear-wear', want: w, ref: w.row[0], socket: w.socket, from: item.slot, old: old?.refObjId || 0, at: now() };
+        return;
+      }
+      if (w.state === 'worn') {
+        const old = w.old && World.items().find(i => i.slot === w.old.slot && i.refObjId === w.old.ref);
+        if (!old || !this.cfg().sellOld || !Town.plainGear(old) || Items.soxOf(old) > 0 || old.tooltip?.fields?.canSell === 0) { w.state = 'done'; continue; }
+        if (Cmd.raw({ kind: 'shop-sell', slot: old.slot, quantity: 1 }, 'Leveling: sell the replaced ' + Items.name(old.refObjId)))
+          t.pending = { kind: 'gear-sell', want: w, ref: old.refObjId, slot: old.slot, at: now() };
+        return;
+      }
+    }
+    Town.enter(role === 'smith' ? (Town.ammoSupplies().length ? 'ammo' : 'repair') : 'close-' + role);
+  },
+  status() {
+    if (!this.cfg().on) return 'Zero-setup leveling is off.';
+    const level = World.gp?.progression?.level, cur = this.current;
+    const spot = this.spotsOn() ? (cur ? 'Hunting at the level ' + cur.level + ' spot.' : 'No spot picked yet.') : 'Spots: your own.';
+    return spot + ' ' + (this.gearOn() ? (this.message || (Number.isInteger(level) ? 'Gear: checked at level ' + level + '.' : '')) : 'Gear buying off.');
+  },
+  // Turning it on sets the pieces it relies on: "no XP" moves to another spot, and the town for the trips.
+  enable(on) {
+    const c = this.cfg(), T = Town.cfg();
+    c.on = on;
+    if (on) {
+      T.noXp = { ...T.noXp, on: true, action: 'nextSpot' };
+      if (!T.enabled && World.inWorld()) Setup.setupTown();
+    }
+    this.reset(); Settings.saveProfile(); UI.draw();
+    UI.toast(on ? 'Zero-setup leveling on: the bot picks spots for your level and buys better NPC gear on town trips.' : 'Zero-setup leveling off.', 'info', 6000);
+  },
+  draw() {
+    const c = () => this.cfg(), status = el('p', this.status(), 'muted');
+    UI.refreshers.push(() => { status.textContent = this.status(); });
+    return UI.group('Zero-setup leveling',
+      el('p', 'For levelling a character with no setup: the bot picks a hunting spot for your level from the game data, moves on as you level, and buys the next tier of weapon, armour and accessories from the town merchants on its town trips. Nothing better than ordinary +' + LEVEL_GEAR_MAX_PLUS + ' gear is ever replaced or sold.', 'muted'),
+      UI.check('Level up by itself', () => c().on, v => this.enable(v)),
+      UI.check('Pick hunting spots for my level', () => c().spots, v => { c().spots = v; this.reset(); }),
+      UI.number('Spots at most this far from town (m)', () => c().maxM, v => { c().maxM = v; this.reset(); }, 50, 5000, 50),
+      UI.check('Buy better gear from the town merchants', () => c().gear, v => { c().gear = v; }),
+      UI.check('Also buy earrings, necklaces and rings', () => c().accessories, v => { c().accessories = v; }),
+      UI.check('Sell the replaced piece back', () => c().sellOld, v => { c().sellOld = v; }),
+      UI.number('Always keep this much gold', () => c().reserve, v => { c().reserve = v; }, 0, 100000000, 1000),
+      status);
+  },
+};

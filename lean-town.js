@@ -309,6 +309,8 @@ const Town = {
     if (c.broken && this.weaponBroken()) return 'weapon broken';
     const worn = c.wear?.on ? this.wear() : null;
     if (worn && worn.pct < c.wear.pct) return `gear durability low (${worn.name} at ${Math.floor(worn.pct)}%)`;
+    const gear = Leveling.due();
+    if (gear) return gear;
     if (this.noXpDue()) return `no XP for ${c.noXp.minutes} minutes`;
     if (c.every?.on && this.cycleFrom && now() - this.cycleFrom >= c.every.minutes * 60000) return `every ${c.every.minutes} minutes`;
     return '';
@@ -394,6 +396,7 @@ const Town = {
       huntArea: (revival || inTown) && !(reverseChoice === TOWN_REVERSE.death && this.deathPoint) && Hunt.cfg().center ? { center: { ...Hunt.cfg().center }, radius: Hunt.cfg().radius } : null,
       manualAt: Manual.lastAt, character: World.charName, petRef: Loot.pet()?.rec.refObjId,
       config: JSON.stringify(this.cfg()), supplies: this.supplies(), sellFirst: !!this.cfg().sellBag };
+    Leveling.begin(this.trip);
     Hunt.targetGid = Hunt.lootGid = 0;
     // Bag selling reads codenames from the item catalogue: start loading it now, well before the merchant.
     if (this.trip.sellFirst) Loot.ensureCatalogue();
@@ -423,6 +426,9 @@ const Town = {
   order(full) {
     const sellFirst = this.trip?.sellFirst;
     const order = !sellFirst ? ['storage', 'vendor', 'smith', 'gate'] : full ? ['smith', 'storage', 'vendor', 'gate'] : ['storage', 'smith', 'vendor', 'gate'];
+    // Zero-setup leveling adds the armour and accessory merchants before the way back, when it buys there.
+    const shops = ['armor', 'accessory'].filter(role => this.trip?.shops?.[role]);
+    order.splice(order.indexOf('gate'), 0, ...shops);
     return order.filter(role => (role !== 'storage' || this.cfg().storage) && (role !== 'gate' || !this.walks()));
   },
   // The service to walk to after closing a window. After the last one: the world statue to reverse; without a reverse
@@ -471,7 +477,7 @@ const Town = {
     this.message = 'Town cycle: ' + phase;
   },
   // Plain wording for the service being approached (never an NPC name), for messages and bug reports.
-  role(phase) { return { storage: 'warehouse', vendor: 'potion merchant', smith: 'repair merchant', gate: 'world statue', arrival: 'town start' }[String(phase).replace(/^(walk|open|close)-/, '')] || 'service point'; },
+  role(phase) { return { storage: 'warehouse', vendor: 'potion merchant', smith: 'repair merchant', armor: 'armour merchant', accessory: 'accessory merchant', gate: 'world statue', arrival: 'town start' }[String(phase).replace(/^(walk|open|close)-/, '')] || 'service point'; },
   viaArrival() {
     const t = this.trip, c = this.cfg();
     if (t.phase === 'walk-arrival') {
@@ -526,9 +532,12 @@ const Town = {
     else if (Cmd.move(step.point)) t.movedAt = now();
     return false;
   },
+  // A saved service, or a merchant only this trip visits (zero-setup leveling's armour and accessory merchants).
+  point(role) { return this.cfg()[role] || this.trip?.shops?.[role] || null; },
   serviceEntity(role, entity) { return !!entity && (entity.kind === 'npc' || role === 'gate' && entity.kind === 'teleport'); },
   npc(role) {
-    const saved = this.cfg()[role];
+    const saved = this.point(role);
+    if (!saved) return null;
     return [...World.ents.values()].find(e => this.serviceEntity(role, e) && e.refObjId === saved.refObjId && dist2D(e, saved.npc || saved) < 100);
   },
   open(role, kind) {
@@ -540,7 +549,7 @@ const Town = {
       if (Cmd.spaced('select')) Cmd.select(npc.gid);
       return false;
     }
-    const caps = { storage: 4, vendor: 1, smith: 8, gate: 0x20000000 };
+    const caps = { storage: 4, vendor: 1, smith: 8, armor: 1, accessory: 1, gate: 0x20000000 };
     if (!(gp.targetCapabilities & caps[role])) { this.fail('Selected NPC does not offer ' + role + '.'); return false; }
     // Selection itself opens the service menu. npc-talk requires the separate
     // Talk capability and is invalid for teleport statues with no dialogue.
@@ -714,7 +723,7 @@ const Town = {
         // Like protected items: no bag room to bring pet loot through is not a failure; the trip carries on.
         this.message = 'Town sell: no free bag slot for pet loot; it stays in the pet for now.';
         Log.warn(this.message);
-        this.enter(this.ammoSupplies().length ? 'ammo' : 'repair'); return;
+        this.afterSell(); return;
       }
       if (Cmd.raw({ kind: 'cos-transfer', gid: pet.rec.gid, toCos: false, source: petItem.slot, destination: slot }, 'Town: move pet loot to the bag for selling')) {
         t.salePetGid = pet.rec.gid;
@@ -734,7 +743,7 @@ const Town = {
         return;
       }
       // Protected items may still fill the pet; the trip carries on and goes back to hunting rather than stopping in town.
-      this.enter(this.ammoSupplies().length ? 'ammo' : 'repair'); return;
+      this.afterSell(); return;
     }
     const quantity = item.quantity ?? 1;
     if (!Number.isInteger(quantity) || quantity < 1 || quantity > 65535) return this.fail('Invalid item sale quantity.');
@@ -742,6 +751,12 @@ const Town = {
       t.pending = { bag: true, source: item.slot, ref: item.refObjId, quantity, at: now() };
       if (staged) t.staged = null;
     }
+  },
+  // After selling at the weapon merchant: zero-setup leveling's weapon and shield purchases, then ammunition and repair.
+  afterSell() {
+    const t = this.trip;
+    if (Leveling.wants(t, 'smith').length) { this.enter('gear'); t.gearRole = 'smith'; return; }
+    this.enter(this.ammoSupplies().length ? 'ammo' : 'repair');
   },
   // Tops up arrows and bolts at the weapon merchant. A shortfall here (not sold, no bag room, no gold) is reported and
   // skipped: the rest of the trip still matters.
@@ -972,10 +987,13 @@ const Town = {
     } else if (t.phase.startsWith('walk-')) {
       const role = t.phase.slice(5);
       if (role === 'arrival') { if (this.walk(c.arrival) && this.trip) this.enter(t.resume); }
-      else if (this.walk(c[role]) && this.trip) this.enter('open-' + role);
+      else if (this.walk(this.point(role)) && this.trip) this.enter('open-' + role);
     } else if (t.phase.startsWith('open-')) {
       const role = t.phase.slice(5), kind = role === 'storage' ? 'storage-open' : role === 'gate' ? 'npc-talk' : 'shop-open';
-      if (this.open(role, kind) && this.trip) this.enter({ storage: 'store', vendor: 'buy', smith: 'sell', gate: 'reverse' }[role]);
+      if (this.open(role, kind) && this.trip) {
+        this.enter({ storage: 'store', vendor: 'buy', smith: 'sell', armor: 'gear', accessory: 'gear', gate: 'reverse' }[role]);
+        this.trip.gearRole = role;
+      }
     } else if (t.phase === 'settle') this.settle();
     else if (t.phase === 'service-wait') this.serviceWait();
     else if (t.phase === 'pet-revive') this.revivePet();
@@ -983,6 +1001,7 @@ const Town = {
     else if (t.phase === 'buy') this.buy();
     else if (t.phase === 'sell') this.sell();
     else if (t.phase === 'ammo') this.ammo();
+    else if (t.phase === 'gear') Leveling.shop(t);
     else if (t.phase === 'repair') this.repair();
     else if (t.phase === 'leave') this.leave();
     else if (t.phase === 'mall-reverse') this.mallReverse();

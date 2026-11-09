@@ -89,7 +89,7 @@ const Equip = {
       if (this.protected(item) || this.bad.has(BuffGear.key(item))) continue;
       const stats = this.stats(item);
       if (!stats) continue;
-      const need = Town.requiredLevel(item);
+      const need = Leveling.reqLevel(item);
       if (!Number.isInteger(need) || need > level) continue;
       const family = worn.filter(w => this.family(w) === this.family(item));
       if (!family.length) continue;

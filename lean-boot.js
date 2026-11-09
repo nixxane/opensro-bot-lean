@@ -43,7 +43,7 @@ function boot() {
     const key = name ? 'profile:' + name : 'profile:default';
     if (key !== Settings.profileKey) { Town.lastScrollPoint = null; Town.deathPoint = null; stopAll(); Settings.useCharacter(name); }
   });
-  bus.on('profile', () => { PetPotion.reset(); AutoMastery.reset(); StatPoints.reset(); Trace.reset(); BuffGear.reset(); Equip.reset(); Town.lastScrollPoint = null; Town.deathPoint = null; Town.tier = {}; SpeedScroll.reset(); ScrollBuff.reset(); MallBuyer.reset(); MallBuyer.unpoison(); RepairHammer.reset(); Party.reset(); Resurrect.reset(); Quest.reset(); stopAll(); Restock.cancelRecording(); Restock.unbuyable.clear(); Loot.reset(); Wardrobe.applyNow(); UI.draw(); });
+  bus.on('profile', () => { Leveling.reset(); PetPotion.reset(); AutoMastery.reset(); StatPoints.reset(); Trace.reset(); BuffGear.reset(); Equip.reset(); Town.lastScrollPoint = null; Town.deathPoint = null; Town.tier = {}; SpeedScroll.reset(); ScrollBuff.reset(); MallBuyer.reset(); MallBuyer.unpoison(); RepairHammer.reset(); Party.reset(); Resurrect.reset(); Quest.reset(); stopAll(); Restock.cancelRecording(); Restock.unbuyable.clear(); Loot.reset(); Wardrobe.applyNow(); UI.draw(); });
   bus.on('phase', phase => {
     if (phase !== 'world') {
       BuffGear.interrupt('World transition interrupted buff swaps.', true);
@@ -67,7 +67,7 @@ function boot() {
       if (['recall-wait', 'reverse-wait'].includes(Town.trip.phase)) Town.trip.transition = true;
       else Town.fail('Unexpected world reset during town service.');
     }
-    SpeedScroll.reset(); ScrollBuff.reset(); MallBuyer.reset(); RepairHammer.reset(); Party.reset(); Resurrect.reset(); Quest.reset(); PetPotion.reset(); Loot.reset(); Navigation.scene = null; Wardrobe.inv = Wardrobe.baseInv = Wardrobe.av = Wardrobe.baseAv = null; Wardrobe.body = '';
+    SpeedScroll.reset(); ScrollBuff.reset(); MallBuyer.reset(); RepairHammer.reset(); Party.reset(); Resurrect.reset(); Quest.reset(); PetPotion.reset(); Leveling.reset(); Loot.reset(); Navigation.scene = null; Wardrobe.inv = Wardrobe.baseInv = Wardrobe.av = Wardrobe.baseAv = null; Wardrobe.body = '';
   });
   bus.on('attached', ({ late }) => { if (late) UI.toast('Attached after the game started. Reload for complete character data.', 'warn'); });
   bus.on('potion-empty', kind => UI.toast('Out of ' + kind.toUpperCase() + ' potions.', 'warn'));
