@@ -3892,6 +3892,21 @@ test('empty slots alone never start a town trip; a real upgrade does (live: a tr
   gp.progression.level = 8; f.Leveling.checkAt = 0;
   assert.match(f.Leveling.due(), /better gear to buy/, 'the next weapon tier is worth a trip');
 });
+test('a trip for gear alone waits for the last piece of the tier (live: a trip at every level from 8 to 13)', () => {
+  const f = gearFixture(), gp = f.World.gp;
+  // The tier opens at 8 (weapon) and ends at 11 (a helmet); the next tier starts at 16.
+  f.Leveling.gear.T.push([410, 'armor', 3, 1, 0, 1, 9, 900], [411, 'armor', 3, 1, 0, 1, 11, 900], [76, 'smith', 6, 2, 0, 2, 16, 9000]);
+  f.Leveling.index = null;
+  gp.progression = { ...gp.progression, gold: '100000' };
+  for (const level of [8, 9, 10]) {
+    gp.progression.level = level; f.Leveling.checkAt = 0;
+    assert.equal(f.Leveling.due(), '', 'level ' + level + ': more of the tier opens soon, no trip');
+  }
+  gp.progression.level = 11; f.Leveling.checkAt = 0;
+  assert.match(f.Leveling.due(), /better gear to buy \(level 11\)/, 'level 11: the whole tier is open, one trip');
+  assert.equal(f.Leveling.unlocking(15), false, 'the next tier is three levels or more away: not this tier');
+  assert.equal(f.Leveling.unlocking(16), false);
+});
 test('a gear plan starts one town trip and visits the armour merchant before the way back', () => {
   const f = gearFixture(), gp = f.World.gp;
   gp.progression.gold = '100000';

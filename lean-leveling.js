@@ -13,7 +13,7 @@
 // armour or accessory socket is filled. Purchases happen on any town trip, in the shop, one confirmed transaction at a
 // time; the new piece is worn at once and the old one sold back there. A plan the town can pay for starts a trip by
 // itself, once per plan.
-const LEVEL_SPOT_REACH_M = 5000, LEVEL_SPOT_BELOW = 5, LEVEL_SPOT_ABOVE = 2, LEVEL_SPOT_KEEP = 2, LEVEL_GEAR_MAX_PLUS = 3, LEVEL_GEAR_CHECK_MS = 20000, LEVEL_SPOT_WALK_FAILS = 5;
+const LEVEL_SPOT_REACH_M = 5000, LEVEL_SPOT_BELOW = 5, LEVEL_SPOT_ABOVE = 2, LEVEL_SPOT_KEEP = 2, LEVEL_GEAR_MAX_PLUS = 3, LEVEL_GEAR_CHECK_MS = 20000, LEVEL_SPOT_WALK_FAILS = 5, LEVEL_TIER_GAP = 3;
 // Equipment sockets by TID4 (OpenSRO inventory/slots.go, native sub_594980): armour parts and accessories.
 // The mastery each weapon type trains (TID4 of the weapon; OpenSRO masteries 257-276 Chinese, 513-518 European), and the
 // European masteries that fight with Intelligence.
@@ -159,12 +159,22 @@ const Leveling = {
   // A town trip reason when the plan has a real upgrade: a worn piece the town sells a higher tier of. Filling an empty
   // slot is never worth a trip of its own (live: a level 2 character went to town for level 1 rings); it is done on
   // any trip that happens anyway. Each plan starts at most one trip.
+  // A tier of town gear unlocks over a few levels (Jangan: weapon and boots at 8, the helmet at 11, the chest at 13). A trip
+  // for gear alone waits until the last piece of the tier is open, so one trip buys the whole set; any trip that happens
+  // anyway (a death, potions, repairs) still buys what is open already.
+  unlocking(level) {
+    const town = this.town(), { country, sex } = this.who();
+    const levels = [...new Set((this.gear[town?.key] || []).filter(r => (r[4] === country || r[4] === 3) && (r[5] === 2 || r[5] === sex)).map(r => r[6]))].sort((a, b) => a - b);
+    const next = levels.findIndex(l => l > level);
+    // The next unlock belongs to this tier when it follows the last open one closely (tiers are LEVEL_TIER_GAP+ apart).
+    return next > 0 && levels[next] - levels[next - 1] < LEVEL_TIER_GAP;
+  },
   due() {
     if (!this.gearOn() || Town.trip) return '';
     if (now() < this.checkAt) return this.due_;
     this.checkAt = now() + LEVEL_GEAR_CHECK_MS;
-    const plan = this.plan().filter(w => !w.fill), key = World.charName + '|' + plan.map(w => w.socket + ':' + w.row[0]).join(',');
-    this.due_ = plan.length && !this.tried.has(key) ? 'better gear to buy (level ' + World.gp.progression.level + ')' : '';
+    const plan = this.plan().filter(w => !w.fill), key = World.charName + '|' + plan.map(w => w.socket + ':' + w.row[0]).join(','), level = World.gp.progression.level;
+    this.due_ = plan.length && !this.tried.has(key) && !this.unlocking(level) ? 'better gear to buy (level ' + level + ')' : '';
     return this.due_;
   },
   // Town.begin: the plan this trip carries, and where the armour and accessory merchants stand.
