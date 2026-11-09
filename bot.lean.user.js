@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         nixxane bot
 // @namespace    https://opensro.online/
-// @version      1.2.232
+// @version      1.2.233
 // @updateURL    https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.meta.js
 // @downloadURL  https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -22,7 +22,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[NIX] Another SRO assistant is active. Disable it and reload to use NIX.');
   return;
 }
-const VERSION = '1.2.232';
+const VERSION = '1.2.233';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -7601,7 +7601,28 @@ const Town = {
     // Zero-setup leveling adds the armour and accessory merchants before the way back, when it buys there.
     const shops = ['armor', 'accessory'].filter(role => this.trip?.shops?.[role]);
     order.splice(order.indexOf('gate'), 0, ...shops);
-    return order.filter(role => (role !== 'storage' || this.cfg().storage) && (role !== 'gate' || !this.walks()));
+    const route = order.filter(role => (role !== 'storage' || this.cfg().storage) && (role !== 'gate' || !this.walks()));
+    // A service with nothing to do is not walked to (the warehouse on a trip that only buys gear, say).
+    const skipped = route.filter(role => !this.needs(role));
+    if (skipped.length) Log.info('Town: nothing to do at the ' + skipped.map(r => this.role(r)).join(', ') + '; skipped.');
+    return route.filter(role => !skipped.includes(role));
+  },
+  // Whether a service has work this trip, from what the bag and pet hold now. Anything that cannot be read counts as
+  // work: a wasted walk is better than a skipped repair.
+  needs(role) {
+    const t = this.trip, pet = Loot.pet(), bag = World.items(), petItems = pet?.rec.inventory || [];
+    try {
+      if (role === 'storage') return bag.some(i => this.depositItem(i, true) || this.stone(i)) || petItems.some(i => this.eligible(i)) ||
+        Equip.on() && !!Equip.pick();
+      if (role === 'vendor') {
+        const scrolls = bag.filter(i => (i.typeFlags & 0xfffc) === 0x09ec).reduce((n, i) => n + (i.quantity ?? 1), 0);
+        return (t?.supplies || this.supplies()).some(s => Restock.count(s.refObjId) < s.target) || scrolls < 2;
+      }
+      if (role === 'smith') return petItems.some(i => this.sellable(i)) || !!t?.sellFirst && bag.some(i => this.sellableBag(i)) ||
+        !!this.cfg().sellExcess && !!this.excess() || this.ammoSupplies().some(s => this.ammoCount(s.refObjId) < s.target) ||
+        this.damaged().length > 0 || Leveling.wants(t || {}, 'smith').length > 0;
+    } catch { return true; }
+    return true;
   },
   // The service to walk to after closing a window. After the last one: the world statue to reverse; without a reverse
   // scroll, first an Item mall purchase when that switch is on, otherwise the walk back.
@@ -11332,8 +11353,19 @@ const Leveling = {
   reqLevel(item) { return Town.requiredLevel(item) ?? this.row(item.refObjId)?.[6] ?? null; },
   tids(item) { const tf = item.typeFlags >>> 0; return [(tf >>> 7) & 15, (tf >>> 11) & 31]; },
   town() { const c = Town.cfg(); return Town.detect(c.vendor || c.smith || c.arrival || World.pose()); },
-  // Race and sex from what the character wears: the gear table first, the codename otherwise. Null when unknown.
+  // Race and sex: from the character's own model (characterdata CHAR_CH_MAN 1907-1919, CHAR_CH_WOMAN 1920-1932,
+  // CHAR_EU_MAN 14717-14729, CHAR_EU_WOMAN 14730-14742), else from what it wears. Starter clothes are in no shop and
+  // the live site sends no codenames, so the wear alone can say nothing: a guess bought the other sex's armour.
+  model(ref) {
+    if (ref >= 1907 && ref <= 1919) return { country: 0, sex: 1 };
+    if (ref >= 1920 && ref <= 1932) return { country: 0, sex: 0 };
+    if (ref >= 14717 && ref <= 14729) return { country: 1, sex: 1 };
+    if (ref >= 14730 && ref <= 14742) return { country: 1, sex: 0 };
+    return null;
+  },
   who() {
+    const own = this.model(World.local()?.refObjId);
+    if (own) return own;
     let country = null, sex = null;
     for (const i of (World.gp?.inventory || []).filter(i => i.slot < 13)) {
       const r = this.row(i.refObjId), code = i.codename || Items.data?.get(i.refObjId)?.code || '';
@@ -11355,14 +11387,14 @@ const Leveling = {
     if (!gp || !Number.isInteger(level) || !town) return [];
     const { country, sex } = this.who();
     if (country === null) return [];
-    const rows = (this.gear[town.key] || []).filter(r => (r[4] === country || r[4] === 3) && (r[5] === 2 || sex === null || r[5] === sex) && r[6] <= level && !this.refused.has(r[0]));
+    const rows = (this.gear[town.key] || []).filter(r => (r[4] === country || r[4] === 3) && (r[5] === 2 || r[5] === sex) && r[6] <= level && !this.refused.has(r[0]));
     const worn = new Map((gp.inventory || []).filter(i => i.slot < 13).map(i => [i.slot, i]));
     const best = (tid3, tid4) => rows.filter(r => r[2] === tid3 && r[3] === tid4).sort((a, b) => b[6] - a[6] || b[7] - a[7])[0] || null;
     const wants = [];
     const consider = (socket, tid3, tid4, fill) => {
       const r = best(tid3, tid4), item = worn.get(socket);
       if (!r) return;
-      if (!item) { if (fill) wants.push({ row: r, socket, role: r[1] }); return; }
+      if (!item) { if (fill) wants.push({ row: r, socket, role: r[1], fill: true }); return; }
       if (item.refObjId !== r[0] && this.replaceable(item) && r[6] > this.reqLevel(item)) wants.push({ row: r, socket, role: r[1] });
     };
     const weapon = worn.get(6);
@@ -11387,12 +11419,14 @@ const Leveling = {
     }
     return out;
   },
-  // A town trip reason when the plan has something new to buy. Each plan starts at most one trip.
+  // A town trip reason when the plan has a real upgrade: a worn piece the town sells a higher tier of. Filling an empty
+  // slot is never worth a trip of its own (live: a level 2 character went to town for level 1 rings); it is done on
+  // any trip that happens anyway. Each plan starts at most one trip.
   due() {
     if (!this.gearOn() || Town.trip) return '';
     if (now() < this.checkAt) return this.due_;
     this.checkAt = now() + LEVEL_GEAR_CHECK_MS;
-    const plan = this.plan(), key = World.charName + '|' + plan.map(w => w.socket + ':' + w.row[0]).join(',');
+    const plan = this.plan().filter(w => !w.fill), key = World.charName + '|' + plan.map(w => w.socket + ':' + w.row[0]).join(',');
     this.due_ = plan.length && !this.tried.has(key) ? 'better gear to buy (level ' + World.gp.progression.level + ')' : '';
     this.dueKey = key;
     return this.due_;
@@ -11402,7 +11436,8 @@ const Leveling = {
     t.gear = [];
     if (!this.gearOn()) return;
     t.gear = this.plan().map(w => ({ ...w }));
-    this.tried.add(World.charName + '|' + t.gear.map(w => w.socket + ':' + w.row[0]).join(','));
+    // The same key as due(): the upgrades only, so this plan does not start another trip.
+    this.tried.add(World.charName + '|' + t.gear.filter(w => !w.fill).map(w => w.socket + ':' + w.row[0]).join(','));
     this.due_ = ''; this.checkAt = now() + LEVEL_GEAR_CHECK_MS;
     const town = this.town(), shops = this.shopsData[town?.key] || {};
     t.shops = {};
@@ -15943,7 +15978,7 @@ const Alchemy = {
 };
 
 
-const RELEASE_NOTES = [{"version": "1.2.232", "title": "Leveling finds spots for new characters", "items": ["Zero-setup leveling now knows many more hunting spots, including the thinly spread first-level monsters around each town (Mangnyangs near Jangan, for example). There were none for level 1 before, so a new character stayed on its saved spot.", "A character with no spot at its own level nearby now takes the nearest one a level or two up.", "With leveling spots on, a walk back to an old saved spot (a town centre, say) turns to the spot for your level at once, instead of walking to the old one first."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.231", "title": "Zero-setup leveling now handles skills and stats", "items": ["With **Level up by itself** on, the bot now also raises your weapon's mastery with your level (a sword or blade trains Bicheon, a two-handed staff Wizard, and so on), learns each of its skills as soon as the game allows, and spends stat points: Strength, or Intelligence for a caster. Masteries or a stat share you already chose are kept.", "Each newly learned attack skill joins your attack rotation and each new self buff your buffs, once. A skill you take out stays out.", "Auto mastery has a new choice under \"Skills to upgrade\": **Every skill of my chosen masteries**, which also learns new skills.", "A new switch in the leveling box turns this part off."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.230", "title": "Update button and window layout fixes", "items": ["The **Update** button can be clicked again in the compact window. When an update was available, the button wrapped to a second header row and the \"Update available\" line covered it.", "The classic window keeps one size on every tab again, instead of shrinking on short tabs such as Player buffing. It is still capped to your screen height.", "The wide window splits a page's boxes into its two columns as evenly as possible, so a tall box no longer leaves a long empty gap beside it."], "note": "Checked in the bot's browser UI test (Edge, simulated game), not in a live game."}, {"version": "1.2.229", "title": "Zero-setup leveling", "items": ["New on the Setup page: **Level up by itself**. The bot picks a hunting spot for your level from the game's monster spawn data, near your town, and moves to a better one as you level.", "On town trips it buys the next tier of NPC weapon, armour and (optionally) accessories, wears them in the shop and sells the old pieces back. Seal gear, rare items, +4 and higher, and anything you protect are never replaced. A gold reserve (5,000 by default) is never spent.", "When better gear becomes affordable, the bot goes to town for it by itself, once."], "note": "Tested in simulation only, not in a live game. Off by default."}, {"version": "1.2.228", "title": "Max every skill is now a switch", "items": ["\"Max every skill\" (Settings, Auto mastery) is now an on/off switch instead of a one-time button. While it is on, it learns and upgrades every skill it is allowed to, then stays on and spends new skill points as you get them (after a level up, for example). Turn it off to stop.", "It is off by default and saved per character. Passes that find nothing new stay quiet (no toast every few seconds), and a level the game refused is not resent for a minute."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.227", "title": "One switch for Reverse Return Scrolls", "items": ["Reverse Return Scrolls now have a single switch, on the Town page under \"Back to the hunting spot\": \"Buy Reverse Return Scrolls from the Item mall (silk)\". The old merchant switch is gone (no merchant sells them for gold, and it could start useless town trips); if it was on, the new switch is turned on for you.", "On a town trip without a reverse scroll, the bot now buys one from the Item mall after the services and reverses. Before, the mall only bought while hunting, so the trip often walked back instead. If the mall cannot deliver (budget, silk, full bag, refused), the trip walks back as before.", "The reverse switch works without the general \"Buy from the Item mall\" switch; it still uses the silk budget per bot run. \"Low stock ≤\" now really means \"or equal\". When the same item is listed more than once in the mall, the single-item package is bought."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.226", "title": "Move pet loot to your bag", "items": ["New option under Loot, Bag and pet space: \"Move pet loot to my bag when the pet is nearly full\". The pickup pet's items move to your bag one at a time, keeping two bag slots free, so the pet can keep collecting and the bot stays at the hunting spot longer.", "The town trip starts once the bag is full as well. The weapons and shield chosen under Combat never move. Off by default."], "note": "From a player request. Tested in simulation only, not in a live game."}, {"version": "1.2.225", "title": "Town trips wait when the warehouse will not open", "items": ["If the warehouse, a merchant or the world statue does not open, for example because the town is still loading, the bot no longer stops. It waits a minute, walks back and tries again.", "Each service gets three tries per trip. If the third one fails too, the bot stops with the same message as before.", "No new option."], "note": "From a player report. Tested in simulation only, not in a live game; a slow-loading town is the likely cause, not a confirmed one."}];
+const RELEASE_NOTES = [{"version": "1.2.233", "title": "Leveling buys the right gear, and town trips skip idle stops", "items": ["Leveling now reads your character's sex from the character itself, so it no longer buys armour for the other sex (\"Cannot equip because of different sex\"). If it cannot tell, it only buys gear either sex can wear.", "Leveling goes to town for gear only for a real upgrade over what you wear. Empty slots (a helmet, rings) are filled on trips that happen anyway, never on a trip of their own: a level 2 character no longer goes to town for level 1 gear.", "Every town trip now skips a stop with nothing to do: no warehouse visit without anything to store, no potion merchant when potions and return scrolls are full, no blacksmith without something to sell, buy or mend."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.232", "title": "Leveling finds spots for new characters", "items": ["Zero-setup leveling now knows many more hunting spots, including the thinly spread first-level monsters around each town (Mangnyangs near Jangan, for example). There were none for level 1 before, so a new character stayed on its saved spot.", "A character with no spot at its own level nearby now takes the nearest one a level or two up.", "With leveling spots on, a walk back to an old saved spot (a town centre, say) turns to the spot for your level at once, instead of walking to the old one first."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.231", "title": "Zero-setup leveling now handles skills and stats", "items": ["With **Level up by itself** on, the bot now also raises your weapon's mastery with your level (a sword or blade trains Bicheon, a two-handed staff Wizard, and so on), learns each of its skills as soon as the game allows, and spends stat points: Strength, or Intelligence for a caster. Masteries or a stat share you already chose are kept.", "Each newly learned attack skill joins your attack rotation and each new self buff your buffs, once. A skill you take out stays out.", "Auto mastery has a new choice under \"Skills to upgrade\": **Every skill of my chosen masteries**, which also learns new skills.", "A new switch in the leveling box turns this part off."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.230", "title": "Update button and window layout fixes", "items": ["The **Update** button can be clicked again in the compact window. When an update was available, the button wrapped to a second header row and the \"Update available\" line covered it.", "The classic window keeps one size on every tab again, instead of shrinking on short tabs such as Player buffing. It is still capped to your screen height.", "The wide window splits a page's boxes into its two columns as evenly as possible, so a tall box no longer leaves a long empty gap beside it."], "note": "Checked in the bot's browser UI test (Edge, simulated game), not in a live game."}, {"version": "1.2.229", "title": "Zero-setup leveling", "items": ["New on the Setup page: **Level up by itself**. The bot picks a hunting spot for your level from the game's monster spawn data, near your town, and moves to a better one as you level.", "On town trips it buys the next tier of NPC weapon, armour and (optionally) accessories, wears them in the shop and sells the old pieces back. Seal gear, rare items, +4 and higher, and anything you protect are never replaced. A gold reserve (5,000 by default) is never spent.", "When better gear becomes affordable, the bot goes to town for it by itself, once."], "note": "Tested in simulation only, not in a live game. Off by default."}, {"version": "1.2.228", "title": "Max every skill is now a switch", "items": ["\"Max every skill\" (Settings, Auto mastery) is now an on/off switch instead of a one-time button. While it is on, it learns and upgrades every skill it is allowed to, then stays on and spends new skill points as you get them (after a level up, for example). Turn it off to stop.", "It is off by default and saved per character. Passes that find nothing new stay quiet (no toast every few seconds), and a level the game refused is not resent for a minute."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.227", "title": "One switch for Reverse Return Scrolls", "items": ["Reverse Return Scrolls now have a single switch, on the Town page under \"Back to the hunting spot\": \"Buy Reverse Return Scrolls from the Item mall (silk)\". The old merchant switch is gone (no merchant sells them for gold, and it could start useless town trips); if it was on, the new switch is turned on for you.", "On a town trip without a reverse scroll, the bot now buys one from the Item mall after the services and reverses. Before, the mall only bought while hunting, so the trip often walked back instead. If the mall cannot deliver (budget, silk, full bag, refused), the trip walks back as before.", "The reverse switch works without the general \"Buy from the Item mall\" switch; it still uses the silk budget per bot run. \"Low stock ≤\" now really means \"or equal\". When the same item is listed more than once in the mall, the single-item package is bought."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.226", "title": "Move pet loot to your bag", "items": ["New option under Loot, Bag and pet space: \"Move pet loot to my bag when the pet is nearly full\". The pickup pet's items move to your bag one at a time, keeping two bag slots free, so the pet can keep collecting and the bot stays at the hunting spot longer.", "The town trip starts once the bag is full as well. The weapons and shield chosen under Combat never move. Off by default."], "note": "From a player request. Tested in simulation only, not in a live game."}];
 
 // Check trusted repository metadata; never execute downloaded update code.
 const Updates = {

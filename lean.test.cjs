@@ -3829,6 +3829,29 @@ test('the gear plan buys the next tier of the same kind, fills empty armour part
   f.Leveling.checkAt = 0;
   assert.equal(f.Leveling.due(), '', 'gear buying off: no trip');
 });
+test('gear is bought for the own sex of the character, read from its model, never guessed (live: different sex)', () => {
+  const f = gearFixture(), gp = f.World.gp;
+  gp.progression.gold = '100000';
+  const plan = () => f.Leveling.plan().map(w => w.socket + ':' + w.row[0]).join(' ');
+  f.World.ents.get(1).refObjId = 1925; // CHAR_CH_WOMAN_KANGSI
+  assert.equal(plan(), '6:74 1:397', 'a woman gets the female chest; the male-only legs are not bought');
+  f.World.ents.get(1).refObjId = 1911; // CHAR_CH_MAN_MONK
+  assert.equal(plan(), '6:74 1:396 4:400', 'a man the male pieces');
+  f.World.ents.get(1).refObjId = undefined;
+  gp.inventory = gp.inventory.filter(i => i.slot !== 1); // nothing worn says the sex
+  gp.inventory.push({ slot: 1, refObjId: 9999, typeFlags: 44 | (3 << 7) | (3 << 11), plus: 0, tooltip: { fields: { rarity: 0, reqLevelType1: 1, requiredLevel: 1 } } });
+  assert.equal(plan(), '6:74', 'sex unknown: only what either sex can wear');
+});
+test('empty slots alone never start a town trip; a real upgrade does (live: a trip at level 2 for level 1 gear)', () => {
+  const f = gearFixture(), gp = f.World.gp;
+  gp.progression = { ...gp.progression, level: 7, gold: '100000' };
+  f.Settings.profile.leveling.accessories = true;
+  assert.ok(f.Leveling.plan().length > 0, 'there are empty slots to fill');
+  assert.ok(f.Leveling.plan().every(w => w.fill), 'and nothing above the worn tier');
+  assert.equal(f.Leveling.due(), '', 'so no trip for them');
+  gp.progression.level = 8; f.Leveling.checkAt = 0;
+  assert.match(f.Leveling.due(), /better gear to buy/, 'the next weapon tier is worth a trip');
+});
 test('a gear plan starts one town trip and visits the armour merchant before the way back', () => {
   const f = gearFixture(), gp = f.World.gp;
   gp.progression.gold = '100000';
@@ -3836,7 +3859,7 @@ test('a gear plan starts one town trip and visits the armour merchant before the
   f.Town.begin();
   assert.deepEqual([...f.Town.trip.gear.map(w => w.row[0])], [74, 396, 400]);
   f.Town.arrived();
-  assert.deepEqual([...f.Town.trip.order], ['storage', 'vendor', 'smith', 'armor', 'gate'], 'the armour merchant is visited before the statue');
+  assert.deepEqual([...f.Town.trip.order], ['vendor', 'smith', 'armor', 'gate'], 'the armour merchant is visited before the statue; nothing to store, so no warehouse');
   assert.equal(f.Town.point('armor').refObjId, 640, 'its place comes from the game data, not from the saved town');
   assert.equal(f.Town.cfg().armor, undefined, 'and nothing is saved in the town settings');
   f.Town.trip = null; f.Leveling.checkAt = 0;
@@ -4337,7 +4360,7 @@ test('after reconnecting in town away from the scroll landing spot, the services
   lose(); back(); setup(f); f.World.gp.pose = { ...f.World.gp.pose, x: 200000 }; f.World.pose = () => f.World.gp.pose;
   f.advance(4000); f.Controller.tick(); f.advance(4000); f.Controller.tick();
   assert.ok(f.Town.trip, f.Town.message); assert.equal(f.Town.trip.revival, true);
-  assert.equal(f.Town.trip.phase, 'walk-storage', 'no waiting at the landing spot 1 km away');
+  assert.equal(f.Town.trip.phase, 'walk-vendor', 'no waiting at the landing spot 1 km away (nothing to store: the potion merchant first)');
   assert.equal(f.Reconnect.active(), false);
   // In another town none of the saved services are near: no town cycle (it would only time out).
   const g = reconnectFixture(); let n = 0; g.f.Town.detect = () => (n++ % 2 ? { key: 'KT' } : { key: 'DW' }); setup(g.f);
@@ -6264,6 +6287,22 @@ test('town rejects special-trade-only merchants as smiths and names only missing
   f.Town.save('smith'); assert.equal(f.Town.cfg().smith, null);
   assert.equal(f.Town.validate(), 'Save missing town services: repair merchant, world statue / teleport.');
 });
+test('a town trip walks only to the services that have something to do', () => {
+  const f = townFixture(), gp = f.World.gp;
+  f.Town.begin(); f.Town.arrived();
+  assert.deepEqual([...f.Town.trip.order], ['storage', 'vendor', 'smith', 'gate'], 'loot to store, potions to buy, a worn weapon to mend');
+  f.Town.trip = null;
+  f.pet.inventory = [];
+  gp.inventory.find(i => i.slot === 15).quantity = 60; // MP potions at their target
+  gp.inventory.find(i => i.slot === 6).durability = 10; // the weapon at its maximum
+  f.Town.begin(); f.Town.arrived();
+  assert.deepEqual([...f.Town.trip.order], ['gate'], 'nothing to store, buy or mend: straight to the way back');
+  assert.ok(f.Town.needs('vendor') === false && f.Town.needs('smith') === false && f.Town.needs('storage') === false);
+  f.Town.trip = null;
+  gp.inventory.find(i => i.slot === 13).quantity = 1; // one return scroll left
+  f.Town.begin(); f.Town.arrived();
+  assert.deepEqual([...f.Town.trip.order], ['vendor', 'gate'], 'a return scroll to buy is work for the potion merchant');
+});
 test('town recall accepts landing variation around the saved arrival area', () => {
   const f = townFixture(); f.Town.tick(); f.Town.phase('entering-world');
   f.World.gp.pose = { regionId: 1, x: 350, y: 40, z: 180 }; f.Town.tick();
@@ -6274,7 +6313,8 @@ test('town recognizes a native world reset and waits for the fresh local player 
   f.World.applyEvent({ kind: 'reset', epoch: 2 }); f.World.gp.pose.x = 350;
   f.Town.tick(); assert.equal(f.Town.trip.phase, 'recall-wait');
   f.World.applyEvent({ kind: 'spawn', entity: { gid: 1, kind: 'player', regionId: 1, x: 350, y: 0, z: 100, appearanceState: [0], movementMode: 0 } });
-  f.Town.tick(); assert.equal(f.Town.trip.phase, 'walk-storage');
+  // After boot the pickup pet is not known yet: nothing to store, so the potion merchant comes first.
+  f.Town.tick(); assert.equal(f.Town.trip.phase, 'walk-vendor');
 });
 test('town arrival still needs travel confirmation, settled state and the configured area', () => {
   const f = townFixture(); f.Town.cfg().arrivalRadius = 100; f.Town.tick(); f.World.gp.pose.x = 100;

@@ -429,7 +429,28 @@ const Town = {
     // Zero-setup leveling adds the armour and accessory merchants before the way back, when it buys there.
     const shops = ['armor', 'accessory'].filter(role => this.trip?.shops?.[role]);
     order.splice(order.indexOf('gate'), 0, ...shops);
-    return order.filter(role => (role !== 'storage' || this.cfg().storage) && (role !== 'gate' || !this.walks()));
+    const route = order.filter(role => (role !== 'storage' || this.cfg().storage) && (role !== 'gate' || !this.walks()));
+    // A service with nothing to do is not walked to (the warehouse on a trip that only buys gear, say).
+    const skipped = route.filter(role => !this.needs(role));
+    if (skipped.length) Log.info('Town: nothing to do at the ' + skipped.map(r => this.role(r)).join(', ') + '; skipped.');
+    return route.filter(role => !skipped.includes(role));
+  },
+  // Whether a service has work this trip, from what the bag and pet hold now. Anything that cannot be read counts as
+  // work: a wasted walk is better than a skipped repair.
+  needs(role) {
+    const t = this.trip, pet = Loot.pet(), bag = World.items(), petItems = pet?.rec.inventory || [];
+    try {
+      if (role === 'storage') return bag.some(i => this.depositItem(i, true) || this.stone(i)) || petItems.some(i => this.eligible(i)) ||
+        Equip.on() && !!Equip.pick();
+      if (role === 'vendor') {
+        const scrolls = bag.filter(i => (i.typeFlags & 0xfffc) === 0x09ec).reduce((n, i) => n + (i.quantity ?? 1), 0);
+        return (t?.supplies || this.supplies()).some(s => Restock.count(s.refObjId) < s.target) || scrolls < 2;
+      }
+      if (role === 'smith') return petItems.some(i => this.sellable(i)) || !!t?.sellFirst && bag.some(i => this.sellableBag(i)) ||
+        !!this.cfg().sellExcess && !!this.excess() || this.ammoSupplies().some(s => this.ammoCount(s.refObjId) < s.target) ||
+        this.damaged().length > 0 || Leveling.wants(t || {}, 'smith').length > 0;
+    } catch { return true; }
+    return true;
   },
   // The service to walk to after closing a window. After the last one: the world statue to reverse; without a reverse
   // scroll, first an Item mall purchase when that switch is on, otherwise the walk back.

@@ -76,8 +76,19 @@ const Leveling = {
   reqLevel(item) { return Town.requiredLevel(item) ?? this.row(item.refObjId)?.[6] ?? null; },
   tids(item) { const tf = item.typeFlags >>> 0; return [(tf >>> 7) & 15, (tf >>> 11) & 31]; },
   town() { const c = Town.cfg(); return Town.detect(c.vendor || c.smith || c.arrival || World.pose()); },
-  // Race and sex from what the character wears: the gear table first, the codename otherwise. Null when unknown.
+  // Race and sex: from the character's own model (characterdata CHAR_CH_MAN 1907-1919, CHAR_CH_WOMAN 1920-1932,
+  // CHAR_EU_MAN 14717-14729, CHAR_EU_WOMAN 14730-14742), else from what it wears. Starter clothes are in no shop and
+  // the live site sends no codenames, so the wear alone can say nothing: a guess bought the other sex's armour.
+  model(ref) {
+    if (ref >= 1907 && ref <= 1919) return { country: 0, sex: 1 };
+    if (ref >= 1920 && ref <= 1932) return { country: 0, sex: 0 };
+    if (ref >= 14717 && ref <= 14729) return { country: 1, sex: 1 };
+    if (ref >= 14730 && ref <= 14742) return { country: 1, sex: 0 };
+    return null;
+  },
   who() {
+    const own = this.model(World.local()?.refObjId);
+    if (own) return own;
     let country = null, sex = null;
     for (const i of (World.gp?.inventory || []).filter(i => i.slot < 13)) {
       const r = this.row(i.refObjId), code = i.codename || Items.data?.get(i.refObjId)?.code || '';
@@ -99,14 +110,14 @@ const Leveling = {
     if (!gp || !Number.isInteger(level) || !town) return [];
     const { country, sex } = this.who();
     if (country === null) return [];
-    const rows = (this.gear[town.key] || []).filter(r => (r[4] === country || r[4] === 3) && (r[5] === 2 || sex === null || r[5] === sex) && r[6] <= level && !this.refused.has(r[0]));
+    const rows = (this.gear[town.key] || []).filter(r => (r[4] === country || r[4] === 3) && (r[5] === 2 || r[5] === sex) && r[6] <= level && !this.refused.has(r[0]));
     const worn = new Map((gp.inventory || []).filter(i => i.slot < 13).map(i => [i.slot, i]));
     const best = (tid3, tid4) => rows.filter(r => r[2] === tid3 && r[3] === tid4).sort((a, b) => b[6] - a[6] || b[7] - a[7])[0] || null;
     const wants = [];
     const consider = (socket, tid3, tid4, fill) => {
       const r = best(tid3, tid4), item = worn.get(socket);
       if (!r) return;
-      if (!item) { if (fill) wants.push({ row: r, socket, role: r[1] }); return; }
+      if (!item) { if (fill) wants.push({ row: r, socket, role: r[1], fill: true }); return; }
       if (item.refObjId !== r[0] && this.replaceable(item) && r[6] > this.reqLevel(item)) wants.push({ row: r, socket, role: r[1] });
     };
     const weapon = worn.get(6);
@@ -131,12 +142,14 @@ const Leveling = {
     }
     return out;
   },
-  // A town trip reason when the plan has something new to buy. Each plan starts at most one trip.
+  // A town trip reason when the plan has a real upgrade: a worn piece the town sells a higher tier of. Filling an empty
+  // slot is never worth a trip of its own (live: a level 2 character went to town for level 1 rings); it is done on
+  // any trip that happens anyway. Each plan starts at most one trip.
   due() {
     if (!this.gearOn() || Town.trip) return '';
     if (now() < this.checkAt) return this.due_;
     this.checkAt = now() + LEVEL_GEAR_CHECK_MS;
-    const plan = this.plan(), key = World.charName + '|' + plan.map(w => w.socket + ':' + w.row[0]).join(',');
+    const plan = this.plan().filter(w => !w.fill), key = World.charName + '|' + plan.map(w => w.socket + ':' + w.row[0]).join(',');
     this.due_ = plan.length && !this.tried.has(key) ? 'better gear to buy (level ' + World.gp.progression.level + ')' : '';
     this.dueKey = key;
     return this.due_;
@@ -146,7 +159,8 @@ const Leveling = {
     t.gear = [];
     if (!this.gearOn()) return;
     t.gear = this.plan().map(w => ({ ...w }));
-    this.tried.add(World.charName + '|' + t.gear.map(w => w.socket + ':' + w.row[0]).join(','));
+    // The same key as due(): the upgrades only, so this plan does not start another trip.
+    this.tried.add(World.charName + '|' + t.gear.filter(w => !w.fill).map(w => w.socket + ':' + w.row[0]).join(','));
     this.due_ = ''; this.checkAt = now() + LEVEL_GEAR_CHECK_MS;
     const town = this.town(), shops = this.shopsData[town?.key] || {};
     t.shops = {};
