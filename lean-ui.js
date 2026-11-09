@@ -1287,6 +1287,24 @@ const UI = {
   // The wide window shows a page as two columns. Plain grid rows leave a gap under every box that is shorter than its
   // neighbour, so the boxes are dealt into two stacks instead: each one goes under the shorter stack, in page order.
   // Wide boxes (the map, the item table, the member list, the trip pictures) and loose notes keep the full width.
+  // Which boxes go right (bit i = box i): the most even split of the heights, the first box always left. Each stack keeps
+  // page order. Pages hold a handful of boxes, so every split is tried; past BALANCE_EXACT boxes it falls back to
+  // dealing each box under the shorter stack.
+  splitMask(heights) {
+    const BALANCE_EXACT = 12, n = heights.length;
+    if (n > BALANCE_EXACT) {
+      let l = 0, r = 0, mask = 0;
+      heights.forEach((h, i) => { if (l <= r) l += h; else { r += h; mask |= 1 << i; } });
+      return mask;
+    }
+    let best = 0, bestDiff = Infinity;
+    for (let mask = 0; mask < 1 << n; mask += 2) {
+      let diff = 0;
+      heights.forEach((h, i) => { diff += mask & (1 << i) ? -h : h; });
+      if (Math.abs(diff) < bestDiff) { bestDiff = Math.abs(diff); best = mask; }
+    }
+    return best;
+  },
   balance() {
     if (!this.wide || !this.pane) return;
     const full = el => el.tagName !== 'FIELDSET' || el.matches('.map-box, :has(.trip-flow), :has(.members), :has(.item-table)');
@@ -1301,8 +1319,7 @@ const UI = {
     for (const { run: group, before } of segments) {
       if (group.length < 2) continue;
       const row = el('div', null, 'pane-cols'), left = el('div', null, 'pane-col'), right = el('div', null, 'pane-col');
-      let l = 0, r = 0;
-      for (const b of group) { if (l <= r) { left.append(b); l += heights.get(b) + 8; } else { right.append(b); r += heights.get(b) + 8; } }
+      for (const [i, b] of group.entries()) (this.splitMask(group.map(b => heights.get(b) + 8)) & (1 << i) ? right : left).append(b);
       row.append(left, right); this.pane.insertBefore(row, before);
     }
   },

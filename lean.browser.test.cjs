@@ -111,7 +111,7 @@ const server = http.createServer((req, res) => {
     await page.addInitScript(v => localStorage.setItem('sroBotLean:v1:seenVersion', JSON.stringify(v)), version);
     await page.goto(`http://127.0.0.1:${server.address().port}/`);
     await page.addScriptTag({ content: script });
-    await page.getByText(/^nixxane bot 1\./).waitFor();
+    await page.getByText(/^NIX 1\./).waitFor();
     const updateButton = page.getByRole('button', { name: 'Update 9.0.0', exact: true });
     await updateButton.waitFor();
     // The new version's headline is shown as text, so a player sees why to update before installing.
@@ -204,7 +204,7 @@ const server = http.createServer((req, res) => {
     await page.getByLabel('New buff set name',{exact:true}).fill('Bard');
     await page.getByRole('button',{name:'Save equipped buff set',exact:true}).click();
     assert.equal(await page.evaluate(()=>SROLean.settings.profile.macro.buffSets.length),2);
-    await page.getByLabel('Swap weapons for assigned buffs',{exact:true}).check();
+    await page.getByLabel('Swap weapons for buffs',{exact:true}).check();
     await page.getByLabel('Gear for Test buff',{exact:true}).selectOption('2');
     assert.equal(await page.evaluate(()=>SROLean.settings.profile.macro.buffs[0].gearSet),2);
     assert.equal(await page.evaluate(()=>SROLean.settings.profile.macro.buffSwap),true);
@@ -212,7 +212,7 @@ const server = http.createServer((req, res) => {
     await page.getByRole('button',{name:'Remove Bard',exact:true}).click();
     assert.equal(await page.evaluate(()=>SROLean.settings.profile.macro.buffs[0].gearSet),0);
     await page.getByRole('button',{name:'Remove Cleric',exact:true}).click();
-    await page.getByLabel('Swap weapons for assigned buffs',{exact:true}).uncheck();
+    await page.getByLabel('Swap weapons for buffs',{exact:true}).uncheck();
     await page.evaluate(()=>{SROLean.world.gp.inventory=SROLean.world.gp.inventory.filter(i=>i.refObjId!==11);SROLean.world.gp.inventory.find(i=>i.refObjId===10).slot=6;});
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
 
@@ -272,7 +272,7 @@ const server = http.createServer((req, res) => {
     await page.getByLabel('Every (minutes)', { exact: true }).fill('90');
     await page.getByLabel('Every (minutes)', { exact: true }).dispatchEvent('change');
     assert.deepEqual(await page.evaluate(() => { const c = SROLean.town.cfg(); return [c.broken, c.wear, c.noXp, c.every]; }),
-      [true, { on: true, pct: 25 }, { on: true, minutes: 7 }, { on: true, minutes: 90 }]);
+      [true, { on: true, pct: 25 }, { on: true, minutes: 7, action: 'town' }, { on: true, minutes: 90 }]);
     await page.waitForFunction(() => document.getElementById('sro-bot-lean').shadowRoot.querySelectorAll('.trip-flow .skill-icon[data-icon-loaded=true]').length === 5);
     assert.match(await page.locator('.trip-flow').innerText(), /Return scroll[\s\S]*Way back/);
     await page.locator('.pane').screenshot({ path: __dirname + '/lean-town-page.png' });
@@ -282,13 +282,15 @@ const server = http.createServer((req, res) => {
     await reviveToggle.uncheck(); assert.equal(await page.evaluate(() => SROLean.town.cfg().revive), false);
     await reviveToggle.check(); assert.equal(await page.evaluate(() => SROLean.town.cfg().revive), true);
     await page.getByRole('button', { name: 'Supplies', exact: true }).click();
-    assert.equal(await page.getByLabel('HP refill to', { exact: true }).inputValue(), '100');
-    assert.equal(await page.getByLabel('MP refill to', { exact: true }).inputValue(), '300');
-    await page.getByLabel('MP refill to', { exact: true }).fill('1000');
-    await page.getByLabel('MP refill to', { exact: true }).dispatchEvent('change');
+    // The Item mall group has its own HP/MP refill boxes; these are the merchant restock ones.
+    const restock = page.getByRole('group', { name: 'Potion restock' });
+    assert.equal(await restock.getByLabel('HP refill to', { exact: true }).inputValue(), '100');
+    assert.equal(await restock.getByLabel('MP refill to', { exact: true }).inputValue(), '300');
+    await restock.getByLabel('MP refill to', { exact: true }).fill('1000');
+    await restock.getByLabel('MP refill to', { exact: true }).dispatchEvent('change');
     assert.equal(await page.evaluate(() => SROLean.settings.profile.potion.restock.mp.target), 1000);
-    await page.getByLabel('MP refill to', { exact: true }).fill('300');
-    await page.getByLabel('MP refill to', { exact: true }).dispatchEvent('change');
+    await restock.getByLabel('MP refill to', { exact: true }).fill('300');
+    await restock.getByLabel('MP refill to', { exact: true }).dispatchEvent('change');
     const pillToggle = page.getByLabel('Buy abnormal pills (best)', { exact: true });
     assert.equal(await pillToggle.isChecked(), false);
     await pillToggle.check();
@@ -477,8 +479,10 @@ const server = http.createServer((req, res) => {
     // The panel's own spot is remembered too: drag it by the title, then a reload (re-mount) puts it back there.
     const title = page.locator('#sro-bot-lean header').first(), panelStart = await page.locator('#sro-bot-lean').boundingBox();
     const tb = await title.boundingBox();
-    await page.mouse.move(tb.x + 60, tb.y + 10); await page.mouse.down();
-    await page.mouse.move(tb.x + 60 - 250, tb.y + 10 + 40, { steps: 6 }); await page.mouse.up();
+    // Grab the empty end of the header row: the title's start is the clickable version number.
+    const grab = tb.x + tb.width - 60;
+    await page.mouse.move(grab, tb.y + 10); await page.mouse.down();
+    await page.mouse.move(grab - 250, tb.y + 10 + 40, { steps: 6 }); await page.mouse.up();
     const panelMoved = await page.locator('#sro-bot-lean').boundingBox();
     assert.ok(Math.abs(panelMoved.x - (panelStart.x - 250)) < 3 && Math.abs(panelMoved.y - (panelStart.y + 40)) < 3);
     assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('sroLean:ui')).panel), { x: Math.round(panelMoved.x), y: Math.round(panelMoved.y) });
@@ -506,7 +510,11 @@ const server = http.createServer((req, res) => {
     await page.getByRole('button', { name: 'Party', exact: true }).click();
     const stacks = await page.evaluate(() => [...document.getElementById('sro-bot-lean').shadowRoot.querySelectorAll('.pane-cols > .pane-col')].map(c => ({ boxes: c.children.length, height: c.offsetHeight })));
     assert.equal(stacks.length, 2); assert.ok(stacks.every(s => s.boxes >= 1), 'both columns hold boxes');
-    assert.ok(Math.abs(stacks[0].height - stacks[1].height) < 260, 'the two columns end at about the same height: ' + JSON.stringify(stacks));
+    // The stacks are the most even split the box heights allow (one very tall box can leave an unavoidable difference).
+    const boxHeights = await page.evaluate(() => [...document.getElementById('sro-bot-lean').shadowRoot.querySelectorAll('.pane-cols > .pane-col > *')].map(b => b.offsetHeight + 8));
+    let bestDiff = Infinity;
+    for (let mask = 0; mask < 1 << boxHeights.length; mask++) bestDiff = Math.min(bestDiff, Math.abs(boxHeights.reduce((d, h, i) => d + (mask & (1 << i) ? -h : h), 0)));
+    assert.ok(Math.abs(stacks[0].height - stacks[1].height) <= bestDiff + 16, 'the two columns end as evenly as the boxes allow: ' + JSON.stringify(stacks));
     assert.equal(await page.locator('.strip strong').first().innerText(), await page.evaluate(() => SROLean.world.charName));
     await page.waitForFunction(() => [...document.getElementById('sro-bot-lean').shadowRoot.querySelectorAll('nav button')].every(b => b.dataset.iconLoaded === 'true'));
     assert.match(await page.getByLabel('Supplies: HP potions', { exact: true }).innerText(), /^[\d,]+$/);
@@ -545,7 +553,7 @@ const server = http.createServer((req, res) => {
     assert.equal(Math.round((await host.boundingBox()).width), 840, 'the classic window is 840 px wide');
     assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('sroLean:ui')).classic), true);
     const classicTabs = await page.evaluate(() => [...document.getElementById('sro-bot-lean').shadowRoot.querySelectorAll('nav button')].map(b => b.textContent));
-    assert.deepEqual(classicTabs, ['Settings', 'Skills', 'Items/Storage', 'Training place', 'Party/Autores', 'Player buffing', 'Auto alchemy', 'Extra', 'Map', 'Wardrobe', 'Setup']);
+    assert.deepEqual(classicTabs, ['Settings', 'Skills', 'Items/Storage', 'Training place', 'Party/Autores', 'Player buffing', 'Quest', 'Auto alchemy', 'Stall', 'Extra', 'Map', 'Auto trade', 'Wardrobe', 'Setup']);
     for (const name of ['Start / stop · F8', 'Return & hunt', 'Stop all', 'Start training', 'Stop training', 'Save settings', 'Hide client']) {
       assert.equal(await page.getByRole('button', { name, exact: true }).isVisible(), true, name + ' is in the classic frame');
     }
