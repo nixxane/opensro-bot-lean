@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         nixxane bot
 // @namespace    https://opensro.online/
-// @version      1.2.239
+// @version      1.2.240
 // @updateURL    https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.meta.js
 // @downloadURL  https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -22,7 +22,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[NIX] Another SRO assistant is active. Disable it and reload to use NIX.');
   return;
 }
-const VERSION = '1.2.239';
+const VERSION = '1.2.240';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -5699,6 +5699,7 @@ const CHECK_REACH = 60;         // an edge walks when its far end is reached wit
 const CHECK_NODES = 1500;       // lattice search budget for an edge the straight line does not walk
 const CHECK_AROUND = 400;       // the search stays this close to the edge: a longer way round is the graph's to find
 const CHECK_SLICE_MS = 6;       // search time per slice; the game draws between slices
+const CHECK_SLICE_IDLE_MS = 14;  // while the character only waits for this check, standing still: longer slices, a faster check
 const CHECK_ROUNDS = 60;        // corridors tried before giving up
 const CHECK_MS = 150000;        // whole check
 const CHECK_REGIONS = 6;        // regions kept in memory
@@ -5706,6 +5707,8 @@ const CHECK_LOAD_MS = 30000;
 
 const RouteCheck = {
   worker: null, queue: Promise.resolve(), regions: new Map(), message: '', locating: null,
+  // Edges that walked, per area, for the whole session: the way from town to a spot is checked once, not on every trip.
+  good: new Map(),
   bootstrap() { return W.document?.querySelector?.('script[type="module"][src*="/assets/"]')?.src || ''; },
   available() { return typeof NativeClipper !== 'undefined' && (!!Hook.assetUrl || !!this.bootstrap()); },
   locate() {
@@ -5768,7 +5771,8 @@ const RouteCheck = {
       Log.warn('Route check (beta): the game\'s asset loader was not found, so the route data is walked unchecked.');
       return null;
     }
-    const walks = new Set(), deadline = now() + CHECK_MS, before = Route.bans(area).size / 2;
+    const walks = this.good.get(area) || new Set(), deadline = now() + CHECK_MS, before = Route.bans(area).size / 2;
+    this.good.set(area, walks);
     let unknown = 0, result = false;
     try {
       for (let round = 0; round < CHECK_ROUNDS && now() < deadline; round++) {
@@ -5823,7 +5827,8 @@ const RouteCheck = {
     for (;;) {
       const started = performance.now();
       let result;
-      while ((result = search.next()).done === false && performance.now() - started < CHECK_SLICE_MS);
+      const slice = WalkBack.active?.source === 'planning' ? CHECK_SLICE_IDLE_MS : CHECK_SLICE_MS;
+      while ((result = search.next()).done === false && performance.now() - started < slice);
       if (result.done) return result.value;
       await new Promise(resolve => setTimeout(resolve, 0));
     }
@@ -11306,6 +11311,7 @@ const LEVEL_INT_MASTERIES = [514, 516, 517, 518], LEVEL_SKILL_CHECK_MS = 5000;
 // Raised after the weapon's mastery on every character that has them (Cold, Lightning, Fire; a mastery the character does
 // not have is skipped by Auto mastery), and the pattern of a weapon imbue skill (the same one the imbue picker offers first).
 const LEVEL_ELEMENT_MASTERIES = [273, 274, 275], LEVEL_IMBUE_SKILL = /GIGONGTA|POISON\w*_BLADE|MALL_PET_SKILL/;
+const LEVEL_PART = { 1: 'helmet', 2: 'shoulders', 3: 'chest', 4: 'legs', 5: 'gloves', 6: 'boots', '1a': 'necklace', '2a': 'earrings', '3a': 'ring' };
 const LEVEL_ARMOUR_SOCKET = { 1: 0, 2: 2, 3: 1, 4: 4, 5: 3, 6: 5 }, LEVEL_ACCESSORY_SOCKETS = { 1: [9], 2: [10], 3: [11, 12] };
 const Leveling = {
   // The generated tables, as properties so a test can lay its own over them.
@@ -11398,7 +11404,7 @@ const Leveling = {
     return Number.isInteger(this.reqLevel(item));
   },
   // What to buy now: [{ row, socket, role }], best piece per socket, weapon first, within the gold above the reserve.
-  plan() {
+  plan(notes) {
     const gp = World.gp, level = gp?.progression?.level, town = this.town();
     if (!gp || !Number.isInteger(level) || !town) return [];
     const { country, sex } = this.who();
@@ -11407,24 +11413,28 @@ const Leveling = {
     const worn = new Map((gp.inventory || []).filter(i => i.slot < 13).map(i => [i.slot, i]));
     const best = (tid3, tid4) => rows.filter(r => r[2] === tid3 && r[3] === tid4).sort((a, b) => b[6] - a[6] || b[7] - a[7])[0] || null;
     const wants = [];
-    const consider = (socket, tid3, tid4, fill) => {
+    // notes (optional): why a piece is not in the plan, for the trip's log line.
+    const consider = (socket, tid3, tid4, fill, label) => {
       const r = best(tid3, tid4), item = worn.get(socket);
-      if (!r) return;
+      if (!r) { notes?.push(label + ': the town sells none at your level'); return; }
       if (!item) { if (fill) wants.push({ row: r, socket, role: r[1], fill: true }); return; }
-      if (item.refObjId !== r[0] && this.replaceable(item) && r[6] > this.reqLevel(item)) wants.push({ row: r, socket, role: r[1] });
+      if (item.refObjId === r[0] || !(r[6] > (this.reqLevel(item) ?? Infinity))) {
+        notes?.push(label + ': ' + (this.reqLevel(item) === null ? 'its level is unknown, kept' : 'already as good as level ' + r[6] + ' in town'));
+      } else if (!this.replaceable(item)) notes?.push(label + ': kept (enhanced, rare, sealed or protected)');
+      else wants.push({ row: r, socket, role: r[1] });
     };
     const weapon = worn.get(6);
-    if (weapon) consider(6, 6, this.tids(weapon)[1], false);
+    if (weapon) consider(6, 6, this.tids(weapon)[1], false, 'weapon');
     const second = worn.get(7);
-    if (second && ItemType.isEquipment(second.typeFlags) && this.tids(second)[0] === 4) consider(7, 4, this.tids(second)[1], false);
+    if (second && ItemType.isEquipment(second.typeFlags) && this.tids(second)[0] === 4) consider(7, 4, this.tids(second)[1], false, 'shield');
     // Armour: the material most of the worn pieces have; empty parts are filled with it.
     const materials = {};
     for (const s of [0, 1, 2, 3, 4, 5]) { const i = worn.get(s); if (i) { const t3 = this.tids(i)[0]; materials[t3] = (materials[t3] || 0) + 1; } }
     const material = Number(Object.keys(materials).sort((a, b) => materials[b] - materials[a])[0]);
-    if (material) for (const [tid4, socket] of Object.entries(LEVEL_ARMOUR_SOCKET)) consider(socket, material, Number(tid4), true);
+    if (material) for (const [tid4, socket] of Object.entries(LEVEL_ARMOUR_SOCKET)) consider(socket, material, Number(tid4), true, LEVEL_PART[tid4]);
     if (this.cfg().accessories) {
       const tid3 = country === 1 ? 12 : 5;
-      for (const [tid4, sockets] of Object.entries(LEVEL_ACCESSORY_SOCKETS)) for (const socket of sockets) consider(socket, tid3, Number(tid4), true);
+      for (const [tid4, sockets] of Object.entries(LEVEL_ACCESSORY_SOCKETS)) for (const socket of sockets) consider(socket, tid3, Number(tid4), true, LEVEL_PART[tid4 + 'a']);
     }
     let budget = toBigInt(gp.progression?.gold ?? 0) - BigInt(Math.max(0, Number(this.cfg().reserve) || 0));
     const out = [];
@@ -11451,7 +11461,10 @@ const Leveling = {
   begin(t) {
     t.gear = [];
     if (!this.gearOn()) return;
-    t.gear = this.plan().map(w => ({ ...w }));
+    const notes = [];
+    t.gear = this.plan(notes).map(w => ({ ...w }));
+    // Why the rest is left alone: one line a report can show.
+    if (notes.length) Log.info('Leveling gear, not bought: ' + notes.join('; ') + '.');
     // The same key as due(): the upgrades only, so this plan does not start another trip.
     this.tried.add(World.charName + '|' + t.gear.filter(w => !w.fill).map(w => w.socket + ':' + w.row[0]).join(','));
     this.due_ = ''; this.checkAt = now() + LEVEL_GEAR_CHECK_MS;
@@ -11517,7 +11530,7 @@ const Leveling = {
         if (!offer) { this.skip(t, w, 'this merchant does not sell it'); return; }
         const gold = toBigInt(gp.progression?.gold ?? 0), reserve = BigInt(Math.max(0, Number(this.cfg().reserve) || 0));
         if (toBigInt(offer.price) + reserve > gold) { this.skip(t, w, 'not enough gold'); return; }
-        if (World.freeBagSlots() < 2) { this.skip(t, w, 'the bag is full'); return; }
+        if (World.freeBagSlots() < 1) { this.skip(t, w, 'the bag is full'); return; }
         const slots = World.items().filter(i => i.refObjId === w.row[0]).map(i => i.slot);
         if (Cmd.raw({ kind: 'shop-buy', tab: offer.tab, slot: offer.slot, quantity: 1 }, 'Leveling: buy ' + Items.name(w.row[0])))
           t.pending = { kind: 'gear-buy', want: w, ref: w.row[0], before: slots.length, slots, at: now() };
@@ -16021,7 +16034,7 @@ const Alchemy = {
 };
 
 
-const RELEASE_NOTES = [{"version": "1.2.239", "title": "Fixes a leveling stop in town, and the route check wait is back", "items": ["Fixed \"Bot stopped: Cannot read properties of null (reading 'npc')\". With Level up by itself on, a town trip where every stop had nothing to do (nothing to sell, buy, repair or store) went to a stop that does not exist. It now goes straight on to the walk back.", "Reverted 1.2.237's 20 second limit on the route check. The shortened check made the character walk in legs, which got stuck in town (\"no walkable route to the hunting spot\"). The route is checked against the game map in full again, as before, and the walk waits for it."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.237", "title": "Leveling starts walking back sooner", "items": ["After a town trip, \"Walking to the hunting spot: loading route data\" could keep a leveling character standing still for up to two and a half minutes while the route was checked against the game map. With Level up by itself on, it now waits at most 20 seconds, then walks in legs as it does when no route data is available.", "With leveling off nothing changes: the full route check wait stays."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.236", "title": "Leveling empties the pet in town even with a full bag", "items": ["With Level up by itself on, a town trip now sells the bag's spare gear first. This makes room for the pet's loot, so a full bag no longer stops the trip with \"free a character bag slot for storage and refills\", and the pet is emptied in town.", "With leveling off nothing changes: bag selling stays a setting."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.235", "title": "Leveling picks better spots, raises the elements and uses an imbue", "items": ["A leveling character no longer stays on a low-level spot beside the town. The bot now looks up to four times the \"Spots at most this far from town\" distance (at most 5 km) before settling for a spot far below your level. At level 5 near Jangan it now takes the level 5 spot, not the level 2 one.", "Zero-setup leveling also raises the Cold, Lightning and Fire masteries after the weapon's mastery (skipped when the character has none), and their new skills join the rotation. A list you chose yourself is left alone.", "A learned weapon imbue skill is put in the empty imbue slot once. Taking it out by hand keeps it out."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.234", "title": "Leveling always walks back", "items": ["With **Level up by itself** on, the character now walks back to its hunting spot after a death or a town trip. It no longer uses or buys Reverse Return Scrolls: leveling spots are only a short walk from town.", "The world statue is not needed for leveling, and the Item mall's reverse buying is paused while leveling is on.", "Turning leveling on or off during a town trip ends that trip.", "With leveling off nothing changes: **Back to the hunting spot** and the reverse settings work as before."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.233", "title": "Leveling buys the right gear, and town trips skip idle stops", "items": ["Leveling now reads your character's sex from the character itself, so it no longer buys armour for the other sex (\"Cannot equip because of different sex\"). If it cannot tell, it only buys gear either sex can wear.", "Leveling goes to town for gear only for a real upgrade over what you wear. Empty slots (a helmet, rings) are filled on trips that happen anyway, never on a trip of their own: a level 2 character no longer goes to town for level 1 gear.", "Every town trip now skips a stop with nothing to do: no warehouse visit without anything to store, no potion merchant when potions and return scrolls are full, no blacksmith without something to sell, buy or mend."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.232", "title": "Leveling finds spots for new characters", "items": ["Zero-setup leveling now knows many more hunting spots, including the thinly spread first-level monsters around each town (Mangnyangs near Jangan, for example). There were none for level 1 before, so a new character stayed on its saved spot.", "A character with no spot at its own level nearby now takes the nearest one a level or two up.", "With leveling spots on, a walk back to an old saved spot (a town centre, say) turns to the spot for your level at once, instead of walking to the old one first."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.231", "title": "Zero-setup leveling now handles skills and stats", "items": ["With **Level up by itself** on, the bot now also raises your weapon's mastery with your level (a sword or blade trains Bicheon, a two-handed staff Wizard, and so on), learns each of its skills as soon as the game allows, and spends stat points: Strength, or Intelligence for a caster. Masteries or a stat share you already chose are kept.", "Each newly learned attack skill joins your attack rotation and each new self buff your buffs, once. A skill you take out stays out.", "Auto mastery has a new choice under \"Skills to upgrade\": **Every skill of my chosen masteries**, which also learns new skills.", "A new switch in the leveling box turns this part off."], "note": "Tested in simulation only, not in a live game."}];
+const RELEASE_NOTES = [{"version": "1.2.240", "title": "Faster route check on repeat trips, and clearer leveling gear buying", "items": ["The route check now remembers every stretch that walked, so after the first trip to a spot the way back no longer waits for it. While the character only waits for the check, it also runs faster.", "Leveling gear buying needs one free bag slot per piece instead of two, so a nearly full bag no longer leaves out rings or armour.", "Each leveling town trip now logs why a piece is not bought (kept because it is enhanced, rare or sealed; already as good as town sells; or the town has none at your level). At level 8 the town sells only a weapon, shield, gloves and rings; chest, boots and the rest come later."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.239", "title": "Fixes a leveling stop in town, and the route check wait is back", "items": ["Fixed \"Bot stopped: Cannot read properties of null (reading 'npc')\". With Level up by itself on, a town trip where every stop had nothing to do (nothing to sell, buy, repair or store) went to a stop that does not exist. It now goes straight on to the walk back.", "Reverted 1.2.237's 20 second limit on the route check. The shortened check made the character walk in legs, which got stuck in town (\"no walkable route to the hunting spot\"). The route is checked against the game map in full again, as before, and the walk waits for it."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.237", "title": "Leveling starts walking back sooner", "items": ["After a town trip, \"Walking to the hunting spot: loading route data\" could keep a leveling character standing still for up to two and a half minutes while the route was checked against the game map. With Level up by itself on, it now waits at most 20 seconds, then walks in legs as it does when no route data is available.", "With leveling off nothing changes: the full route check wait stays."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.236", "title": "Leveling empties the pet in town even with a full bag", "items": ["With Level up by itself on, a town trip now sells the bag's spare gear first. This makes room for the pet's loot, so a full bag no longer stops the trip with \"free a character bag slot for storage and refills\", and the pet is emptied in town.", "With leveling off nothing changes: bag selling stays a setting."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.235", "title": "Leveling picks better spots, raises the elements and uses an imbue", "items": ["A leveling character no longer stays on a low-level spot beside the town. The bot now looks up to four times the \"Spots at most this far from town\" distance (at most 5 km) before settling for a spot far below your level. At level 5 near Jangan it now takes the level 5 spot, not the level 2 one.", "Zero-setup leveling also raises the Cold, Lightning and Fire masteries after the weapon's mastery (skipped when the character has none), and their new skills join the rotation. A list you chose yourself is left alone.", "A learned weapon imbue skill is put in the empty imbue slot once. Taking it out by hand keeps it out."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.234", "title": "Leveling always walks back", "items": ["With **Level up by itself** on, the character now walks back to its hunting spot after a death or a town trip. It no longer uses or buys Reverse Return Scrolls: leveling spots are only a short walk from town.", "The world statue is not needed for leveling, and the Item mall's reverse buying is paused while leveling is on.", "Turning leveling on or off during a town trip ends that trip.", "With leveling off nothing changes: **Back to the hunting spot** and the reverse settings work as before."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.233", "title": "Leveling buys the right gear, and town trips skip idle stops", "items": ["Leveling now reads your character's sex from the character itself, so it no longer buys armour for the other sex (\"Cannot equip because of different sex\"). If it cannot tell, it only buys gear either sex can wear.", "Leveling goes to town for gear only for a real upgrade over what you wear. Empty slots (a helmet, rings) are filled on trips that happen anyway, never on a trip of their own: a level 2 character no longer goes to town for level 1 gear.", "Every town trip now skips a stop with nothing to do: no warehouse visit without anything to store, no potion merchant when potions and return scrolls are full, no blacksmith without something to sell, buy or mend."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.232", "title": "Leveling finds spots for new characters", "items": ["Zero-setup leveling now knows many more hunting spots, including the thinly spread first-level monsters around each town (Mangnyangs near Jangan, for example). There were none for level 1 before, so a new character stayed on its saved spot.", "A character with no spot at its own level nearby now takes the nearest one a level or two up.", "With leveling spots on, a walk back to an old saved spot (a town centre, say) turns to the spot for your level at once, instead of walking to the old one first."], "note": "Tested in simulation only, not in a live game."}];
 
 // Check trusted repository metadata; never execute downloaded update code.
 const Updates = {

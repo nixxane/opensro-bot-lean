@@ -20,6 +20,7 @@ const LEVEL_INT_MASTERIES = [514, 516, 517, 518], LEVEL_SKILL_CHECK_MS = 5000;
 // Raised after the weapon's mastery on every character that has them (Cold, Lightning, Fire; a mastery the character does
 // not have is skipped by Auto mastery), and the pattern of a weapon imbue skill (the same one the imbue picker offers first).
 const LEVEL_ELEMENT_MASTERIES = [273, 274, 275], LEVEL_IMBUE_SKILL = /GIGONGTA|POISON\w*_BLADE|MALL_PET_SKILL/;
+const LEVEL_PART = { 1: 'helmet', 2: 'shoulders', 3: 'chest', 4: 'legs', 5: 'gloves', 6: 'boots', '1a': 'necklace', '2a': 'earrings', '3a': 'ring' };
 const LEVEL_ARMOUR_SOCKET = { 1: 0, 2: 2, 3: 1, 4: 4, 5: 3, 6: 5 }, LEVEL_ACCESSORY_SOCKETS = { 1: [9], 2: [10], 3: [11, 12] };
 const Leveling = {
   // The generated tables, as properties so a test can lay its own over them.
@@ -112,7 +113,7 @@ const Leveling = {
     return Number.isInteger(this.reqLevel(item));
   },
   // What to buy now: [{ row, socket, role }], best piece per socket, weapon first, within the gold above the reserve.
-  plan() {
+  plan(notes) {
     const gp = World.gp, level = gp?.progression?.level, town = this.town();
     if (!gp || !Number.isInteger(level) || !town) return [];
     const { country, sex } = this.who();
@@ -121,24 +122,28 @@ const Leveling = {
     const worn = new Map((gp.inventory || []).filter(i => i.slot < 13).map(i => [i.slot, i]));
     const best = (tid3, tid4) => rows.filter(r => r[2] === tid3 && r[3] === tid4).sort((a, b) => b[6] - a[6] || b[7] - a[7])[0] || null;
     const wants = [];
-    const consider = (socket, tid3, tid4, fill) => {
+    // notes (optional): why a piece is not in the plan, for the trip's log line.
+    const consider = (socket, tid3, tid4, fill, label) => {
       const r = best(tid3, tid4), item = worn.get(socket);
-      if (!r) return;
+      if (!r) { notes?.push(label + ': the town sells none at your level'); return; }
       if (!item) { if (fill) wants.push({ row: r, socket, role: r[1], fill: true }); return; }
-      if (item.refObjId !== r[0] && this.replaceable(item) && r[6] > this.reqLevel(item)) wants.push({ row: r, socket, role: r[1] });
+      if (item.refObjId === r[0] || !(r[6] > (this.reqLevel(item) ?? Infinity))) {
+        notes?.push(label + ': ' + (this.reqLevel(item) === null ? 'its level is unknown, kept' : 'already as good as level ' + r[6] + ' in town'));
+      } else if (!this.replaceable(item)) notes?.push(label + ': kept (enhanced, rare, sealed or protected)');
+      else wants.push({ row: r, socket, role: r[1] });
     };
     const weapon = worn.get(6);
-    if (weapon) consider(6, 6, this.tids(weapon)[1], false);
+    if (weapon) consider(6, 6, this.tids(weapon)[1], false, 'weapon');
     const second = worn.get(7);
-    if (second && ItemType.isEquipment(second.typeFlags) && this.tids(second)[0] === 4) consider(7, 4, this.tids(second)[1], false);
+    if (second && ItemType.isEquipment(second.typeFlags) && this.tids(second)[0] === 4) consider(7, 4, this.tids(second)[1], false, 'shield');
     // Armour: the material most of the worn pieces have; empty parts are filled with it.
     const materials = {};
     for (const s of [0, 1, 2, 3, 4, 5]) { const i = worn.get(s); if (i) { const t3 = this.tids(i)[0]; materials[t3] = (materials[t3] || 0) + 1; } }
     const material = Number(Object.keys(materials).sort((a, b) => materials[b] - materials[a])[0]);
-    if (material) for (const [tid4, socket] of Object.entries(LEVEL_ARMOUR_SOCKET)) consider(socket, material, Number(tid4), true);
+    if (material) for (const [tid4, socket] of Object.entries(LEVEL_ARMOUR_SOCKET)) consider(socket, material, Number(tid4), true, LEVEL_PART[tid4]);
     if (this.cfg().accessories) {
       const tid3 = country === 1 ? 12 : 5;
-      for (const [tid4, sockets] of Object.entries(LEVEL_ACCESSORY_SOCKETS)) for (const socket of sockets) consider(socket, tid3, Number(tid4), true);
+      for (const [tid4, sockets] of Object.entries(LEVEL_ACCESSORY_SOCKETS)) for (const socket of sockets) consider(socket, tid3, Number(tid4), true, LEVEL_PART[tid4 + 'a']);
     }
     let budget = toBigInt(gp.progression?.gold ?? 0) - BigInt(Math.max(0, Number(this.cfg().reserve) || 0));
     const out = [];
@@ -165,7 +170,10 @@ const Leveling = {
   begin(t) {
     t.gear = [];
     if (!this.gearOn()) return;
-    t.gear = this.plan().map(w => ({ ...w }));
+    const notes = [];
+    t.gear = this.plan(notes).map(w => ({ ...w }));
+    // Why the rest is left alone: one line a report can show.
+    if (notes.length) Log.info('Leveling gear, not bought: ' + notes.join('; ') + '.');
     // The same key as due(): the upgrades only, so this plan does not start another trip.
     this.tried.add(World.charName + '|' + t.gear.filter(w => !w.fill).map(w => w.socket + ':' + w.row[0]).join(','));
     this.due_ = ''; this.checkAt = now() + LEVEL_GEAR_CHECK_MS;
@@ -231,7 +239,7 @@ const Leveling = {
         if (!offer) { this.skip(t, w, 'this merchant does not sell it'); return; }
         const gold = toBigInt(gp.progression?.gold ?? 0), reserve = BigInt(Math.max(0, Number(this.cfg().reserve) || 0));
         if (toBigInt(offer.price) + reserve > gold) { this.skip(t, w, 'not enough gold'); return; }
-        if (World.freeBagSlots() < 2) { this.skip(t, w, 'the bag is full'); return; }
+        if (World.freeBagSlots() < 1) { this.skip(t, w, 'the bag is full'); return; }
         const slots = World.items().filter(i => i.refObjId === w.row[0]).map(i => i.slot);
         if (Cmd.raw({ kind: 'shop-buy', tab: offer.tab, slot: offer.slot, quantity: 1 }, 'Leveling: buy ' + Items.name(w.row[0])))
           t.pending = { kind: 'gear-buy', want: w, ref: w.row[0], before: slots.length, slots, at: now() };

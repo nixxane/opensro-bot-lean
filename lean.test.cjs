@@ -9197,3 +9197,21 @@ test('zero-setup leveling: a trip with nothing to do in town goes straight to th
   assert.doesNotThrow(() => f.Town.tick());
   assert.equal(f.Hunt.running !== undefined, true);
 });
+
+test('a corridor that walked is not checked again on the next trip', async () => {
+  const f = fixture(), { from, to } = checkedArea(f, 'again', 15);
+  let loads = 0;
+  f.RouteCheck.region = async regionId => { loads++; return { regionId, clipper: { surface: p => ({ ...p }), available: () => true, clip: (a, b) => ({ ...b }) } }; };
+  assert.ok(await f.Route.checked(from, to));
+  const first = loads; assert.ok(first > 0, 'the first trip checks the map');
+  assert.ok(await f.Route.checked(from, to));
+  assert.equal(loads, first, 'the second trip loads nothing: every edge already walked');
+});
+
+test('the gear plan says why a piece is not bought', () => {
+  const f = gearFixture(), gp = f.World.gp;
+  gp.inventory.find(i => i.slot === 6).plus = 5;
+  const notes = []; f.Leveling.plan(notes);
+  assert.ok(notes.some(n => /^weapon: kept/.test(n)), notes.join(' | '));
+  assert.ok(notes.some(n => /^(helmet|shoulders|chest|legs|gloves|boots): the town sells none/.test(n)), 'a part the town has nothing for at this level');
+});

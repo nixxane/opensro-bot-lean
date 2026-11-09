@@ -12,6 +12,7 @@ const CHECK_REACH = 60;         // an edge walks when its far end is reached wit
 const CHECK_NODES = 1500;       // lattice search budget for an edge the straight line does not walk
 const CHECK_AROUND = 400;       // the search stays this close to the edge: a longer way round is the graph's to find
 const CHECK_SLICE_MS = 6;       // search time per slice; the game draws between slices
+const CHECK_SLICE_IDLE_MS = 14;  // while the character only waits for this check, standing still: longer slices, a faster check
 const CHECK_ROUNDS = 60;        // corridors tried before giving up
 const CHECK_MS = 150000;        // whole check
 const CHECK_REGIONS = 6;        // regions kept in memory
@@ -19,6 +20,8 @@ const CHECK_LOAD_MS = 30000;
 
 const RouteCheck = {
   worker: null, queue: Promise.resolve(), regions: new Map(), message: '', locating: null,
+  // Edges that walked, per area, for the whole session: the way from town to a spot is checked once, not on every trip.
+  good: new Map(),
   bootstrap() { return W.document?.querySelector?.('script[type="module"][src*="/assets/"]')?.src || ''; },
   available() { return typeof NativeClipper !== 'undefined' && (!!Hook.assetUrl || !!this.bootstrap()); },
   locate() {
@@ -81,7 +84,8 @@ const RouteCheck = {
       Log.warn('Route check (beta): the game\'s asset loader was not found, so the route data is walked unchecked.');
       return null;
     }
-    const walks = new Set(), deadline = now() + CHECK_MS, before = Route.bans(area).size / 2;
+    const walks = this.good.get(area) || new Set(), deadline = now() + CHECK_MS, before = Route.bans(area).size / 2;
+    this.good.set(area, walks);
     let unknown = 0, result = false;
     try {
       for (let round = 0; round < CHECK_ROUNDS && now() < deadline; round++) {
@@ -136,7 +140,8 @@ const RouteCheck = {
     for (;;) {
       const started = performance.now();
       let result;
-      while ((result = search.next()).done === false && performance.now() - started < CHECK_SLICE_MS);
+      const slice = WalkBack.active?.source === 'planning' ? CHECK_SLICE_IDLE_MS : CHECK_SLICE_MS;
+      while ((result = search.next()).done === false && performance.now() - started < slice);
       if (result.done) return result.value;
       await new Promise(resolve => setTimeout(resolve, 0));
     }
