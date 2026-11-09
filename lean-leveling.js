@@ -17,6 +17,9 @@ const LEVEL_SPOT_BELOW = 5, LEVEL_SPOT_ABOVE = 2, LEVEL_SPOT_KEEP = 2, LEVEL_GEA
 // European masteries that fight with Intelligence.
 const LEVEL_WEAPON_MASTERY = { 2: 257, 3: 257, 4: 258, 5: 258, 6: 259, 7: 513, 8: 513, 9: 513, 10: 516, 11: 514, 12: 515, 13: 515, 14: 517, 15: 518 };
 const LEVEL_INT_MASTERIES = [514, 516, 517, 518], LEVEL_SKILL_CHECK_MS = 5000;
+// Raised after the weapon's mastery on every character that has them (Cold, Lightning, Fire; a mastery the character does
+// not have is skipped by Auto mastery), and the pattern of a weapon imbue skill (the same one the imbue picker offers first).
+const LEVEL_ELEMENT_MASTERIES = [273, 274, 275], LEVEL_IMBUE_SKILL = /GIGONGTA|POISON\w*_BLADE|MALL_PET_SKILL/;
 const LEVEL_ARMOUR_SOCKET = { 1: 0, 2: 2, 3: 1, 4: 4, 5: 3, 6: 5 }, LEVEL_ACCESSORY_SOCKETS = { 1: [9], 2: [10], 3: [11, 12] };
 const Leveling = {
   // The generated tables, as properties so a test can lay its own over them.
@@ -36,9 +39,13 @@ const Leveling = {
   spot(level) {
     const home = this.home();
     if (!home || !Number.isInteger(level)) return null;
-    const far = clamp(Number(this.cfg().maxM) || 400, 50, 5000) * 10;
+    const base = clamp(Number(this.cfg().maxM) || 400, 50, 5000);
     // above: when nothing at or below the level is in reach (a new character), the nearest few levels up.
     let best = null, fallback = null, above = null;
+    // Reach: 4 times the chosen distance (at most 5 km). Few towns have a spot at every level within 400 m (Jangan's
+    // level 5 one is 407 m away, its level 8 one 903 m), and the score already weighs a level above distance, so a
+    // level 5 character does not stay on the level 2 spot beside the town.
+    const far = Math.min(base * 4, 5000) * 10;
     for (const s of this.spots) {
       if (s[4] > level + LEVEL_SPOT_ABOVE || this.skipped.has(this.key(s))) continue;
       const center = { regionId: s[0], x: s[1], y: s[2], z: s[3] }, d = dist2D(home, center);
@@ -274,8 +281,33 @@ const Leveling = {
       done.push('stat points to ' + (caster ? 'Intelligence' : 'Strength'));
     }
     c.prepared = World.charName;
+    this.addElements(M);
     AutoMastery.reset(); StatPoints.reset(); Settings.saveProfile();
     if (done.length) { this.message = 'Leveling set up: ' + done.join(', ') + '.'; Log.info(this.message); UI.toast(this.message, 'info', 7000); }
+    return true;
+  },
+  // Cold, Lightning and Fire go on the mastery list once per character, behind the weapon's mastery. Only when the list
+  // is still just that one mastery (what leveling set up): a list the player chose is left alone. A mastery taken off
+  // later stays off.
+  addElements(M) {
+    const c = this.cfg(), weapon = (World.gp?.inventory || []).find(i => i.slot === 6);
+    if (c.elements === World.charName || !M.enabled || !weapon) return false;
+    c.elements = World.charName;
+    if (M.ids.length !== 1 || M.ids[0] !== LEVEL_WEAPON_MASTERY[this.tids(weapon)[1]]) return false;
+    const add = LEVEL_ELEMENT_MASTERIES.filter(id => !M.ids.includes(id));
+    if (!add.length) return false;
+    M.ids = [...M.ids, ...add];
+    return true;
+  },
+  // The weapon imbue: each learned imbue group is put in the imbue slot once, when the slot is empty. Taking it out
+  // again by hand is respected; a newly learned imbue skill group is picked up the same way.
+  imbueTick() {
+    const M = Settings.profile.macro, c = this.cfg(), done = new Set(c.imbued || []);
+    const skill = UI.learnedSkills(true).find(s => LEVEL_IMBUE_SKILL.test(s.nameSymbol || '') && !done.has(s.group ?? s.id));
+    if (!skill) return false;
+    done.add(skill.group ?? skill.id); c.imbued = [...done];
+    if (!M.imbue) { M.imbue = { id: skill.id, group: skill.group ?? skill.id }; this.message = 'Imbue in use: ' + World.skillName(skill.id) + '.'; Log.info('Leveling: ' + this.message); UI.toast(this.message, 'info', 5000); }
+    Settings.saveProfile();
     return true;
   },
   // Newly learned attack skills join the normal rotation, newly learned self buffs the buffs, each group once: a skill
@@ -285,6 +317,8 @@ const Leveling = {
     this.skillAt = now() + LEVEL_SKILL_CHECK_MS;
     this.prepare();
     if (!World.inWorld() || !World.groups.size) return;
+    if (World.charName && this.cfg().elements !== World.charName && this.cfg().prepared === World.charName && this.addElements(Settings.profile.mastery)) { AutoMastery.reset(); Settings.saveProfile(); }
+    this.imbueTick();
     const c = this.cfg(), M = Settings.profile.macro, mine = new Set(AutoMastery.masteryGroups()), added = new Set(c.added || []), names = [];
     const take = (s, list, extra) => {
       const group = s.group ?? s.id;
@@ -304,7 +338,7 @@ const Leveling = {
     const c = this.cfg(), T = Town.cfg();
     c.on = on;
     if (on) {
-      c.prepared = ''; this.skillAt = 0;
+      c.prepared = ''; c.elements = ''; c.imbued = []; this.skillAt = 0;
       T.noXp = { ...T.noXp, on: true, action: 'nextSpot' };
       if (!T.enabled && World.inWorld()) Setup.setupTown();
     }
@@ -322,7 +356,7 @@ const Leveling = {
       UI.check('Buy better gear from the town merchants', () => c().gear, v => { c().gear = v; }),
       UI.check('Also buy earrings, necklaces and rings', () => c().accessories, v => { c().accessories = v; }),
       UI.check('Sell the replaced piece back', () => c().sellOld, v => { c().sellOld = v; }),
-      UI.check('Raise my weapon mastery, learn its skills and use them', () => c().skills, v => { c().skills = v; c().prepared = ''; this.skillAt = 0; }),
+      UI.check('Raise my weapon mastery, learn its skills and use them', () => c().skills, v => { c().skills = v; c().prepared = ''; c().elements = ''; c().imbued = []; this.skillAt = 0; }),
       UI.number('Always keep this much gold', () => c().reserve, v => { c().reserve = v; }, 0, 100000000, 1000),
       status);
   },

@@ -3064,7 +3064,7 @@ test('zero-setup leveling sets up the weapon mastery, its skills and stat points
   let f = levelingSkillFixture();
   f.Leveling.skillTick();
   const M = f.Settings.profile.mastery, S = f.Settings.profile.statPoints;
-  assert.deepEqual([...M.ids], [257], 'a sword trains Bicheon');
+  assert.deepEqual([...M.ids], [257, 273, 274, 275], 'a sword trains Bicheon, then Cold, Lightning and Fire (skipped when the character has none)');
   assert.equal(M.enabled, true); assert.equal(M.skills, true); assert.equal(M.scope, 'masteries');
   assert.deepEqual([S.enabled, S.str, S.int], [true, 1, 0], 'a Chinese melee character puts points into Strength');
   assert.match(f.Leveling.message, /Bicheon mastery/);
@@ -3072,7 +3072,7 @@ test('zero-setup leveling sets up the weapon mastery, its skills and stat points
   assert.deepEqual([...M.ids], [258], 'once done, the player\'s later changes stay');
   f = levelingSkillFixture(11);
   f.Leveling.skillTick();
-  assert.deepEqual([...f.Settings.profile.mastery.ids], [514], 'a two-handed staff trains Wizard');
+  assert.deepEqual([...f.Settings.profile.mastery.ids], [514, 273, 274, 275], 'a two-handed staff trains Wizard, then the elements');
   assert.deepEqual([f.Settings.profile.statPoints.str, f.Settings.profile.statPoints.int], [0, 1], 'a caster puts points into Intelligence');
   f = levelingSkillFixture(2, { strength: 20, intellect: 40 });
   f.Leveling.skillTick();
@@ -9136,4 +9136,41 @@ test('toggling leveling during a town trip ends the trip', () => {
   f.Settings.profile.leveling.on = true;
   f.Town.tick();
   assert.equal(f.Town.trip, null); assert.match(f.Town.message, /Settings or character changed/);
+});
+
+test('a level 5 character takes the level 5 spot just outside 400 m, not the level 2 spot beside the town', () => {
+  const f = mallFixture();
+  f.Town.cfg().arrival = { regionId: 1, x: 100, y: 0, z: 100 };
+  f.Settings.profile.leveling.on = true;
+  f.Leveling.spots = [[1, 300, 0, 300, 2, 2, 2, 9], [513, 100, 0, 600, 5, 5, 5, 9]]; // the level 5 one is about 434 m away
+  assert.equal(f.Leveling.spot(5).level, 5, 'the level outweighs the distance: the level 5 spot is taken');
+  f.Leveling.reset();
+  assert.equal(f.Leveling.spot(2).level, 2, 'a level 2 character still takes the nearby spot');
+  f.Leveling.reset();
+  f.Leveling.spots = [[1, 300, 0, 300, 2, 2, 2, 9], [2561, 100, 0, 600, 5, 5, 5, 9]]; // about 1.8 km: beyond 4 times 400 m
+  assert.equal(f.Leveling.spot(5).level, 2, 'nothing in the widened range: the old fallback');
+  f.Leveling.reset(); f.Settings.profile.leveling.maxM = 1000;
+  assert.equal(f.Leveling.spot(5).level, 5, 'a larger chosen distance reaches it too');
+});
+test('zero-setup leveling puts a learned imbue in the imbue slot once, and a mage also gets Cold, Lightning and Fire', () => {
+  const f = levelingSkillFixture(11);
+  f.World.rebuildCatalog([...f.World.catalog.values(), { id: 4001, group: 400, level: 1, trainable: true, spCost: 10, masteries: [], prerequisites: [], reqStr: 0, reqInt: 0, targetRequired: false, targets: 1, active: true, nameSymbol: 'SKILL_CH_WIZARD_GIGONGTA_A' }]);
+  f.World.applyGameplay({ ...f.World.gp, skills: [...f.World.gp.skills, 4001] });
+  f.Settings.profile.macro.imbue = null;
+  f.Leveling.skillTick();
+  assert.deepEqual([...f.Settings.profile.mastery.ids], [514, 273, 274, 275]);
+  assert.equal(f.Settings.profile.macro.imbue?.group, 400, 'the imbue skill is selected');
+  f.Settings.profile.macro.imbue = null; f.advance(6000); f.Leveling.skillTick();
+  assert.equal(f.Settings.profile.macro.imbue, null, 'taken out by hand: it stays out');
+});
+test('a character leveling before this update gets the elements once, only if its list is just the weapon mastery', () => {
+  let f = levelingSkillFixture();
+  f.Leveling.skillTick();
+  f.Settings.profile.mastery.ids = [257]; f.Settings.profile.leveling.elements = '';
+  f.advance(6000); f.Leveling.skillTick();
+  assert.deepEqual([...f.Settings.profile.mastery.ids], [257, 273, 274, 275], 'added once');
+  f = levelingSkillFixture(); f.Leveling.skillTick();
+  f.Settings.profile.mastery.ids = [259]; f.Settings.profile.leveling.elements = '';
+  f.advance(6000); f.Leveling.skillTick();
+  assert.deepEqual([...f.Settings.profile.mastery.ids], [259], 'the player\'s own list is left alone');
 });

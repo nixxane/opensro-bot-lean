@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         nixxane bot
 // @namespace    https://opensro.online/
-// @version      1.2.234
+// @version      1.2.235
 // @updateURL    https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.meta.js
 // @downloadURL  https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -22,7 +22,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[NIX] Another SRO assistant is active. Disable it and reload to use NIX.');
   return;
 }
-const VERSION = '1.2.234';
+const VERSION = '1.2.235';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -197,7 +197,7 @@ const DEFAULT_PROFILE = {
     attr: { targets: {}, limit: 100 } },
   statPoints: { enabled: false, str: 1, int: 0, reserve: 0 },
   // Zero-setup leveling (lean-leveling.js): spots from the game data and NPC gear upgrades.
-  leveling: { on: false, spots: true, gear: true, accessories: true, sellOld: true, reserve: 5000, maxM: 400, skills: true, prepared: '', added: [] },
+  leveling: { on: false, spots: true, gear: true, accessories: true, sellOld: true, reserve: 5000, maxM: 400, skills: true, prepared: '', added: [], elements: '', imbued: [] },
   // Auto Quest: learned tokens bind a quest codename (QNO_...) to its refId, and learned targets
   // name the monster types whose kills advance each refId. Both fill themselves while playing.
   quest: { on: false, accept: true, picked: [], include: '', exclude: '', skip: [], learned: {}, targets: {} },
@@ -11297,6 +11297,9 @@ const LEVEL_SPOT_BELOW = 5, LEVEL_SPOT_ABOVE = 2, LEVEL_SPOT_KEEP = 2, LEVEL_GEA
 // European masteries that fight with Intelligence.
 const LEVEL_WEAPON_MASTERY = { 2: 257, 3: 257, 4: 258, 5: 258, 6: 259, 7: 513, 8: 513, 9: 513, 10: 516, 11: 514, 12: 515, 13: 515, 14: 517, 15: 518 };
 const LEVEL_INT_MASTERIES = [514, 516, 517, 518], LEVEL_SKILL_CHECK_MS = 5000;
+// Raised after the weapon's mastery on every character that has them (Cold, Lightning, Fire; a mastery the character does
+// not have is skipped by Auto mastery), and the pattern of a weapon imbue skill (the same one the imbue picker offers first).
+const LEVEL_ELEMENT_MASTERIES = [273, 274, 275], LEVEL_IMBUE_SKILL = /GIGONGTA|POISON\w*_BLADE|MALL_PET_SKILL/;
 const LEVEL_ARMOUR_SOCKET = { 1: 0, 2: 2, 3: 1, 4: 4, 5: 3, 6: 5 }, LEVEL_ACCESSORY_SOCKETS = { 1: [9], 2: [10], 3: [11, 12] };
 const Leveling = {
   // The generated tables, as properties so a test can lay its own over them.
@@ -11316,9 +11319,13 @@ const Leveling = {
   spot(level) {
     const home = this.home();
     if (!home || !Number.isInteger(level)) return null;
-    const far = clamp(Number(this.cfg().maxM) || 400, 50, 5000) * 10;
+    const base = clamp(Number(this.cfg().maxM) || 400, 50, 5000);
     // above: when nothing at or below the level is in reach (a new character), the nearest few levels up.
     let best = null, fallback = null, above = null;
+    // Reach: 4 times the chosen distance (at most 5 km). Few towns have a spot at every level within 400 m (Jangan's
+    // level 5 one is 407 m away, its level 8 one 903 m), and the score already weighs a level above distance, so a
+    // level 5 character does not stay on the level 2 spot beside the town.
+    const far = Math.min(base * 4, 5000) * 10;
     for (const s of this.spots) {
       if (s[4] > level + LEVEL_SPOT_ABOVE || this.skipped.has(this.key(s))) continue;
       const center = { regionId: s[0], x: s[1], y: s[2], z: s[3] }, d = dist2D(home, center);
@@ -11554,8 +11561,33 @@ const Leveling = {
       done.push('stat points to ' + (caster ? 'Intelligence' : 'Strength'));
     }
     c.prepared = World.charName;
+    this.addElements(M);
     AutoMastery.reset(); StatPoints.reset(); Settings.saveProfile();
     if (done.length) { this.message = 'Leveling set up: ' + done.join(', ') + '.'; Log.info(this.message); UI.toast(this.message, 'info', 7000); }
+    return true;
+  },
+  // Cold, Lightning and Fire go on the mastery list once per character, behind the weapon's mastery. Only when the list
+  // is still just that one mastery (what leveling set up): a list the player chose is left alone. A mastery taken off
+  // later stays off.
+  addElements(M) {
+    const c = this.cfg(), weapon = (World.gp?.inventory || []).find(i => i.slot === 6);
+    if (c.elements === World.charName || !M.enabled || !weapon) return false;
+    c.elements = World.charName;
+    if (M.ids.length !== 1 || M.ids[0] !== LEVEL_WEAPON_MASTERY[this.tids(weapon)[1]]) return false;
+    const add = LEVEL_ELEMENT_MASTERIES.filter(id => !M.ids.includes(id));
+    if (!add.length) return false;
+    M.ids = [...M.ids, ...add];
+    return true;
+  },
+  // The weapon imbue: each learned imbue group is put in the imbue slot once, when the slot is empty. Taking it out
+  // again by hand is respected; a newly learned imbue skill group is picked up the same way.
+  imbueTick() {
+    const M = Settings.profile.macro, c = this.cfg(), done = new Set(c.imbued || []);
+    const skill = UI.learnedSkills(true).find(s => LEVEL_IMBUE_SKILL.test(s.nameSymbol || '') && !done.has(s.group ?? s.id));
+    if (!skill) return false;
+    done.add(skill.group ?? skill.id); c.imbued = [...done];
+    if (!M.imbue) { M.imbue = { id: skill.id, group: skill.group ?? skill.id }; this.message = 'Imbue in use: ' + World.skillName(skill.id) + '.'; Log.info('Leveling: ' + this.message); UI.toast(this.message, 'info', 5000); }
+    Settings.saveProfile();
     return true;
   },
   // Newly learned attack skills join the normal rotation, newly learned self buffs the buffs, each group once: a skill
@@ -11565,6 +11597,8 @@ const Leveling = {
     this.skillAt = now() + LEVEL_SKILL_CHECK_MS;
     this.prepare();
     if (!World.inWorld() || !World.groups.size) return;
+    if (World.charName && this.cfg().elements !== World.charName && this.cfg().prepared === World.charName && this.addElements(Settings.profile.mastery)) { AutoMastery.reset(); Settings.saveProfile(); }
+    this.imbueTick();
     const c = this.cfg(), M = Settings.profile.macro, mine = new Set(AutoMastery.masteryGroups()), added = new Set(c.added || []), names = [];
     const take = (s, list, extra) => {
       const group = s.group ?? s.id;
@@ -11584,7 +11618,7 @@ const Leveling = {
     const c = this.cfg(), T = Town.cfg();
     c.on = on;
     if (on) {
-      c.prepared = ''; this.skillAt = 0;
+      c.prepared = ''; c.elements = ''; c.imbued = []; this.skillAt = 0;
       T.noXp = { ...T.noXp, on: true, action: 'nextSpot' };
       if (!T.enabled && World.inWorld()) Setup.setupTown();
     }
@@ -11602,7 +11636,7 @@ const Leveling = {
       UI.check('Buy better gear from the town merchants', () => c().gear, v => { c().gear = v; }),
       UI.check('Also buy earrings, necklaces and rings', () => c().accessories, v => { c().accessories = v; }),
       UI.check('Sell the replaced piece back', () => c().sellOld, v => { c().sellOld = v; }),
-      UI.check('Raise my weapon mastery, learn its skills and use them', () => c().skills, v => { c().skills = v; c().prepared = ''; this.skillAt = 0; }),
+      UI.check('Raise my weapon mastery, learn its skills and use them', () => c().skills, v => { c().skills = v; c().prepared = ''; c().elements = ''; c().imbued = []; this.skillAt = 0; }),
       UI.number('Always keep this much gold', () => c().reserve, v => { c().reserve = v; }, 0, 100000000, 1000),
       status);
   },
@@ -15981,7 +16015,7 @@ const Alchemy = {
 };
 
 
-const RELEASE_NOTES = [{"version": "1.2.234", "title": "Leveling always walks back", "items": ["With **Level up by itself** on, the character now walks back to its hunting spot after a death or a town trip. It no longer uses or buys Reverse Return Scrolls: leveling spots are only a short walk from town.", "The world statue is not needed for leveling, and the Item mall's reverse buying is paused while leveling is on.", "Turning leveling on or off during a town trip ends that trip.", "With leveling off nothing changes: **Back to the hunting spot** and the reverse settings work as before."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.233", "title": "Leveling buys the right gear, and town trips skip idle stops", "items": ["Leveling now reads your character's sex from the character itself, so it no longer buys armour for the other sex (\"Cannot equip because of different sex\"). If it cannot tell, it only buys gear either sex can wear.", "Leveling goes to town for gear only for a real upgrade over what you wear. Empty slots (a helmet, rings) are filled on trips that happen anyway, never on a trip of their own: a level 2 character no longer goes to town for level 1 gear.", "Every town trip now skips a stop with nothing to do: no warehouse visit without anything to store, no potion merchant when potions and return scrolls are full, no blacksmith without something to sell, buy or mend."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.232", "title": "Leveling finds spots for new characters", "items": ["Zero-setup leveling now knows many more hunting spots, including the thinly spread first-level monsters around each town (Mangnyangs near Jangan, for example). There were none for level 1 before, so a new character stayed on its saved spot.", "A character with no spot at its own level nearby now takes the nearest one a level or two up.", "With leveling spots on, a walk back to an old saved spot (a town centre, say) turns to the spot for your level at once, instead of walking to the old one first."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.231", "title": "Zero-setup leveling now handles skills and stats", "items": ["With **Level up by itself** on, the bot now also raises your weapon's mastery with your level (a sword or blade trains Bicheon, a two-handed staff Wizard, and so on), learns each of its skills as soon as the game allows, and spends stat points: Strength, or Intelligence for a caster. Masteries or a stat share you already chose are kept.", "Each newly learned attack skill joins your attack rotation and each new self buff your buffs, once. A skill you take out stays out.", "Auto mastery has a new choice under \"Skills to upgrade\": **Every skill of my chosen masteries**, which also learns new skills.", "A new switch in the leveling box turns this part off."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.230", "title": "Update button and window layout fixes", "items": ["The **Update** button can be clicked again in the compact window. When an update was available, the button wrapped to a second header row and the \"Update available\" line covered it.", "The classic window keeps one size on every tab again, instead of shrinking on short tabs such as Player buffing. It is still capped to your screen height.", "The wide window splits a page's boxes into its two columns as evenly as possible, so a tall box no longer leaves a long empty gap beside it."], "note": "Checked in the bot's browser UI test (Edge, simulated game), not in a live game."}, {"version": "1.2.229", "title": "Zero-setup leveling", "items": ["New on the Setup page: **Level up by itself**. The bot picks a hunting spot for your level from the game's monster spawn data, near your town, and moves to a better one as you level.", "On town trips it buys the next tier of NPC weapon, armour and (optionally) accessories, wears them in the shop and sells the old pieces back. Seal gear, rare items, +4 and higher, and anything you protect are never replaced. A gold reserve (5,000 by default) is never spent.", "When better gear becomes affordable, the bot goes to town for it by itself, once."], "note": "Tested in simulation only, not in a live game. Off by default."}, {"version": "1.2.228", "title": "Max every skill is now a switch", "items": ["\"Max every skill\" (Settings, Auto mastery) is now an on/off switch instead of a one-time button. While it is on, it learns and upgrades every skill it is allowed to, then stays on and spends new skill points as you get them (after a level up, for example). Turn it off to stop.", "It is off by default and saved per character. Passes that find nothing new stay quiet (no toast every few seconds), and a level the game refused is not resent for a minute."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.227", "title": "One switch for Reverse Return Scrolls", "items": ["Reverse Return Scrolls now have a single switch, on the Town page under \"Back to the hunting spot\": \"Buy Reverse Return Scrolls from the Item mall (silk)\". The old merchant switch is gone (no merchant sells them for gold, and it could start useless town trips); if it was on, the new switch is turned on for you.", "On a town trip without a reverse scroll, the bot now buys one from the Item mall after the services and reverses. Before, the mall only bought while hunting, so the trip often walked back instead. If the mall cannot deliver (budget, silk, full bag, refused), the trip walks back as before.", "The reverse switch works without the general \"Buy from the Item mall\" switch; it still uses the silk budget per bot run. \"Low stock ≤\" now really means \"or equal\". When the same item is listed more than once in the mall, the single-item package is bought."], "note": "Tested in simulation only, not in a live game."}];
+const RELEASE_NOTES = [{"version": "1.2.235", "title": "Leveling picks better spots, raises the elements and uses an imbue", "items": ["A leveling character no longer stays on a low-level spot beside the town. The bot now looks up to four times the \"Spots at most this far from town\" distance (at most 5 km) before settling for a spot far below your level. At level 5 near Jangan it now takes the level 5 spot, not the level 2 one.", "Zero-setup leveling also raises the Cold, Lightning and Fire masteries after the weapon's mastery (skipped when the character has none), and their new skills join the rotation. A list you chose yourself is left alone.", "A learned weapon imbue skill is put in the empty imbue slot once. Taking it out by hand keeps it out."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.234", "title": "Leveling always walks back", "items": ["With **Level up by itself** on, the character now walks back to its hunting spot after a death or a town trip. It no longer uses or buys Reverse Return Scrolls: leveling spots are only a short walk from town.", "The world statue is not needed for leveling, and the Item mall's reverse buying is paused while leveling is on.", "Turning leveling on or off during a town trip ends that trip.", "With leveling off nothing changes: **Back to the hunting spot** and the reverse settings work as before."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.233", "title": "Leveling buys the right gear, and town trips skip idle stops", "items": ["Leveling now reads your character's sex from the character itself, so it no longer buys armour for the other sex (\"Cannot equip because of different sex\"). If it cannot tell, it only buys gear either sex can wear.", "Leveling goes to town for gear only for a real upgrade over what you wear. Empty slots (a helmet, rings) are filled on trips that happen anyway, never on a trip of their own: a level 2 character no longer goes to town for level 1 gear.", "Every town trip now skips a stop with nothing to do: no warehouse visit without anything to store, no potion merchant when potions and return scrolls are full, no blacksmith without something to sell, buy or mend."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.232", "title": "Leveling finds spots for new characters", "items": ["Zero-setup leveling now knows many more hunting spots, including the thinly spread first-level monsters around each town (Mangnyangs near Jangan, for example). There were none for level 1 before, so a new character stayed on its saved spot.", "A character with no spot at its own level nearby now takes the nearest one a level or two up.", "With leveling spots on, a walk back to an old saved spot (a town centre, say) turns to the spot for your level at once, instead of walking to the old one first."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.231", "title": "Zero-setup leveling now handles skills and stats", "items": ["With **Level up by itself** on, the bot now also raises your weapon's mastery with your level (a sword or blade trains Bicheon, a two-handed staff Wizard, and so on), learns each of its skills as soon as the game allows, and spends stat points: Strength, or Intelligence for a caster. Masteries or a stat share you already chose are kept.", "Each newly learned attack skill joins your attack rotation and each new self buff your buffs, once. A skill you take out stays out.", "Auto mastery has a new choice under \"Skills to upgrade\": **Every skill of my chosen masteries**, which also learns new skills.", "A new switch in the leveling box turns this part off."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.230", "title": "Update button and window layout fixes", "items": ["The **Update** button can be clicked again in the compact window. When an update was available, the button wrapped to a second header row and the \"Update available\" line covered it.", "The classic window keeps one size on every tab again, instead of shrinking on short tabs such as Player buffing. It is still capped to your screen height.", "The wide window splits a page's boxes into its two columns as evenly as possible, so a tall box no longer leaves a long empty gap beside it."], "note": "Checked in the bot's browser UI test (Edge, simulated game), not in a live game."}, {"version": "1.2.229", "title": "Zero-setup leveling", "items": ["New on the Setup page: **Level up by itself**. The bot picks a hunting spot for your level from the game's monster spawn data, near your town, and moves to a better one as you level.", "On town trips it buys the next tier of NPC weapon, armour and (optionally) accessories, wears them in the shop and sells the old pieces back. Seal gear, rare items, +4 and higher, and anything you protect are never replaced. A gold reserve (5,000 by default) is never spent.", "When better gear becomes affordable, the bot goes to town for it by itself, once."], "note": "Tested in simulation only, not in a live game. Off by default."}, {"version": "1.2.228", "title": "Max every skill is now a switch", "items": ["\"Max every skill\" (Settings, Auto mastery) is now an on/off switch instead of a one-time button. While it is on, it learns and upgrades every skill it is allowed to, then stays on and spends new skill points as you get them (after a level up, for example). Turn it off to stop.", "It is off by default and saved per character. Passes that find nothing new stay quiet (no toast every few seconds), and a level the game refused is not resent for a minute."], "note": "Tested in simulation only, not in a live game."}];
 
 // Check trusted repository metadata; never execute downloaded update code.
 const Updates = {
