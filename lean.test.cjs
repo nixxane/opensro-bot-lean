@@ -3892,6 +3892,63 @@ test('empty slots alone never start a town trip; a real upgrade does (live: a tr
   gp.progression.level = 8; f.Leveling.checkAt = 0;
   assert.match(f.Leveling.due(), /better gear to buy/, 'the next weapon tier is worth a trip');
 });
+function moveFixture() {
+  const f = gearFixture(), gp = f.World.gp;
+  const town = (key, name, x, ref) => ({ key, name, arrival: { regionId: 1, x, y: 0, z: 100 }, services: Object.fromEntries(['storage', 'vendor', 'smith', 'gate'].map((role, i) =>
+    [role, { refObjId: ref + i, regionId: 1, x: x + 30 + i * 40, y: 0, z: 100 }])) });
+  f.Town.towns = [town('CH', 'Jangan', 100, 600), town('WC', 'Donwhang', 1500, 700)];
+  f.Leveling.town = () => f.Town.detect(f.Town.cfg().vendor || f.Town.cfg().arrival);
+  f.Town.detect = p => f.Town.towns.find(t => Math.abs(p.x - t.arrival.x) < 600) || null;
+  // Jangan's gear ends at level 8, Donwhang's next tier opens at 12.
+  f.Leveling.gear = { CH: f.Leveling.gear.T, WC: [[80, 'smith', 6, 2, 0, 2, 12, 9000], [81, 'smith', 6, 2, 0, 2, 4, 900]] };
+  f.Leveling.index = null;
+  gp.progression = { ...gp.progression, level: 11, gold: '100000' };
+  return f;
+}
+test('leveling moves to the next town once its gear tier opens: walk, set the return point, set up the town', () => {
+  const f = moveFixture(), gp = f.World.gp, c = f.Town.cfg();
+  assert.equal(f.Leveling.nextTown(11), null, 'level 11: Donwhang has nothing open above Jangan yet');
+  assert.equal(f.Leveling.nextTown(12)?.key, 'WC', 'level 12: its next tier is open');
+  gp.progression.level = 12;
+  f.Settings.profile.leveling.move = false; f.Leveling.moveTick();
+  assert.equal(f.Leveling.move, null, 'the switch off: no move');
+  f.Settings.profile.leveling.move = true; f.Leveling.moveAt = 0; f.Leveling.moveTick();
+  assert.equal(f.Leveling.move?.phase, 'walk');
+  assert.equal(f.Hunt.running, false, 'hunting stops for the walk');
+  assert.ok(f.WalkBack.active?.onDone, 'it walks to the Donwhang world statue');
+  assert.equal(f.WalkBack.active.destination.x > 1500, true);
+  const done = f.WalkBack.active.onDone; f.WalkBack.active = null; done();
+  assert.equal(f.Leveling.move.phase, 'select');
+  const statue = { gid: 990, refObjId: 703, kind: 'teleport', name: 'gate', regionId: 1, x: 1650, y: 0, z: 100 };
+  f.World.ents.set(statue.gid, statue);
+  gp.target = 990; f.Leveling.moveTick();
+  assert.deepEqual(f.commands.filter(x => x.kind === 'recall-appoint').map(x => x.gid), [990], 'the return point is set at the statue');
+  assert.equal(c.arrival.x, 100, 'nothing switches before the game confirms');
+  f.bus.emit('notice', { key: 'UIIT_MSG_STATE_REBIRTH_POINT_APPOINT', sequence: 1 });
+  f.Leveling.moveTick();
+  assert.equal(f.Leveling.move, null);
+  assert.equal(c.arrival.x, 1500, 'the town trips now go to Donwhang');
+  assert.equal(c.gate.refObjId, 703);
+  assert.equal(f.Leveling.nextTown(12), null, 'and it stays there');
+});
+test('a move that gets no answer is not tried again this session; a death on the way only puts it off', () => {
+  const f = moveFixture(), gp = f.World.gp;
+  gp.progression.level = 12; f.Leveling.moveTick();
+  const done = f.WalkBack.active.onDone; f.WalkBack.active = null; done();
+  f.World.ents.set(990, { gid: 990, refObjId: 703, kind: 'teleport', name: 'gate', regionId: 1, x: 1650, y: 0, z: 100 });
+  gp.target = 990;
+  for (let i = 0; i < 3; i++) { f.Leveling.moveTick(); f.advance(16000); f.Leveling.moveTick(); }
+  assert.equal(f.Leveling.move, null);
+  assert.match(f.Leveling.message, /did not set the return point/);
+  assert.equal(f.Leveling.nextTown(12), null, 'Donwhang is left alone for the session');
+  assert.equal(f.Town.cfg().arrival.x, 100, 'the town is unchanged');
+  const g = moveFixture();
+  g.World.gp.progression.level = 12; g.Leveling.moveTick();
+  g.World.gp.dead = true; g.World.isDead = () => true;
+  g.WalkBack.active.onFail('Walk back interrupted.');
+  assert.equal(g.Leveling.move, null);
+  assert.equal(g.Leveling.nextTown(12)?.key, 'WC', 'a death only puts the move off');
+});
 test('a trip for gear alone waits for the last piece of the tier (live: a trip at every level from 8 to 13)', () => {
   const f = gearFixture(), gp = f.World.gp;
   // The tier opens at 8 (weapon) and ends at 11 (a helmet); the next tier starts at 16.

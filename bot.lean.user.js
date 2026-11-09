@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         nixxane bot
 // @namespace    https://opensro.online/
-// @version      1.2.245
+// @version      1.2.246
 // @updateURL    https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.meta.js
 // @downloadURL  https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -22,7 +22,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[NIX] Another SRO assistant is active. Disable it and reload to use NIX.');
   return;
 }
-const VERSION = '1.2.245';
+const VERSION = '1.2.246';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -197,7 +197,7 @@ const DEFAULT_PROFILE = {
     attr: { targets: {}, limit: 100 } },
   statPoints: { enabled: false, str: 1, int: 0, reserve: 0 },
   // Zero-setup leveling (lean-leveling.js): spots from the game data and NPC gear upgrades.
-  leveling: { on: false, spots: true, gear: true, accessories: true, sellOld: true, reserve: 5000, skills: true, prepared: '', added: [], elements: '', imbued: [] },
+  leveling: { on: false, spots: true, gear: true, accessories: true, sellOld: true, move: true, reserve: 5000, skills: true, prepared: '', added: [], elements: '', imbued: [] },
   // Auto Quest: learned tokens bind a quest codename (QNO_...) to its refId, and learned targets
   // name the monster types whose kills advance each refId. Both fill themselves while playing.
   quest: { on: false, accept: true, picked: [], include: '', exclude: '', skip: [], learned: {}, targets: {} },
@@ -10949,6 +10949,7 @@ const Controller = {
       StatPoints.tick();
       this.guard('Level spot', () => LevelSpot.tick());
       this.guard('Leveling skills', () => Leveling.skillTick());
+      this.guard('Leveling town', () => Leveling.moveTick());
       Potion.tick();
       ItemRules.trackGear();
       if (!ItemRules.dropTick()) ItemRules.balanceTick();
@@ -11341,7 +11342,7 @@ const LEVEL_SHOPS = {"CH":{"armor":{"refObjId":2004,"regionId":25000,"x":332.17,
 // armour or accessory socket is filled. Purchases happen on any town trip, in the shop, one confirmed transaction at a
 // time; the new piece is worn at once and the old one sold back there. A plan the town can pay for starts a trip by
 // itself, once per plan.
-const LEVEL_SPOT_REACH_M = 5000, LEVEL_SPOT_BELOW = 5, LEVEL_SPOT_ABOVE = 2, LEVEL_SPOT_KEEP = 2, LEVEL_GEAR_MAX_PLUS = 3, LEVEL_GEAR_CHECK_MS = 20000, LEVEL_SPOT_WALK_FAILS = 5, LEVEL_TIER_GAP = 3;
+const LEVEL_SPOT_REACH_M = 5000, LEVEL_SPOT_BELOW = 5, LEVEL_SPOT_ABOVE = 2, LEVEL_SPOT_KEEP = 2, LEVEL_GEAR_MAX_PLUS = 3, LEVEL_GEAR_CHECK_MS = 20000, LEVEL_SPOT_WALK_FAILS = 5, LEVEL_TIER_GAP = 3, LEVEL_MOVE_CHECK_MS = 10000, LEVEL_MOVE_STEP_MS = 15000;
 // Equipment sockets by TID4 (OpenSRO inventory/slots.go, native sub_594980): armour parts and accessories.
 // The mastery each weapon type trains (TID4 of the weapon; OpenSRO masteries 257-276 Chinese, 513-518 European), and the
 // European masteries that fight with Intelligence.
@@ -11356,7 +11357,7 @@ const Leveling = {
   // The generated tables, as properties so a test can lay its own over them.
   spots: LEVEL_SPOTS, gear: LEVEL_GEAR, shopsData: LEVEL_SHOPS,
   skillAt: 0,
-  current: null, walkFails: 0, skipped: new Set(), tried: new Set(), refused: new Set(), checkAt: 0, due_: '', index: null, message: '',
+  current: null, walkFails: 0, move: null, moveAt: 0, moveFailed: new Set(), skipped: new Set(), tried: new Set(), refused: new Set(), checkAt: 0, due_: '', index: null, message: '',
   cfg() { return Settings.profile.leveling; },
   spotsOn() { const c = this.cfg(); return !!(c.on && c.spots); },
   gearOn() { const c = this.cfg(); return !!(c.on && c.gear); },
@@ -11604,9 +11605,98 @@ const Leveling = {
   },
   status() {
     if (!this.cfg().on) return 'Zero-setup leveling is off.';
+    if (this.move) return this.message;
     const level = World.gp?.progression?.level, cur = this.current;
     const spot = this.spotsOn() ? (cur ? 'Hunting at the level ' + cur.level + ' spot.' : 'No spot picked yet.') : 'Spots: your own.';
     return spot + ' ' + (this.gearOn() ? (this.message || (Number.isInteger(level) ? 'Gear: checked at level ' + level + '.' : '')) : 'Gear buying off.');
+  },
+  // ---- moving town
+  // When the home town sells nothing above what the character wears and another town's next tier is open (Jangan's gear
+  // ends at level 21, Donwhang's next tier opens at 24), the character moves there: it walks to that town's world
+  // statue, makes it the return point (the statue's own service, gameplay recall-appoint, confirmed by the game's
+  // notice), then the town trips, the spots and the gear all come from the new town. A move that fails is not tried again
+  // this session; a death on the way only puts it off until after the revive.
+  nextTown(level) {
+    const home = this.town();
+    if (!home || !Number.isInteger(level)) return null;
+    const { country, sex } = this.who();
+    if (country === null) return null;
+    const mine = r => (r[4] === country || r[4] === 3) && (r[5] === 2 || r[5] === sex);
+    const homeMax = Math.max(0, ...(this.gear[home.key] || []).filter(mine).map(r => r[6]));
+    let pick = null;
+    for (const [key, rows] of Object.entries(this.gear)) {
+      const town = Town.towns.find(t => t.key === key);
+      if (key === home.key || this.moveFailed.has(key) || !town?.services?.gate) continue;
+      const start = Math.min(...rows.filter(r => mine(r) && r[6] > homeMax && r[6] <= level).map(r => r[6]));
+      if (Number.isFinite(start) && (!pick || start < pick.start)) pick = { town, start };
+    }
+    return pick?.town || null;
+  },
+  moveTick() {
+    const c = this.cfg(), m = this.move;
+    if (m) return this.moveStep(m);
+    if (!c.on || !c.move || now() < this.moveAt) return;
+    this.moveAt = now() + LEVEL_MOVE_CHECK_MS;
+    const level = World.gp?.progression?.level;
+    if (!World.inWorld() || World.isDead() || !Hunt.running || Hunt.deathAt || !Town.cfg().enabled || World.gp?.inventoryPending) return;
+    if (Town.trip || Restock.trip || WalkBack.active || Travel.active || Quest.trip || Resurrect.trip || Controller.resumeAfterRevive || Trade.run) return;
+    const town = this.nextTown(level);
+    if (!town) return;
+    const s = town.services.gate, stand = Town.standPoint(s, town.arrival);
+    this.move = { key: town.key, name: town.name, phase: 'walk', at: now(), tries: 0, character: World.charName,
+      gate: { ...stand.point, refObjId: s.refObjId, npc: { regionId: s.regionId, x: s.x, y: s.y, z: s.z } } };
+    this.message = 'Moving to ' + town.name + ': its merchants sell the next gear for your level.';
+    Log.info('Leveling: ' + this.message); UI.toast(this.message, 'info', 8000);
+    Hunt.stop();
+    const started = WalkBack.startTo(this.move.gate, { label: 'the ' + town.name + ' world statue', stop: 60,
+      onDone: () => { if (this.move) { this.move.phase = 'select'; this.move.at = now(); } },
+      onFail: reason => this.moveFail(reason) });
+    if (!started && this.move) this.moveFail('the walk did not start');
+  },
+  moveStep(m) {
+    if (m.character !== World.charName) { this.move = null; return; }
+    if (m.phase === 'walk' || !World.inWorld()) return;
+    if (World.isDead()) return this.moveFail('the character died');
+    const gp = World.gp;
+    if (m.phase === 'select') {
+      if (now() - m.at > LEVEL_MOVE_STEP_MS) return this.moveFail('the ' + m.name + ' world statue could not be selected');
+      const statue = [...World.ents.values()].find(e => Town.serviceEntity('gate', e) && e.refObjId === m.gate.refObjId && dist2D(e, m.gate.npc) < 300);
+      if (!statue || gp.targetPending || gp.inventoryPending) return;
+      if (gp.target !== statue.gid) { if (Cmd.spaced('select')) Cmd.select(statue.gid); return; }
+      if (Cmd.raw({ kind: 'recall-appoint', gid: statue.gid }, 'Leveling: make ' + m.name + ' the return point')) { m.phase = 'appoint'; m.at = now(); m.appointed = false; }
+      return;
+    }
+    if (m.phase === 'appoint') {
+      if (m.appointed) return this.moveDone(m);
+      if (now() - m.at < LEVEL_MOVE_STEP_MS) return;
+      if (++m.tries < 3) { m.phase = 'select'; m.at = now(); return; }
+      this.moveFail('the world statue did not set the return point');
+    }
+  },
+  notice(n) { if (this.move?.phase === 'appoint' && /REBIRTH_POINT_APPOINT/.test(String(n?.key || ''))) this.move.appointed = true; },
+  moveDone(m) {
+    this.move = null;
+    const done = Town.autoSetup(true, m.key);
+    if (!done) return this.moveFail('the town services could not be set up', m);
+    Town.lastScrollPoint = null; Town.deathPoint = null;
+    this.reset();
+    this.message = 'Moved to ' + m.name + ': it is the return point now, and the bot hunts and shops there.';
+    Log.info('Leveling: ' + this.message); UI.toast(this.message, 'info', 8000);
+    const spot = this.spotsOn() ? this.spot(World.gp?.progression?.level) : null, H = Hunt.cfg();
+    if (spot) { H.center = { ...spot.center }; Settings.saveProfile(); bus.emit('center'); }
+    WalkBack.start(true);
+  },
+  // A death on the way: hunting takes over (revive, back to the old spot) and the move is tried again later. Anything
+  // else: this town is left alone for the session and hunting goes on where it was.
+  moveFail(reason, m = this.move) {
+    if (!m) return;
+    this.move = null; this.moveAt = now() + LEVEL_MOVE_CHECK_MS;
+    const died = World.isDead();
+    if (!died) this.moveFailed.add(m.key);
+    this.message = 'Move to ' + m.name + ' stopped: ' + reason + (died ? '; it is tried again after the revive.' : '.');
+    Log.warn('Leveling: ' + this.message); UI.toast(this.message, 'warn', 8000);
+    if (WalkBack.active?.onDone) WalkBack.cancel('', true);
+    if (died) Hunt.start(); else if (World.inWorld()) WalkBack.start(true);
   },
   skillsOn() { const c = this.cfg(); return !!(c.on && c.skills); },
   // ---- skills
@@ -11685,7 +11775,7 @@ const Leveling = {
     const c = this.cfg(), T = Town.cfg();
     c.on = on;
     if (on) {
-      c.prepared = ''; c.elements = ''; c.imbued = []; this.skillAt = 0;
+      c.prepared = ''; c.elements = ''; c.imbued = []; this.skillAt = 0; this.moveFailed.clear();
       T.noXp = { ...T.noXp, on: true, action: 'nextSpot' };
       if (!T.enabled && World.inWorld()) Setup.setupTown();
     }
@@ -11702,11 +11792,13 @@ const Leveling = {
       UI.check('Buy better gear from the town merchants', () => c().gear, v => { c().gear = v; }),
       UI.check('Also buy earrings, necklaces and rings', () => c().accessories, v => { c().accessories = v; }),
       UI.check('Sell the replaced piece back', () => c().sellOld, v => { c().sellOld = v; }),
+      UI.check('Move to the next town when this one has no better gear (Jangan, then Donwhang, then Hotan)', () => c().move, v => { c().move = v; this.moveFailed.clear(); }),
       UI.check('Raise my weapon mastery, learn its skills and use them', () => c().skills, v => { c().skills = v; c().prepared = ''; c().elements = ''; c().imbued = []; this.skillAt = 0; }),
       UI.number('Always keep this much gold', () => c().reserve, v => { c().reserve = v; }, 0, 100000000, 1000),
       status);
   },
 };
+bus.on('notice', n => Leveling.notice(n));
 
 
 // Hunting spot by level. The profile keeps a list of spots, each used from a character level on; the highest one at or
@@ -16093,7 +16185,7 @@ const Alchemy = {
 };
 
 
-const RELEASE_NOTES = [{"version": "1.2.245", "title": "Leveling goes to town for gear less often", "items": ["Town gear unlocks over a few levels (in Jangan the level 16 tier opens with the weapon and boots at 16 and ends with the chest at 21). With Level up by itself on, a trip just for gear used to happen at almost every level. It now waits until the last piece of the tier is open, then buys the whole set in one trip.", "Any trip that happens anyway (after a death, for potions or repairs) still buys whatever is already open."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.244", "title": "Leveling replaces Seal gear too", "items": ["With Level up by itself on, Seal (SOX) and other rare pieces were never replaced, so a Seal blade, sword or a level 1 Seal necklace stayed on for good while ordinary pieces were upgraded. They are now replaced like any other piece when the town sells a higher level. The Seal piece goes to your bag and is never sold.", "Gear above +3 and gear you protect are still never replaced.", "If the walk to a picked hunting spot fails five times in a row, the bot stops trying new spots instead of wandering the map. Reaching a spot resets the count."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.243", "title": "Leveling: a rescued merchant trip keeps going, and unreachable spots are skipped", "items": ["When a merchant's standing spot was blocked and the bot found another one that worked, the trip ended a moment later with \"Settings or character changed\". It now carries on and the working spot is kept.", "With Level up by itself on, if the walk to the chosen hunting spot gives up (a spot behind a river or cliff), the bot skips that spot and tries the next best one instead of staying put.", "Small clean-ups: a leftover distance setting is gone from the defaults, and the wide settings panel lays out its boxes faster."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.242", "title": "Leveling has no distance limit for its spots", "items": ["The \"Spots at most this far from town\" setting is gone. With Level up by itself on, the bot picks the best spot for your level anywhere the game's route data connects to your town, and walks there however far it is. Without route data for the area it looks up to 5 km, so it never picks a spot on another continent.", "The level still counts far more than distance, so it does not cross the map for one level."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.241", "title": "A blocked town merchant tries another spot", "items": ["\"Town cycle stopped: Blocked on the way to the repair merchant\" with nothing in the way: the saved standing point beside a merchant can be a place the first trip never checked (inside a forge or a fence). The trip now tries other spots around the merchant, nearest to the way in first, before giving up. A spot that works replaces the saved one.", "If every spot fails, behaviour is as before: the warehouse is skipped, other services stop the trip."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.240", "title": "Faster route check on repeat trips, and clearer leveling gear buying", "items": ["The route check now remembers every stretch that walked, so after the first trip to a spot the way back no longer waits for it. While the character only waits for the check, it also runs faster.", "Leveling gear buying needs one free bag slot per piece instead of two, so a nearly full bag no longer leaves out rings or armour.", "Each leveling town trip now logs why a piece is not bought (kept because it is enhanced, rare or sealed; already as good as town sells; or the town has none at your level). At level 8 the town sells only a weapon, shield, gloves and rings; chest, boots and the rest come later."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.239", "title": "Fixes a leveling stop in town, and the route check wait is back", "items": ["Fixed \"Bot stopped: Cannot read properties of null (reading 'npc')\". With Level up by itself on, a town trip where every stop had nothing to do (nothing to sell, buy, repair or store) went to a stop that does not exist. It now goes straight on to the walk back.", "Reverted 1.2.237's 20 second limit on the route check. The shortened check made the character walk in legs, which got stuck in town (\"no walkable route to the hunting spot\"). The route is checked against the game map in full again, as before, and the walk waits for it."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.237", "title": "Leveling starts walking back sooner", "items": ["After a town trip, \"Walking to the hunting spot: loading route data\" could keep a leveling character standing still for up to two and a half minutes while the route was checked against the game map. With Level up by itself on, it now waits at most 20 seconds, then walks in legs as it does when no route data is available.", "With leveling off nothing changes: the full route check wait stays."], "note": "Tested in simulation only, not in a live game."}];
+const RELEASE_NOTES = [{"version": "1.2.246", "title": "Leveling moves on to the next town", "items": ["With Level up by itself on, a character no longer stays in its first town forever. Once that town sells nothing better and the next town's gear is open (Jangan's ends at level 21, Donwhang's next tier opens at 24), it walks to the next town's world statue, makes it the return point, and sets up its warehouse, merchants and statue there. From then on its town trips, hunting spots and gear come from the new town: Jangan, then Donwhang, then Hotan.", "If the character dies on the way, it revives as usual and tries again later. If the move fails any other way, it stays where it was and does not try that town again until the bot is reloaded.", "A new switch, \"Move to the next town when this one has no better gear\", is on by default.", "Not in NIX Deck's headless mode yet."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.245", "title": "Leveling goes to town for gear less often", "items": ["Town gear unlocks over a few levels (in Jangan the level 16 tier opens with the weapon and gloves at 16 and ends with the chest at 21). With Level up by itself on, a trip just for gear used to happen at almost every level. It now waits until the last piece of the tier is open, then buys the whole set in one trip.", "Any trip that happens anyway (after a death, for potions or repairs) still buys whatever is already open."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.244", "title": "Leveling replaces Seal gear too", "items": ["With Level up by itself on, Seal (SOX) and other rare pieces were never replaced, so a Seal blade, sword or a level 1 Seal necklace stayed on for good while ordinary pieces were upgraded. They are now replaced like any other piece when the town sells a higher level. The Seal piece goes to your bag and is never sold.", "Gear above +3 and gear you protect are still never replaced.", "If the walk to a picked hunting spot fails five times in a row, the bot stops trying new spots instead of wandering the map. Reaching a spot resets the count."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.243", "title": "Leveling: a rescued merchant trip keeps going, and unreachable spots are skipped", "items": ["When a merchant's standing spot was blocked and the bot found another one that worked, the trip ended a moment later with \"Settings or character changed\". It now carries on and the working spot is kept.", "With Level up by itself on, if the walk to the chosen hunting spot gives up (a spot behind a river or cliff), the bot skips that spot and tries the next best one instead of staying put.", "Small clean-ups: a leftover distance setting is gone from the defaults, and the wide settings panel lays out its boxes faster."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.242", "title": "Leveling has no distance limit for its spots", "items": ["The \"Spots at most this far from town\" setting is gone. With Level up by itself on, the bot picks the best spot for your level anywhere the game's route data connects to your town, and walks there however far it is. Without route data for the area it looks up to 5 km, so it never picks a spot on another continent.", "The level still counts far more than distance, so it does not cross the map for one level."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.241", "title": "A blocked town merchant tries another spot", "items": ["\"Town cycle stopped: Blocked on the way to the repair merchant\" with nothing in the way: the saved standing point beside a merchant can be a place the first trip never checked (inside a forge or a fence). The trip now tries other spots around the merchant, nearest to the way in first, before giving up. A spot that works replaces the saved one.", "If every spot fails, behaviour is as before: the warehouse is skipped, other services stop the trip."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.240", "title": "Faster route check on repeat trips, and clearer leveling gear buying", "items": ["The route check now remembers every stretch that walked, so after the first trip to a spot the way back no longer waits for it. While the character only waits for the check, it also runs faster.", "Leveling gear buying needs one free bag slot per piece instead of two, so a nearly full bag no longer leaves out rings or armour.", "Each leveling town trip now logs why a piece is not bought (kept because it is enhanced, rare or sealed; already as good as town sells; or the town has none at your level). At level 8 the town sells only a weapon, shield, gloves and rings; chest, boots and the rest come later."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.239", "title": "Fixes a leveling stop in town, and the route check wait is back", "items": ["Fixed \"Bot stopped: Cannot read properties of null (reading 'npc')\". With Level up by itself on, a town trip where every stop had nothing to do (nothing to sell, buy, repair or store) went to a stop that does not exist. It now goes straight on to the walk back.", "Reverted 1.2.237's 20 second limit on the route check. The shortened check made the character walk in legs, which got stuck in town (\"no walkable route to the hunting spot\"). The route is checked against the game map in full again, as before, and the walk waits for it."], "note": "Tested in simulation only, not in a live game."}];
 
 // Check trusted repository metadata; never execute downloaded update code.
 const Updates = {

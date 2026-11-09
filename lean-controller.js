@@ -307,6 +307,7 @@ const Controller = {
       StatPoints.tick();
       this.guard('Level spot', () => LevelSpot.tick());
       this.guard('Leveling skills', () => Leveling.skillTick());
+      this.guard('Leveling town', () => Leveling.moveTick());
       Potion.tick();
       ItemRules.trackGear();
       if (!ItemRules.dropTick()) ItemRules.balanceTick();
