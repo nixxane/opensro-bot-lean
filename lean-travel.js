@@ -91,12 +91,12 @@ const Travel = {
     return steps;
   },
   // WalkBack asks first: true when the walk needs a teleport or a ferry and the trip has started here instead.
-  begin(pose, dest, resume) {
+  begin(pose, dest, resume, opts = {}) {
     if (!this.on() || !Number.isFinite(dist2D(pose, dest))) return false;
-    if (!this.walkable(pose, dest)) return this.start(this.plan(pose, dest), dest, resume);
+    if (!this.walkable(pose, dest)) return this.start(this.plan(pose, dest), dest, resume, opts);
     // One route area holds both ends: with that area loaded, its real walks can still make a ferry the better way.
     const walks = dist2D(pose, dest) > WALK_LEG ? this.walks(pose, dest) : null;
-    return !!walks && this.start(this.plan(pose, dest, new Set(), walks), dest, resume);
+    return !!walks && this.start(this.plan(pose, dest, new Set(), walks), dest, resume, opts);
   },
   // Real walking distances from each end through its own route area (Route.reach), or null when neither is loaded.
   // direct: the length of a route already planned between them (Infinity: none).

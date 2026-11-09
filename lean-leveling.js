@@ -418,6 +418,20 @@ const Leveling = {
     Settings.saveProfile();
     return true;
   },
+  // A pickup pet collects the drops (gold and gear included) instead of the character running for them, once per character
+  // and only while pickup still has the plain default (everything by the character): a choice the player made is kept, and
+  // switching back by hand stays.
+  petTick() {
+    const c = this.cfg(), P = Hunt.cfg().pickup;
+    if (!World.charName || c.pet === World.charName || !Loot.pet()) return false;
+    c.pet = World.charName;
+    if (P.collector === 'pet' || Object.keys(P.by || {}).length) { Settings.saveProfile(); return false; }
+    P.collector = 'pet';
+    this.message = 'Your pickup pet now collects the drops, gold and gear included.';
+    Log.info('Leveling: ' + this.message); UI.toast(this.message, 'info', 6000);
+    Settings.saveProfile();
+    return true;
+  },
   // Newly learned attack skills join the normal rotation, newly learned self buffs the buffs, each group once: a skill
   // the player takes out stays out. Only skills of the chosen masteries.
   skillTick() {
@@ -427,6 +441,7 @@ const Leveling = {
     if (!World.inWorld() || !World.groups.size) return;
     if (World.charName && this.cfg().elements !== World.charName && this.cfg().prepared === World.charName && this.addElements(Settings.profile.mastery)) { AutoMastery.reset(); Settings.saveProfile(); }
     this.imbueTick();
+    this.petTick();
     const c = this.cfg(), M = Settings.profile.macro, mine = new Set(AutoMastery.masteryGroups()), added = new Set(c.added || []), names = [];
     const take = (s, list, extra) => {
       const group = s.group ?? s.id;
@@ -446,7 +461,7 @@ const Leveling = {
     const c = this.cfg(), T = Town.cfg();
     c.on = on;
     if (on) {
-      c.prepared = ''; c.elements = ''; c.imbued = []; this.skillAt = 0; this.moveFailed.clear();
+      c.prepared = ''; c.elements = ''; c.imbued = []; c.pet = ''; this.skillAt = 0; this.moveFailed.clear();
       T.noXp = { ...T.noXp, on: true, action: 'nextSpot' };
       if (!T.enabled && World.inWorld()) Setup.setupTown();
     }

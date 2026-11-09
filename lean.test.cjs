@@ -131,7 +131,7 @@ test('pet keeps collecting while the bot is stopped, and the character does not'
   assert.equal(f3.commands.some(c => c.kind === 'pickup' || c.kind === 'cos-pickup'), false);
 });
 test('an Items rule to always pick an item works with its kind switched off, and leaves the other items of that kind alone', () => {
-  const f = fixture(), P = f.Settings.profile.hunt.pickup;
+  const f = fixture(), P = f.Settings.profile.hunt.pickup; f.World.charName = 'Tester';
   f.Loot.preset('elixirs'); P.potions = false;
   const vigor = f.drop(20, 6380); vigor.refObjId = 22; vigor.name = 'Vigor potion'; const trash = f.drop(21, 2284); trash.refObjId = 23; trash.name = 'Small potion';
   assert.equal(f.Loot.allowed(vigor), false, 'no rule yet'); assert.equal(f.Loot.allowed(trash), false);
@@ -275,7 +275,7 @@ test('seal of Sun, Moon and Star gear is collected before nearer ordinary drops'
   assert.equal(f.Loot.choose().gid, 20, 'then the nearest ordinary drop, not the plain sword');
 });
 test('the pickup pet also takes seal gear first; without the catalogue the nearest drop wins', () => {
-  const f = fixture(), P = f.Settings.profile.hunt.pickup;
+  const f = fixture(), P = f.Settings.profile.hunt.pickup; f.World.charName = 'Tester';
   pickupPet(f); P.equipment = true;
   f.Items.data.set(903, { name: 'Sun sword', icon: '', code: 'ITEM_CH_SWORD_01_C_RARE' });
   f.Items.filesLoaded = true;
@@ -2715,7 +2715,7 @@ test('anti-stuck can be switched off and does not run while hunting is stopped',
   assert.equal(f.AntiStuck.recoveries, 0);
 });
 test('SoX-only filters equipment to Star, Moon and Sun gear and leaves other categories alone', () => {
-  const f = fixture(), P = f.Settings.profile.hunt.pickup;
+  const f = fixture(), P = f.Settings.profile.hunt.pickup; f.World.charName = 'Tester';
   const gear = (gid, ref) => { const e = f.drop(gid, 44); e.refObjId = ref; e.name = 'Sword'; return e; };
   const plain = gear(40, 900), star = gear(41, 901), moon = gear(42, 902), sun = gear(43, 903), potion = f.drop(44, 2284);
   const gold = f.drop(45, 0x2d0); gold.groundItem.goldAmount = 50;
@@ -4914,6 +4914,36 @@ test('real route data: the level 21 spot west of Jangan is reached by the China 
   f.Leveling.current = null;
   const near = f.Leveling.spot(16).center;
   assert.equal(f.Travel.plan(ch.arrival, near, new Set(), f.Travel.walks(ch.arrival, near)).map(x => x.kind).join(), 'walk', 'a spot on foot stays a walk');
+});
+test('a walk to a place across the water (the leveling move) takes the ferry with its own handlers (live: Jangan to Donwhang walked into the river)', () => {
+  const f = travelFixture();
+  let done = 0, failed = '';
+  assert.equal(f.WalkBack.startTo({ ...f.spot }, { label: 'the Donwhang world statue', onDone: () => done++, onFail: r => { failed = r; } }), true);
+  assert.ok(f.Travel.active, 'the ferry trip starts, not a straight walk');
+  assert.equal(f.Travel.active.label, 'the Donwhang world statue');
+  assert.equal(f.WalkBack.active.label, 'the teleporter', 'it first walks to the ferry');
+  f.Travel.active.index = f.Travel.active.steps.length; f.Travel.next();
+  assert.equal(done, 1, 'the arrival reaches the caller');
+  f.Travel.active = null; f.WalkBack.active = null;
+  f.Trade.run = { stage: 'walk' };
+  f.WalkBack.startTo({ ...f.spot }, { label: 'the trade merchant' });
+  assert.equal(f.Travel.active, null, 'auto trade never takes the ferry');
+  f.Trade.run = null;
+});
+test('with leveling on, a summoned pickup pet collects the drops, once; a pickup the player set up is kept', () => {
+  const f = fixture(), P = f.Settings.profile.hunt.pickup; f.World.charName = 'Tester';
+  f.Settings.profile.leveling.on = true;
+  assert.equal(P.collector, 'character');
+  assert.equal(f.Leveling.petTick(), false, 'no pet out: nothing changes');
+  pickupPet(f); P.collector = 'character';
+  assert.equal(f.Leveling.petTick(), true);
+  assert.equal(P.collector, 'pet', 'gold and gear go to the pet');
+  P.collector = 'character';
+  assert.equal(f.Leveling.petTick(), false, 'switched back by hand: it stays');
+  const g = fixture(); g.World.charName = 'Tester'; g.Settings.profile.leveling.on = true; pickupPet(g);
+  g.Settings.profile.hunt.pickup.collector = 'character'; g.Settings.profile.hunt.pickup.by = { gold: 'character' };
+  assert.equal(g.Leveling.petTick(), false, 'a per-item choice is the player\'s');
+  assert.equal(g.Settings.profile.hunt.pickup.collector, 'character');
 });
 test('travel walks to the teleporter, opens its menu, hops, walks on and resumes hunting', () => {
   const f = travelFixture(), gp = f.World.gp;
@@ -9226,7 +9256,7 @@ test('Sell Star finds a withdrawn item that lands in another bag slot and does n
 });
 
 test("Don't pick up Star gear skips only Star equipment and is off by default", () => {
-  const f = fixture(), P = f.Settings.profile.hunt.pickup;
+  const f = fixture(), P = f.Settings.profile.hunt.pickup; f.World.charName = 'Tester';
   const star = f.drop(41, 44), moon = f.drop(42, 44), sun = f.drop(43, 44), plain = f.drop(44, 44), potion = f.drop(45, 2284);
   star.refObjId = 901; moon.refObjId = 902; sun.refObjId = 903; plain.refObjId = 900;
   f.Items.data.set(900, { name: 'Plain', icon: '', code: 'ITEM_CH_SWORD_01_A' });
@@ -9241,7 +9271,7 @@ test("Don't pick up Star gear skips only Star equipment and is off by default", 
   P.soxOnly = true; assert.deepEqual([star, moon, sun, plain].map(e => f.Loot.allowed(e)), [false, true, true, false], 'with SoX only: Moon and Sun');
 });
 test('skipStar waits for an equipment drop the catalogue has never seen', () => {
-  const f = fixture(), P = f.Settings.profile.hunt.pickup;
+  const f = fixture(), P = f.Settings.profile.hunt.pickup; f.World.charName = 'Tester';
   f.Items.filesMissing = true; P.skipStar = true;
   const unseen = f.drop(41, 44); unseen.refObjId = 901;
   assert.equal(f.Loot.allowed(unseen), false, 'with the files unserved and no wire row, it is not guessed');

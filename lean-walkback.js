@@ -49,6 +49,9 @@ const WalkBack = {
     if (!dest || !pose || !World.inWorld() || World.isDead()) return false;
     if (!Number.isFinite(dist2D(pose, dest))) { onFail?.('The destination is in another world or dungeon.'); return false; }
     this.cancel();
+    // Across water or between unconnected areas a teleport or ferry takes over, with the caller's handlers (live: the
+    // leveling move from Jangan to Donwhang walked into the river). Not for Travel's own legs, nor auto trade's transport.
+    if (!Travel.active && !Trade.run && Travel.begin(pose, dest, false, { label, onDone, onFail })) return true;
     this.launch(dest, [{ ...dest }], pose, false, { label, stop, onDone, onFail });
     return !!this.active;
   },
