@@ -10,6 +10,9 @@ const WALK_MAX_LEGS = 60;        // hard safety cap on chained legs for one retu
 const WALK_MAX_MS = 30 * 60000;  // hard safety cap for the leg fallback
 const WALK_NAV_MS = 90 * 60000;  // absolute cap for a navdata route
 const WALK_PLAN_MS = 6000;       // wait this long for route data before falling back
+// Zero-setup leveling does not wait for the whole map check (up to 2.5 minutes standing still in town): after this it walks
+// in legs, as it does when no route data covers the trip.
+const WALK_PLAN_LEVELING_MS = 20000;
 const WALK_NAV_REACH = 60;       // a navdata waypoint is passed within this: it may stand on a rock edge
 const WALK_NAV_SKIPS = 2;        // unreachable navdata waypoints skipped in a row before re-planning
 
@@ -76,7 +79,7 @@ const WalkBack = {
     if (!check) { try { planned = Route.plan(pose, dest); } catch { planned = null; } }
     if (planned) return this.useNav(planned, pose);
     const a = this.active, token = {};
-    a.plan = { at: now(), token, limit: check ? CHECK_MS + 5000 : WALK_PLAN_MS };
+    a.plan = { at: now(), token, limit: check ? (Leveling.cfg().on ? WALK_PLAN_LEVELING_MS : CHECK_MS + 5000) : WALK_PLAN_MS };
     a.source = 'planning';
     Log.info('Route: loading navdata for ' + routeArea.name + (check ? ' and checking it against the game map.' : '.'));
     Route.checked(pose, dest).then(next => {

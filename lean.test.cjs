@@ -9186,3 +9186,25 @@ test('zero-setup leveling sells the bag first, so a full bag no longer stops the
   f.Town.arrived();
   assert.ok(f.Town.trip, f.Town.message); assert.equal(f.Town.trip.phase, 'walk-smith', 'the merchant first: it frees the bag for the pet loot');
 });
+
+test('zero-setup leveling does not stand in town for the whole map check before walking back', async () => {
+  const f = fixture(), { from, to } = checkedArea(f, 'checked', 15), clipper = wallClipper();
+  f.RouteCheck.region = async regionId => { await new Promise(() => {}); return { regionId, clipper }; }; // a check that never answers
+  assert.equal(await f.Route.ensure(from, to), true);
+  f.World.gp.pose = { ...from }; f.Settings.profile.hunt.center = { ...to };
+  f.Settings.profile.leveling.on = true;
+  f.Navigation.install(navWindow(from.regionId));
+  f.WalkBack.start(true);
+  assert.equal(f.WalkBack.active.source, 'planning');
+  f.advance(7000); f.WalkBack.tick();
+  assert.equal(f.WalkBack.active.source, 'planning', 'still checking after 7 s');
+  f.advance(14000); f.WalkBack.tick();
+  assert.equal(f.WalkBack.active.source, 'legs', 'after 20 s it walks');
+  const g = fixture(), area = checkedArea(g, 'checked', 15);
+  g.RouteCheck.region = async regionId => { await new Promise(() => {}); return { regionId, clipper }; };
+  assert.equal(await g.Route.ensure(area.from, area.to), true);
+  g.World.gp.pose = { ...area.from }; g.Settings.profile.hunt.center = { ...area.to };
+  g.Navigation.install(navWindow(area.from.regionId));
+  g.WalkBack.start(true); g.advance(21000); g.WalkBack.tick();
+  assert.equal(g.WalkBack.active.source, 'planning', 'leveling off: the long check wait is unchanged');
+});
