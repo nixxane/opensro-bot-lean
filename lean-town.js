@@ -423,8 +423,11 @@ const Town = {
     t.order = this.order(full);
     // A dead pet is brought back first, before the services, so it carries loot again for the rest of the trip.
     if (this.cfg().revivePet && this.deadCollar() && this.grass()) { this.enter('pet-revive'); return; }
-    this.enter('walk-' + t.order[0]);
+    this.enter(this.firstStop());
   },
+  // The first stop of a trip. With zero-setup leveling the way back is a walk (no statue stop), so a trip whose services
+  // all have nothing to do has an empty order: it goes straight on to the way back, not to a stop that does not exist.
+  firstStop() { const t = this.trip; return t.order[0] ? 'walk-' + t.order[0] : this.closeNext('close-'); },
   // The services in visiting order. Potions come before repair and selling, unless bag selling is on, which sells and
   // repairs first so a full bag has room to buy. A full bag also sells before the warehouse: pet loot reaches the
   // warehouse through a free bag slot.
@@ -808,10 +811,10 @@ const Town = {
   // that cannot be brought back is never fatal to the trip: the town services continue without it.
   revivePet() {
     const t = this.trip, gp = World.gp;
-    const finish = () => { t.petStep = null; this.enter('walk-' + t.order[0]); };
+    const finish = () => { t.petStep = null; this.enter(this.firstStop()); };
     const giveUp = (text, stepName) => {
       t.petStep = null; this.petReviveFailedAt = now();
-      this.enter('walk-' + t.order[0]);
+      this.enter(this.firstStop());
       this.message = text; Log.warn(text); UI.toast(text, 'warn', 6000);
       Activity.emit({ category: 'town', code: 'pet-revive-failed', text, outcome: 'refused', details: { step: stepName } });
     };
