@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         nixxane bot
 // @namespace    https://opensro.online/
-// @version      1.2.230
+// @version      1.2.231
 // @updateURL    https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.meta.js
 // @downloadURL  https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -22,7 +22,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[NIX] Another SRO assistant is active. Disable it and reload to use NIX.');
   return;
 }
-const VERSION = '1.2.230';
+const VERSION = '1.2.231';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -197,7 +197,7 @@ const DEFAULT_PROFILE = {
     attr: { targets: {}, limit: 100 } },
   statPoints: { enabled: false, str: 1, int: 0, reserve: 0 },
   // Zero-setup leveling (lean-leveling.js): spots from the game data and NPC gear upgrades.
-  leveling: { on: false, spots: true, gear: true, accessories: true, sellOld: true, reserve: 5000, maxM: 400 },
+  leveling: { on: false, spots: true, gear: true, accessories: true, sellOld: true, reserve: 5000, maxM: 400, skills: true, prepared: '', added: [] },
   // Auto Quest: learned tokens bind a quest codename (QNO_...) to its refId, and learned targets
   // name the monster types whose kills advance each refId. Both fill themselves while playing.
   quest: { on: false, accept: true, picked: [], include: '', exclude: '', skip: [], learned: {}, targets: {} },
@@ -10877,6 +10877,7 @@ const Controller = {
       AutoMastery.tick();
       StatPoints.tick();
       this.guard('Level spot', () => LevelSpot.tick());
+      this.guard('Leveling skills', () => Leveling.skillTick());
       Potion.tick();
       ItemRules.trackGear();
       if (!ItemRules.dropTick()) ItemRules.balanceTick();
@@ -11268,10 +11269,15 @@ const LEVEL_SHOPS = {"CH":{"armor":{"refObjId":2004,"regionId":25000,"x":332.17,
 // itself, once per plan.
 const LEVEL_SPOT_BELOW = 5, LEVEL_SPOT_KEEP = 2, LEVEL_GEAR_MAX_PLUS = 3, LEVEL_GEAR_CHECK_MS = 20000;
 // Equipment sockets by TID4 (OpenSRO inventory/slots.go, native sub_594980): armour parts and accessories.
+// The mastery each weapon type trains (TID4 of the weapon; OpenSRO masteries 257-276 Chinese, 513-518 European), and the
+// European masteries that fight with Intelligence.
+const LEVEL_WEAPON_MASTERY = { 2: 257, 3: 257, 4: 258, 5: 258, 6: 259, 7: 513, 8: 513, 9: 513, 10: 516, 11: 514, 12: 515, 13: 515, 14: 517, 15: 518 };
+const LEVEL_INT_MASTERIES = [514, 516, 517, 518], LEVEL_SKILL_CHECK_MS = 5000;
 const LEVEL_ARMOUR_SOCKET = { 1: 0, 2: 2, 3: 1, 4: 4, 5: 3, 6: 5 }, LEVEL_ACCESSORY_SOCKETS = { 1: [9], 2: [10], 3: [11, 12] };
 const Leveling = {
   // The generated tables, as properties so a test can lay its own over them.
   spots: LEVEL_SPOTS, gear: LEVEL_GEAR, shopsData: LEVEL_SHOPS,
+  skillAt: 0,
   current: null, skipped: new Set(), tried: new Set(), refused: new Set(), checkAt: 0, due_: '', index: null, message: '',
   cfg() { return Settings.profile.leveling; },
   spotsOn() { const c = this.cfg(); return !!(c.on && c.spots); },
@@ -11488,11 +11494,57 @@ const Leveling = {
     const spot = this.spotsOn() ? (cur ? 'Hunting at the level ' + cur.level + ' spot.' : 'No spot picked yet.') : 'Spots: your own.';
     return spot + ' ' + (this.gearOn() ? (this.message || (Number.isInteger(level) ? 'Gear: checked at level ' + level + '.' : '')) : 'Gear buying off.');
   },
+  skillsOn() { const c = this.cfg(); return !!(c.on && c.skills); },
+  // ---- skills
+  // Once per character, in the world: the weapon's mastery is raised with the level and every skill of it learned
+  // (Auto mastery, scope "masteries"), and stat points go to Strength, or to Intelligence for a caster (a European
+  // caster weapon, or more Intelligence than Strength already). Only what is not set up yet is changed.
+  prepare() {
+    const c = this.cfg(), gp = World.gp, weapon = (gp?.inventory || []).find(i => i.slot === 6);
+    // prepared names the character it was done for: settings copied to another character set that one up again.
+    if (!this.skillsOn() || !World.charName || c.prepared === World.charName || !World.inWorld() || !weapon || !gp.progression) return false;
+    const mastery = LEVEL_WEAPON_MASTERY[this.tids(weapon)[1]];
+    if (!mastery) return false;
+    const M = Settings.profile.mastery, S = Settings.profile.statPoints, stats = gp.progression.stats || {}, done = [];
+    if (!M.enabled || !M.ids.length) { M.enabled = true; M.ids = [mastery]; M.gap = 0; done.push(AutoMastery.name(mastery) + ' mastery'); }
+    if (!M.skills || M.scope !== 'masteries') { M.skills = true; M.scope = 'masteries'; done.push('its skills'); }
+    if (!S.enabled) {
+      const caster = LEVEL_INT_MASTERIES.includes(mastery) || (stats.intellect ?? 0) > (stats.strength ?? 0);
+      Object.assign(S, { enabled: true, str: caster ? 0 : 1, int: caster ? 1 : 0 });
+      done.push('stat points to ' + (caster ? 'Intelligence' : 'Strength'));
+    }
+    c.prepared = World.charName;
+    AutoMastery.reset(); StatPoints.reset(); Settings.saveProfile();
+    if (done.length) { this.message = 'Leveling set up: ' + done.join(', ') + '.'; Log.info(this.message); UI.toast(this.message, 'info', 7000); }
+    return true;
+  },
+  // Newly learned attack skills join the normal rotation, newly learned self buffs the buffs, each group once: a skill
+  // the player takes out stays out. Only skills of the chosen masteries.
+  skillTick() {
+    if (!this.skillsOn() || now() < this.skillAt) return;
+    this.skillAt = now() + LEVEL_SKILL_CHECK_MS;
+    this.prepare();
+    if (!World.inWorld() || !World.groups.size) return;
+    const c = this.cfg(), M = Settings.profile.macro, mine = new Set(AutoMastery.masteryGroups()), added = new Set(c.added || []), names = [];
+    const take = (s, list, extra) => {
+      const group = s.group ?? s.id;
+      if (!mine.has(group) || added.has(group)) return;
+      added.add(group);
+      if (list.some(e => (e.group ?? e.id) === group)) return;
+      list.push({ id: s.id, group, ...extra }); names.push(World.skillName(s.id));
+    };
+    for (const s of UI.learnedSkills(false)) take(s, M.rotations.normal, {});
+    for (const s of UI.learnedSkills(true)) take(s, M.buffs, { enabled: true, mode: 'hunt', refreshS: 3 });
+    if (added.size === (c.added || []).length) return;
+    c.added = [...added]; Settings.saveProfile();
+    if (names.length) { this.message = 'New skills in use: ' + names.join(', ') + '.'; Log.info('Leveling: ' + this.message); UI.toast(this.message, 'info', 5000); }
+  },
   // Turning it on sets the pieces it relies on: "no XP" moves to another spot, and the town for the trips.
   enable(on) {
     const c = this.cfg(), T = Town.cfg();
     c.on = on;
     if (on) {
+      c.prepared = ''; this.skillAt = 0;
       T.noXp = { ...T.noXp, on: true, action: 'nextSpot' };
       if (!T.enabled && World.inWorld()) Setup.setupTown();
     }
@@ -11503,13 +11555,14 @@ const Leveling = {
     const c = () => this.cfg(), status = el('p', this.status(), 'muted');
     UI.refreshers.push(() => { status.textContent = this.status(); });
     return UI.group('Zero-setup leveling',
-      el('p', 'For levelling a character with no setup: the bot picks a hunting spot for your level from the game data, moves on as you level, and buys the next tier of weapon, armour and accessories from the town merchants on its town trips. Nothing better than ordinary +' + LEVEL_GEAR_MAX_PLUS + ' gear is ever replaced or sold.', 'muted'),
+      el('p', 'For levelling a character with no setup: the bot picks a hunting spot for your level from the game data, moves on as you level, and buys the next tier of weapon, armour and accessories from the town merchants on its town trips. Nothing better than ordinary +' + LEVEL_GEAR_MAX_PLUS + ' gear is ever replaced or sold. It can also raise your weapon\'s mastery, learn its skills, put new attack skills and buffs to use and spend stat points (Strength, or Intelligence for a caster); what you already set up there is kept.', 'muted'),
       UI.check('Level up by itself', () => c().on, v => this.enable(v)),
       UI.check('Pick hunting spots for my level', () => c().spots, v => { c().spots = v; this.reset(); }),
       UI.number('Spots at most this far from town (m)', () => c().maxM, v => { c().maxM = v; this.reset(); }, 50, 5000, 50),
       UI.check('Buy better gear from the town merchants', () => c().gear, v => { c().gear = v; }),
       UI.check('Also buy earrings, necklaces and rings', () => c().accessories, v => { c().accessories = v; }),
       UI.check('Sell the replaced piece back', () => c().sellOld, v => { c().sellOld = v; }),
+      UI.check('Raise my weapon mastery, learn its skills and use them', () => c().skills, v => { c().skills = v; c().prepared = ''; this.skillAt = 0; }),
       UI.number('Always keep this much gold', () => c().reserve, v => { c().reserve = v; }, 0, 100000000, 1000),
       status);
   },
@@ -12875,7 +12928,18 @@ const AutoMastery = {
     (m.buffs || []).forEach(add); add(m.imbue);
     // The whole learned skill line: every other skill group the character already has, after the ones it uses.
     if (this.cfg().scope === 'all') for (const g of World.groups.keys()) if (!seen.has(g) && this.groupLevel(g)) { seen.add(g); groups.push(g); }
+    // Every skill of the chosen masteries, learned or not: new skills are learned as soon as the game allows.
+    if (this.cfg().scope === 'masteries') for (const g of this.masteryGroups()) if (!seen.has(g)) { seen.add(g); groups.push(g); }
     return groups;
+  },
+  // Skill groups that need one of the chosen masteries (and no other), trainable, in group order.
+  masteryGroups() {
+    const ids = this.cfg().ids || [], out = [];
+    for (const [group, rows] of World.groups) {
+      const first = rows.find(r => r.level === 1) || rows[0], need = (first?.masteries || []).filter(r => r.ID);
+      if (first?.trainable && need.length && need.every(r => ids.includes(r.ID))) out.push(group);
+    }
+    return out.sort((a, b) => a - b);
   },
   skillReason(row, progression) {
     if (!row.trainable) return 'cannot be trained';
@@ -12917,7 +12981,7 @@ const AutoMastery = {
     const summary = () => { for (const line of quiet.slice(0, 6)) skipped.push(line); if (quiet.length > 6) skipped.push('and ' + (quiet.length - 6) + ' more skills'); };
     for (const group of groups) {
       const current = this.groupLevel(group);
-      if (!current) { quiet.push(name(group) + ': not learned yet'); continue; }
+      if (!current && this.cfg().scope !== 'masteries') { quiet.push(name(group) + ': not learned yet'); continue; }
       const row = (World.groups.get(group) || []).find(s => s.level === current + 1);
       if (!row) { quiet.push(name(group) + ': already at its highest level (' + current + ')'); continue; }
       const label = name(group) + ' level ' + row.level;
@@ -13022,7 +13086,7 @@ const AutoMastery = {
     }
     box.append(UI.number('Keep this many levels below my level', () => this.cfg().gap, v => this.cfg().gap = v, 0, 50),
       UI.check('Upgrade my rotation and buff skills automatically', () => this.cfg().skills, v => { this.cfg().skills = v; this.pending = null; this.blocked.clear(); }),
-      UI.select('Skills to upgrade', [['rotation', 'Only skills in my rotations, buffs and imbue'], ['all', 'All skills I have learned']], () => this.cfg().scope === 'all' ? 'all' : 'rotation', v => { this.cfg().scope = v; this.pending = null; this.blocked.clear(); }),
+      UI.select('Skills to upgrade', [['rotation', 'Only skills in my rotations, buffs and imbue'], ['all', 'All skills I have learned'], ['masteries', 'Every skill of my chosen masteries (learns new ones)']], () => ['all', 'masteries'].includes(this.cfg().scope) ? this.cfg().scope : 'rotation', v => { this.cfg().scope = v; this.pending = null; this.blocked.clear(); }),
       UI.number('Keep this many skill points unspent', () => this.cfg().reserve, v => this.cfg().reserve = v, 0, 100000000),
       UI.select('Order when both are ticked', [['masteries', 'Masteries first'], ['skills', 'Skills first'], ['alternate', 'Alternate']], () => this.cfg().order, v => this.cfg().order = v));
     this.note = el('p', this.message, 'muted');
@@ -15874,7 +15938,7 @@ const Alchemy = {
 };
 
 
-const RELEASE_NOTES = [{"version": "1.2.230", "title": "Update button and window layout fixes", "items": ["The **Update** button can be clicked again in the compact window. When an update was available, the button wrapped to a second header row and the \"Update available\" line covered it.", "The classic window keeps one size on every tab again, instead of shrinking on short tabs such as Player buffing. It is still capped to your screen height.", "The wide window splits a page's boxes into its two columns as evenly as possible, so a tall box no longer leaves a long empty gap beside it."], "note": "Checked in the bot's browser UI test (Edge, simulated game), not in a live game."}, {"version": "1.2.229", "title": "Zero-setup leveling", "items": ["New on the Setup page: **Level up by itself**. The bot picks a hunting spot for your level from the game's monster spawn data, near your town, and moves to a better one as you level.", "On town trips it buys the next tier of NPC weapon, armour and (optionally) accessories, wears them in the shop and sells the old pieces back. Seal gear, rare items, +4 and higher, and anything you protect are never replaced. A gold reserve (5,000 by default) is never spent.", "When better gear becomes affordable, the bot goes to town for it by itself, once."], "note": "Tested in simulation only, not in a live game. Off by default."}, {"version": "1.2.228", "title": "Max every skill is now a switch", "items": ["\"Max every skill\" (Settings, Auto mastery) is now an on/off switch instead of a one-time button. While it is on, it learns and upgrades every skill it is allowed to, then stays on and spends new skill points as you get them (after a level up, for example). Turn it off to stop.", "It is off by default and saved per character. Passes that find nothing new stay quiet (no toast every few seconds), and a level the game refused is not resent for a minute."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.227", "title": "One switch for Reverse Return Scrolls", "items": ["Reverse Return Scrolls now have a single switch, on the Town page under \"Back to the hunting spot\": \"Buy Reverse Return Scrolls from the Item mall (silk)\". The old merchant switch is gone (no merchant sells them for gold, and it could start useless town trips); if it was on, the new switch is turned on for you.", "On a town trip without a reverse scroll, the bot now buys one from the Item mall after the services and reverses. Before, the mall only bought while hunting, so the trip often walked back instead. If the mall cannot deliver (budget, silk, full bag, refused), the trip walks back as before.", "The reverse switch works without the general \"Buy from the Item mall\" switch; it still uses the silk budget per bot run. \"Low stock ≤\" now really means \"or equal\". When the same item is listed more than once in the mall, the single-item package is bought."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.226", "title": "Move pet loot to your bag", "items": ["New option under Loot, Bag and pet space: \"Move pet loot to my bag when the pet is nearly full\". The pickup pet's items move to your bag one at a time, keeping two bag slots free, so the pet can keep collecting and the bot stays at the hunting spot longer.", "The town trip starts once the bag is full as well. The weapons and shield chosen under Combat never move. Off by default."], "note": "From a player request. Tested in simulation only, not in a live game."}, {"version": "1.2.225", "title": "Town trips wait when the warehouse will not open", "items": ["If the warehouse, a merchant or the world statue does not open, for example because the town is still loading, the bot no longer stops. It waits a minute, walks back and tries again.", "Each service gets three tries per trip. If the third one fails too, the bot stops with the same message as before.", "No new option."], "note": "From a player report. Tested in simulation only, not in a live game; a slow-loading town is the likely cause, not a confirmed one."}, {"version": "1.2.224", "title": "Reliability fixes for death, rebirth and quests", "items": ["If you die or change world while a buff-gear swap is pending, hunting can now start anyway. The gear is restored quietly once it is safe, not during town trips or open trade, stall or shop windows.", "Rebirth is now re-sent every 10 seconds while your character is still dead.", "Quest data that fails to load is retried after 10 minutes instead of on every tick.", "The reconnect message no longer includes your character's name, so it stays out of reports.", "Smaller fixes: the pet-bag-full toast works with the chime off, Max skills stops when you leave the world, and settings are saved when you close the page. The town tier is reset when you switch character.", "No new option."], "note": "Contributed by duan78 (#96). Tested in simulation only, not in a live game."}, {"version": "1.2.223", "title": "Town trips no longer hang before the return scroll", "items": ["If the game keeps showing a pending inventory or an open cast when the bot is about to read the return scroll, the town trip used to wait forever. It now shows \"Waiting for the game to settle before the return scroll.\"", "After a full minute of that, the trip stops cleanly and hunting stays off. The bot never sends the scroll twice. Reload the game and check your character.", "If the game refuses the return scroll three times without giving a reason, the message now says the game itself may be refusing it and suggests using the scroll by hand.", "No new option."], "note": "Contributed by duan78 (#95). Tested in simulation only, not in a live game."}];
+const RELEASE_NOTES = [{"version": "1.2.231", "title": "Zero-setup leveling now handles skills and stats", "items": ["With **Level up by itself** on, the bot now also raises your weapon's mastery with your level (a sword or blade trains Bicheon, a two-handed staff Wizard, and so on), learns each of its skills as soon as the game allows, and spends stat points: Strength, or Intelligence for a caster. Masteries or a stat share you already chose are kept.", "Each newly learned attack skill joins your attack rotation and each new self buff your buffs, once. A skill you take out stays out.", "Auto mastery has a new choice under \"Skills to upgrade\": **Every skill of my chosen masteries**, which also learns new skills.", "A new switch in the leveling box turns this part off."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.230", "title": "Update button and window layout fixes", "items": ["The **Update** button can be clicked again in the compact window. When an update was available, the button wrapped to a second header row and the \"Update available\" line covered it.", "The classic window keeps one size on every tab again, instead of shrinking on short tabs such as Player buffing. It is still capped to your screen height.", "The wide window splits a page's boxes into its two columns as evenly as possible, so a tall box no longer leaves a long empty gap beside it."], "note": "Checked in the bot's browser UI test (Edge, simulated game), not in a live game."}, {"version": "1.2.229", "title": "Zero-setup leveling", "items": ["New on the Setup page: **Level up by itself**. The bot picks a hunting spot for your level from the game's monster spawn data, near your town, and moves to a better one as you level.", "On town trips it buys the next tier of NPC weapon, armour and (optionally) accessories, wears them in the shop and sells the old pieces back. Seal gear, rare items, +4 and higher, and anything you protect are never replaced. A gold reserve (5,000 by default) is never spent.", "When better gear becomes affordable, the bot goes to town for it by itself, once."], "note": "Tested in simulation only, not in a live game. Off by default."}, {"version": "1.2.228", "title": "Max every skill is now a switch", "items": ["\"Max every skill\" (Settings, Auto mastery) is now an on/off switch instead of a one-time button. While it is on, it learns and upgrades every skill it is allowed to, then stays on and spends new skill points as you get them (after a level up, for example). Turn it off to stop.", "It is off by default and saved per character. Passes that find nothing new stay quiet (no toast every few seconds), and a level the game refused is not resent for a minute."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.227", "title": "One switch for Reverse Return Scrolls", "items": ["Reverse Return Scrolls now have a single switch, on the Town page under \"Back to the hunting spot\": \"Buy Reverse Return Scrolls from the Item mall (silk)\". The old merchant switch is gone (no merchant sells them for gold, and it could start useless town trips); if it was on, the new switch is turned on for you.", "On a town trip without a reverse scroll, the bot now buys one from the Item mall after the services and reverses. Before, the mall only bought while hunting, so the trip often walked back instead. If the mall cannot deliver (budget, silk, full bag, refused), the trip walks back as before.", "The reverse switch works without the general \"Buy from the Item mall\" switch; it still uses the silk budget per bot run. \"Low stock ≤\" now really means \"or equal\". When the same item is listed more than once in the mall, the single-item package is bought."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.226", "title": "Move pet loot to your bag", "items": ["New option under Loot, Bag and pet space: \"Move pet loot to my bag when the pet is nearly full\". The pickup pet's items move to your bag one at a time, keeping two bag slots free, so the pet can keep collecting and the bot stays at the hunting spot longer.", "The town trip starts once the bag is full as well. The weapons and shield chosen under Combat never move. Off by default."], "note": "From a player request. Tested in simulation only, not in a live game."}, {"version": "1.2.225", "title": "Town trips wait when the warehouse will not open", "items": ["If the warehouse, a merchant or the world statue does not open, for example because the town is still loading, the bot no longer stops. It waits a minute, walks back and tries again.", "Each service gets three tries per trip. If the third one fails too, the bot stops with the same message as before.", "No new option."], "note": "From a player report. Tested in simulation only, not in a live game; a slow-loading town is the likely cause, not a confirmed one."}, {"version": "1.2.224", "title": "Reliability fixes for death, rebirth and quests", "items": ["If you die or change world while a buff-gear swap is pending, hunting can now start anyway. The gear is restored quietly once it is safe, not during town trips or open trade, stall or shop windows.", "Rebirth is now re-sent every 10 seconds while your character is still dead.", "Quest data that fails to load is retried after 10 minutes instead of on every tick.", "The reconnect message no longer includes your character's name, so it stays out of reports.", "Smaller fixes: the pet-bag-full toast works with the chime off, Max skills stops when you leave the world, and settings are saved when you close the page. The town tier is reset when you switch character.", "No new option."], "note": "Contributed by duan78 (#96). Tested in simulation only, not in a live game."}];
 
 // Check trusted repository metadata; never execute downloaded update code.
 const Updates = {

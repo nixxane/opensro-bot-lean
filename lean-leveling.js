@@ -13,10 +13,15 @@
 // itself, once per plan.
 const LEVEL_SPOT_BELOW = 5, LEVEL_SPOT_KEEP = 2, LEVEL_GEAR_MAX_PLUS = 3, LEVEL_GEAR_CHECK_MS = 20000;
 // Equipment sockets by TID4 (OpenSRO inventory/slots.go, native sub_594980): armour parts and accessories.
+// The mastery each weapon type trains (TID4 of the weapon; OpenSRO masteries 257-276 Chinese, 513-518 European), and the
+// European masteries that fight with Intelligence.
+const LEVEL_WEAPON_MASTERY = { 2: 257, 3: 257, 4: 258, 5: 258, 6: 259, 7: 513, 8: 513, 9: 513, 10: 516, 11: 514, 12: 515, 13: 515, 14: 517, 15: 518 };
+const LEVEL_INT_MASTERIES = [514, 516, 517, 518], LEVEL_SKILL_CHECK_MS = 5000;
 const LEVEL_ARMOUR_SOCKET = { 1: 0, 2: 2, 3: 1, 4: 4, 5: 3, 6: 5 }, LEVEL_ACCESSORY_SOCKETS = { 1: [9], 2: [10], 3: [11, 12] };
 const Leveling = {
   // The generated tables, as properties so a test can lay its own over them.
   spots: LEVEL_SPOTS, gear: LEVEL_GEAR, shopsData: LEVEL_SHOPS,
+  skillAt: 0,
   current: null, skipped: new Set(), tried: new Set(), refused: new Set(), checkAt: 0, due_: '', index: null, message: '',
   cfg() { return Settings.profile.leveling; },
   spotsOn() { const c = this.cfg(); return !!(c.on && c.spots); },
@@ -233,11 +238,57 @@ const Leveling = {
     const spot = this.spotsOn() ? (cur ? 'Hunting at the level ' + cur.level + ' spot.' : 'No spot picked yet.') : 'Spots: your own.';
     return spot + ' ' + (this.gearOn() ? (this.message || (Number.isInteger(level) ? 'Gear: checked at level ' + level + '.' : '')) : 'Gear buying off.');
   },
+  skillsOn() { const c = this.cfg(); return !!(c.on && c.skills); },
+  // ---- skills
+  // Once per character, in the world: the weapon's mastery is raised with the level and every skill of it learned
+  // (Auto mastery, scope "masteries"), and stat points go to Strength, or to Intelligence for a caster (a European
+  // caster weapon, or more Intelligence than Strength already). Only what is not set up yet is changed.
+  prepare() {
+    const c = this.cfg(), gp = World.gp, weapon = (gp?.inventory || []).find(i => i.slot === 6);
+    // prepared names the character it was done for: settings copied to another character set that one up again.
+    if (!this.skillsOn() || !World.charName || c.prepared === World.charName || !World.inWorld() || !weapon || !gp.progression) return false;
+    const mastery = LEVEL_WEAPON_MASTERY[this.tids(weapon)[1]];
+    if (!mastery) return false;
+    const M = Settings.profile.mastery, S = Settings.profile.statPoints, stats = gp.progression.stats || {}, done = [];
+    if (!M.enabled || !M.ids.length) { M.enabled = true; M.ids = [mastery]; M.gap = 0; done.push(AutoMastery.name(mastery) + ' mastery'); }
+    if (!M.skills || M.scope !== 'masteries') { M.skills = true; M.scope = 'masteries'; done.push('its skills'); }
+    if (!S.enabled) {
+      const caster = LEVEL_INT_MASTERIES.includes(mastery) || (stats.intellect ?? 0) > (stats.strength ?? 0);
+      Object.assign(S, { enabled: true, str: caster ? 0 : 1, int: caster ? 1 : 0 });
+      done.push('stat points to ' + (caster ? 'Intelligence' : 'Strength'));
+    }
+    c.prepared = World.charName;
+    AutoMastery.reset(); StatPoints.reset(); Settings.saveProfile();
+    if (done.length) { this.message = 'Leveling set up: ' + done.join(', ') + '.'; Log.info(this.message); UI.toast(this.message, 'info', 7000); }
+    return true;
+  },
+  // Newly learned attack skills join the normal rotation, newly learned self buffs the buffs, each group once: a skill
+  // the player takes out stays out. Only skills of the chosen masteries.
+  skillTick() {
+    if (!this.skillsOn() || now() < this.skillAt) return;
+    this.skillAt = now() + LEVEL_SKILL_CHECK_MS;
+    this.prepare();
+    if (!World.inWorld() || !World.groups.size) return;
+    const c = this.cfg(), M = Settings.profile.macro, mine = new Set(AutoMastery.masteryGroups()), added = new Set(c.added || []), names = [];
+    const take = (s, list, extra) => {
+      const group = s.group ?? s.id;
+      if (!mine.has(group) || added.has(group)) return;
+      added.add(group);
+      if (list.some(e => (e.group ?? e.id) === group)) return;
+      list.push({ id: s.id, group, ...extra }); names.push(World.skillName(s.id));
+    };
+    for (const s of UI.learnedSkills(false)) take(s, M.rotations.normal, {});
+    for (const s of UI.learnedSkills(true)) take(s, M.buffs, { enabled: true, mode: 'hunt', refreshS: 3 });
+    if (added.size === (c.added || []).length) return;
+    c.added = [...added]; Settings.saveProfile();
+    if (names.length) { this.message = 'New skills in use: ' + names.join(', ') + '.'; Log.info('Leveling: ' + this.message); UI.toast(this.message, 'info', 5000); }
+  },
   // Turning it on sets the pieces it relies on: "no XP" moves to another spot, and the town for the trips.
   enable(on) {
     const c = this.cfg(), T = Town.cfg();
     c.on = on;
     if (on) {
+      c.prepared = ''; this.skillAt = 0;
       T.noXp = { ...T.noXp, on: true, action: 'nextSpot' };
       if (!T.enabled && World.inWorld()) Setup.setupTown();
     }
@@ -248,13 +299,14 @@ const Leveling = {
     const c = () => this.cfg(), status = el('p', this.status(), 'muted');
     UI.refreshers.push(() => { status.textContent = this.status(); });
     return UI.group('Zero-setup leveling',
-      el('p', 'For levelling a character with no setup: the bot picks a hunting spot for your level from the game data, moves on as you level, and buys the next tier of weapon, armour and accessories from the town merchants on its town trips. Nothing better than ordinary +' + LEVEL_GEAR_MAX_PLUS + ' gear is ever replaced or sold.', 'muted'),
+      el('p', 'For levelling a character with no setup: the bot picks a hunting spot for your level from the game data, moves on as you level, and buys the next tier of weapon, armour and accessories from the town merchants on its town trips. Nothing better than ordinary +' + LEVEL_GEAR_MAX_PLUS + ' gear is ever replaced or sold. It can also raise your weapon\'s mastery, learn its skills, put new attack skills and buffs to use and spend stat points (Strength, or Intelligence for a caster); what you already set up there is kept.', 'muted'),
       UI.check('Level up by itself', () => c().on, v => this.enable(v)),
       UI.check('Pick hunting spots for my level', () => c().spots, v => { c().spots = v; this.reset(); }),
       UI.number('Spots at most this far from town (m)', () => c().maxM, v => { c().maxM = v; this.reset(); }, 50, 5000, 50),
       UI.check('Buy better gear from the town merchants', () => c().gear, v => { c().gear = v; }),
       UI.check('Also buy earrings, necklaces and rings', () => c().accessories, v => { c().accessories = v; }),
       UI.check('Sell the replaced piece back', () => c().sellOld, v => { c().sellOld = v; }),
+      UI.check('Raise my weapon mastery, learn its skills and use them', () => c().skills, v => { c().skills = v; c().prepared = ''; this.skillAt = 0; }),
       UI.number('Always keep this much gold', () => c().reserve, v => { c().reserve = v; }, 0, 100000000, 1000),
       status);
   },

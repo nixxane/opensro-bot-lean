@@ -3039,6 +3039,67 @@ test('auto skill upper learns the next level of skills in the rotation, one conf
   const buffs = skillFixture(); buffs.Settings.profile.macro.rotations.normal = []; buffs.Settings.profile.macro.buffs = [{ id: 1001, group: 100 }];
   buffs.Controller.tick(); assert.deepEqual(skillTrains(buffs), [1002], 'buff skills are upgraded too');
 });
+test('Skills to upgrade can cover every skill of the chosen masteries, learning new ones', () => {
+  const f = skillFixture({}, []);
+  f.Settings.profile.mastery.ids = [257]; f.Settings.profile.mastery.scope = 'masteries';
+  f.World.rebuildCatalog([...f.World.catalog.values(), { id: 3001, group: 300, level: 1, trainable: true, spCost: 10, masteries: [{ ID: 273, Level: 1 }], prerequisites: [], reqStr: 0, reqInt: 0 }]);
+  f.Settings.profile.macro.rotations.normal = [];
+  assert.deepEqual([...f.AutoMastery.masteryGroups()], [100], 'only skills that need the chosen mastery');
+  f.Controller.tick();
+  assert.deepEqual(skillTrains(f), [1001], 'an unlearned skill of the mastery is learned');
+  f.World.applyGameplay({ ...f.World.gp, skills: [1001] }); f.advance(2000); f.Controller.tick();
+  assert.deepEqual(skillTrains(f), [1001, 1002], 'then raised like any other');
+});
+function levelingSkillFixture(weaponTid4 = 2, stats = { strength: 20, intellect: 20 }) {
+  const f = skillFixture({ stats }, []);
+  const M = f.Settings.profile.mastery;
+  M.enabled = false; M.ids = []; M.skills = false; M.scope = 'rotation';
+  f.Settings.profile.leveling.on = true; f.World.charName = 'Tester';
+  f.World.applyGameplay({ ...f.World.gp, inventory: [{ slot: 6, refObjId: 71, typeFlags: 44 | (6 << 7) | (weaponTid4 << 11), quantity: 1 }] });
+  f.World.rebuildCatalog([...f.World.catalog.values()].map(s => ({ ...s, targetRequired: true, active: true })));
+  f.Settings.profile.macro.rotations.normal = [];
+  return f;
+}
+test('zero-setup leveling sets up the weapon mastery, its skills and stat points once per character', () => {
+  let f = levelingSkillFixture();
+  f.Leveling.skillTick();
+  const M = f.Settings.profile.mastery, S = f.Settings.profile.statPoints;
+  assert.deepEqual([...M.ids], [257], 'a sword trains Bicheon');
+  assert.equal(M.enabled, true); assert.equal(M.skills, true); assert.equal(M.scope, 'masteries');
+  assert.deepEqual([S.enabled, S.str, S.int], [true, 1, 0], 'a Chinese melee character puts points into Strength');
+  assert.match(f.Leveling.message, /Bicheon mastery/);
+  M.ids = [258]; f.advance(6000); f.Leveling.skillTick();
+  assert.deepEqual([...M.ids], [258], 'once done, the player\'s later changes stay');
+  f = levelingSkillFixture(11);
+  f.Leveling.skillTick();
+  assert.deepEqual([...f.Settings.profile.mastery.ids], [514], 'a two-handed staff trains Wizard');
+  assert.deepEqual([f.Settings.profile.statPoints.str, f.Settings.profile.statPoints.int], [0, 1], 'a caster puts points into Intelligence');
+  f = levelingSkillFixture(2, { strength: 20, intellect: 40 });
+  f.Leveling.skillTick();
+  assert.equal(f.Settings.profile.statPoints.int, 1, 'more Intelligence than Strength already: Intelligence');
+  f = levelingSkillFixture();
+  Object.assign(f.Settings.profile.mastery, { enabled: true, ids: [259] });
+  Object.assign(f.Settings.profile.statPoints, { enabled: true, str: 2, int: 1 });
+  f.Leveling.skillTick();
+  assert.deepEqual([...f.Settings.profile.mastery.ids], [259], 'masteries the player chose are kept');
+  assert.deepEqual([f.Settings.profile.statPoints.str, f.Settings.profile.statPoints.int], [2, 1], 'and their stat share');
+  f = levelingSkillFixture(); f.Settings.profile.leveling.skills = false;
+  f.Leveling.skillTick();
+  assert.equal(f.Settings.profile.mastery.enabled, false, 'the skills switch off: nothing is set up');
+});
+test('newly learned attack skills of the mastery join the rotation once; one the player removes stays out', () => {
+  const f = levelingSkillFixture();
+  f.Leveling.skillTick();
+  assert.deepEqual([...f.Settings.profile.macro.rotations.normal], [], 'nothing learned yet');
+  f.World.applyGameplay({ ...f.World.gp, skills: [1001] });
+  f.advance(6000); f.Leveling.skillTick();
+  assert.deepEqual(f.Settings.profile.macro.rotations.normal.map(e => e.group), [100], 'the new attack skill is used');
+  assert.match(f.Leveling.message, /New skills in use/);
+  f.Settings.profile.macro.rotations.normal = [];
+  f.World.applyGameplay({ ...f.World.gp, skills: [1001, 1002] });
+  f.advance(6000); f.Leveling.skillTick();
+  assert.deepEqual([...f.Settings.profile.macro.rotations.normal], [], 'taken out by the player: it stays out, even after a new level');
+});
 test('Max every skill learns every skill group, unlearned ones too, one confirmed level at a time, then says what is left', () => {
   const f = skillFixture({}, []);
   f.Settings.profile.mastery.skills = false; f.Settings.profile.mastery.reserve = 1000; f.Settings.profile.mastery.gap = 25;

@@ -306,6 +306,7 @@ const Controller = {
       AutoMastery.tick();
       StatPoints.tick();
       this.guard('Level spot', () => LevelSpot.tick());
+      this.guard('Leveling skills', () => Leveling.skillTick());
       Potion.tick();
       ItemRules.trackGear();
       if (!ItemRules.dropTick()) ItemRules.balanceTick();
