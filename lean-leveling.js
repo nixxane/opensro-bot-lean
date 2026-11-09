@@ -1,8 +1,9 @@
 // Zero-setup leveling: the bot picks its own hunting spot for the character's level and buys the next tier of NPC gear.
 //
 // Spots come from LEVEL_SPOTS (gen-leveling.py: clusters of ordinary monster spawns with their level). The spot is the
-// best one at most LEVEL_SPOT_BELOW levels under the character, within the chosen distance of the town the return
-// scroll lands in: higher level first, then more spawns, then nearer. LevelSpot applies it like a saved level spot,
+// best one at most LEVEL_SPOT_BELOW levels under the character that the game's route data connects to the town the
+// return scroll lands in (or within LEVEL_SPOT_REACH_M without route data): higher level first, then more spawns, then
+// nearer. A spot the bot cannot walk to is skipped for the session. LevelSpot applies it like a saved level spot,
 // so the walk there, the "no XP" move and the map all work the same way.
 //
 // Gear comes from LEVEL_GEAR (the town's smith, armour and accessory merchants). A worn piece is replaced only when
@@ -163,7 +164,6 @@ const Leveling = {
     this.checkAt = now() + LEVEL_GEAR_CHECK_MS;
     const plan = this.plan().filter(w => !w.fill), key = World.charName + '|' + plan.map(w => w.socket + ':' + w.row[0]).join(',');
     this.due_ = plan.length && !this.tried.has(key) ? 'better gear to buy (level ' + World.gp.progression.level + ')' : '';
-    this.dueKey = key;
     return this.due_;
   },
   // Town.begin: the plan this trip carries, and where the armour and accessory merchants stand.

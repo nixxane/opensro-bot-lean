@@ -3760,6 +3760,27 @@ test('zero-setup leveling picks a spot for the level from the game data, keeps i
   f.Settings.profile.leveling.on = false;
   assert.equal(f.LevelSpot.spotFor(15), null, 'off: the saved list (empty here) is used again');
 });
+test('an auto spot the walk cannot reach is skipped and the next best one is taken', () => {
+  const f = mallFixture(), H = f.Settings.profile.hunt;
+  f.Town.cfg().arrival = { regionId: 1, x: 100, y: 0, z: 100 };
+  f.Leveling.spots = [[1, 300, 0, 300, 6, 6, 6, 9], [1, 400, 0, 100, 9, 8, 10, 6], [1, 1000, 0, 100, 9, 9, 9, 3]];
+  f.Settings.profile.leveling.on = true;
+  f.World.gp.progression = { ...(f.World.gp.progression || {}), level: 10 };
+  f.Hunt.start(); f.advance(4000);
+  assert.equal(f.LevelSpot.tick(), true); const first = H.center.x;
+  assert.equal(first, 400);
+  f.WalkBack.cancel('Walk back stopped: no walkable route to the hunting spot.'); // no walk was running: nothing happens
+  assert.equal(f.Leveling.skipped.size, 0);
+  f.WalkBack.active = { resume: true, destination: { ...H.center }, onFail: null };
+  f.WalkBack.cancel('Walk back stopped: no walkable route to the hunting spot.');
+  assert.equal(f.Leveling.skipped.size, 1, 'the spot is passed over');
+  f.advance(1000); f.Hunt.stop();
+  assert.equal(f.LevelSpot.tick(), true, 'the next tick picks another spot');
+  assert.equal(H.center.x, 1000); assert.notEqual(H.center.x, first);
+  f.WalkBack.active = { resume: true, destination: { ...H.center }, onFail: null };
+  f.WalkBack.cancel('Walk back interrupted.', false);
+  assert.equal(f.Leveling.skipped.size, 1, 'an interrupted walk is not a failed one');
+});
 test('a new character with no spot at its level takes the nearest one a level or two up, not the saved spot', () => {
   const f = mallFixture(), H = f.Settings.profile.hunt;
   f.Town.cfg().arrival = { regionId: 1, x: 100, y: 0, z: 100 };
@@ -5522,6 +5543,8 @@ test('a blocked standing point is replaced by another beside the merchant, and t
   f.Navigation.watch = () => ''; f.World.gp.pose = { ...f.World.gp.pose, regionId: swapped.regionId, x: swapped.x, y: swapped.y, z: swapped.z };
   f.Town.tick();
   assert.equal(f.Town.cfg().vendor.x, swapped.x, 'the spot that works is kept for the next trips');
+  f.Town.tick(); f.Town.tick();
+  assert.ok(f.Town.trip, 'the trip the spot rescued is still alive two ticks later'); assert.doesNotMatch(f.Town.message, /Settings or character changed/);
 });
 test('town movement retries blocked routes at intervals and remains cancellable', () => {
   const f = townFixture(); f.Town.begin(); f.Town.enter('walk-storage'); f.World.gp.pose.x = 50;

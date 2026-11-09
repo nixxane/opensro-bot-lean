@@ -1321,7 +1321,8 @@ const UI = {
     for (const { run: group, before } of segments) {
       if (group.length < 2) continue;
       const row = el('div', null, 'pane-cols'), left = el('div', null, 'pane-col'), right = el('div', null, 'pane-col');
-      for (const [i, b] of group.entries()) (this.splitMask(group.map(b => heights.get(b) + 8)) & (1 << i) ? right : left).append(b);
+      const mask = this.splitMask(group.map(b => heights.get(b) + 8));
+      for (const [i, b] of group.entries()) (mask & (1 << i) ? right : left).append(b);
       row.append(left, right); this.pane.insertBefore(row, before);
     }
   },

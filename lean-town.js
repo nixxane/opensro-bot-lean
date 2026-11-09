@@ -347,7 +347,7 @@ const Town = {
   // Already standing in a known town (all four services in range): no return scroll is needed or wanted.
   inTown(revival = false) { return !revival && !!World.pose() && !!this.detect(World.pose()); },
   // The way back after the services: the reverse scroll when that is the choice and one is carried, otherwise a walk.
-  // Zero-setup leveling always walks back: its spots are within a short walk of the town (lean-leveling.js maxM).
+  // Zero-setup leveling always walks back: it never uses reverse scrolls.
   // Normal use keeps the "Back to the hunting spot" setting.
   walks() { return this.cfg().returnBy === 'walk' || !!Leveling.cfg().on; },
   reverses() { return !this.walks() && !!this.scroll(0x19ec); },
@@ -530,7 +530,7 @@ const Town = {
     if (dist2D(pose, dest) <= Math.max(12, radius) && dist2D(pose, dest.npc || dest) <= 200) {
       // A spot that replaced a blocked saved one and got the character here is kept for the next trips.
       const role = t.phase.slice(5), swapped = t.stand?.[role];
-      if (swapped && dest === swapped && this.cfg()[role]) { this.cfg()[role] = { ...swapped }; Settings.saveProfile(); Log.info('Town: the saved spot of the ' + this.role(t.phase) + ' was replaced by one that works.'); }
+      if (swapped && dest === swapped && this.cfg()[role]) { this.cfg()[role] = { ...swapped }; Settings.saveProfile(); t.config = JSON.stringify(this.cfg()); Log.info('Town: the saved spot of the ' + this.role(t.phase) + ' was replaced by one that works.'); }
       return true;
     }
     if (!Number.isFinite(dist2D(pose, dest))) { this.fail('Town service is in another world.'); return false; }

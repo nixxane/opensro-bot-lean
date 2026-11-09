@@ -89,8 +89,10 @@ const WalkBack = {
   },
   cancel(reason = '', halt = true) {
     if (!this.active) return;
-    const failed = this.active.onFail;
+    const failed = this.active.onFail, a = this.active;
     this.active = null;
+    // A walk to a spot zero-setup leveling picked gave up: that spot is passed over and the next one is tried.
+    if (reason && halt && !failed && a.resume && Leveling.spotsOn() && Leveling.current?.auto && LevelSpot.same(Leveling.current.center, a.destination)) LevelSpot.skipCurrent();
     if (halt && World.inWorld() && !World.isDead()) Cmd.move(World.pose());
     // A caller-owned walk reports its own failures; only a reasoned cancel is a failure, a plain cancel is the caller's.
     if (failed && reason) failed(reason); else if (reason) UI.toast(reason, 'warn', 4000);
