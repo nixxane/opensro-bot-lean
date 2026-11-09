@@ -9381,6 +9381,20 @@ test('zero-setup leveling sells the bag first, so a full bag no longer stops the
   assert.ok(f.Town.trip, f.Town.message); assert.equal(f.Town.trip.phase, 'walk-smith', 'the merchant first: it frees the bag for the pet loot');
 });
 
+test('a completely full bag with something to store goes to the warehouse instead of stopping the trip (bag selling off)', () => {
+  const f = townFixture(); f.World.freeBagSlots = () => 0;
+  f.ItemRules.set([1003], { act: 'store' });
+  f.World.gp.inventory.push({ slot: 16, refObjId: 1003, typeFlags: 108, quantity: 1, name: 'Other item' });
+  f.Town.begin(); f.Town.arrived();
+  assert.ok(f.Town.trip, f.Town.message);
+  assert.equal(f.Town.trip.phase, 'walk-storage', 'the warehouse first: it makes the room');
+  f.Town.cancel();
+  const g = townFixture(); g.World.freeBagSlots = () => 0;
+  g.Town.begin(); g.Town.arrived();
+  assert.equal(g.Town.trip, null, 'nothing to store and nothing to sell: still stops, as before');
+  assert.match(g.Town.message, /free a character bag slot/);
+});
+
 test('zero-setup leveling: a trip with nothing to do in town goes straight to the walk back, not to a stop that does not exist', () => {
   const f = townFixture(), gp = f.World.gp;
   f.Settings.profile.leveling.on = true; f.pet.inventory = [];

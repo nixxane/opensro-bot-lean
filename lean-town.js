@@ -419,7 +419,8 @@ const Town = {
     const t = this.trip, full = World.freeBagSlots() < 1;
     t.scrollAttempts = 0; t.scrollRequest = null;
     // With bag selling on, the trip sells first, so a full bag can still make room for refills.
-    if (full && !t.sellFirst) return this.fail('Returned to town; free a character bag slot for storage and refills.');
+    // A full bag with something of its own the warehouse takes (pet loot needs a free slot first) is not a dead end: the warehouse goes first and makes the room.
+    if (full && !t.sellFirst && !(this.cfg().storage && World.items().some(i => this.depositItem(i, true) || this.stone(i)))) return this.fail('Returned to town; free a character bag slot for storage and refills.');
     t.order = this.order(full);
     // A dead pet is brought back first, before the services, so it carries loot again for the rest of the trip.
     if (this.cfg().revivePet && this.deadCollar() && this.grass()) { this.enter('pet-revive'); return; }
