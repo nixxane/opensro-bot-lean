@@ -8,11 +8,12 @@
 //
 // Gear comes from LEVEL_GEAR (the town's smith, armour and accessory merchants). A worn piece is replaced only when
 // the town sells the same kind (same weapon type, same armour material and part) for a higher required level, the
-// worn piece is ordinary (no Seal, no rare codename, at most +LEVEL_GEAR_MAX_PLUS) and nothing protects it; an empty
+// worn piece is at most +LEVEL_GEAR_MAX_PLUS and nothing protects it (a Seal piece is replaced too: a level 1 Seal
+// necklace is far weaker than the town's level 16 one; it goes to the bag, never sold); an empty
 // armour or accessory socket is filled. Purchases happen on any town trip, in the shop, one confirmed transaction at a
 // time; the new piece is worn at once and the old one sold back there. A plan the town can pay for starts a trip by
 // itself, once per plan.
-const LEVEL_SPOT_REACH_M = 5000, LEVEL_SPOT_BELOW = 5, LEVEL_SPOT_ABOVE = 2, LEVEL_SPOT_KEEP = 2, LEVEL_GEAR_MAX_PLUS = 3, LEVEL_GEAR_CHECK_MS = 20000;
+const LEVEL_SPOT_REACH_M = 5000, LEVEL_SPOT_BELOW = 5, LEVEL_SPOT_ABOVE = 2, LEVEL_SPOT_KEEP = 2, LEVEL_GEAR_MAX_PLUS = 3, LEVEL_GEAR_CHECK_MS = 20000, LEVEL_SPOT_WALK_FAILS = 5;
 // Equipment sockets by TID4 (OpenSRO inventory/slots.go, native sub_594980): armour parts and accessories.
 // The mastery each weapon type trains (TID4 of the weapon; OpenSRO masteries 257-276 Chinese, 513-518 European), and the
 // European masteries that fight with Intelligence.
@@ -27,11 +28,11 @@ const Leveling = {
   // The generated tables, as properties so a test can lay its own over them.
   spots: LEVEL_SPOTS, gear: LEVEL_GEAR, shopsData: LEVEL_SHOPS,
   skillAt: 0,
-  current: null, skipped: new Set(), tried: new Set(), refused: new Set(), checkAt: 0, due_: '', index: null, message: '',
+  current: null, walkFails: 0, skipped: new Set(), tried: new Set(), refused: new Set(), checkAt: 0, due_: '', index: null, message: '',
   cfg() { return Settings.profile.leveling; },
   spotsOn() { const c = this.cfg(); return !!(c.on && c.spots); },
   gearOn() { const c = this.cfg(); return !!(c.on && c.gear); },
-  reset() { this.current = null; this.skipped.clear(); this.tried.clear(); this.refused.clear(); this.due_ = ''; this.checkAt = 0; },
+  reset() { this.current = null; this.walkFails = 0; this.skipped.clear(); this.tried.clear(); this.refused.clear(); this.due_ = ''; this.checkAt = 0; },
 
   // ---- spots
   key(s) { return s[0] + ':' + s[1] + ':' + s[3]; },
@@ -106,11 +107,11 @@ const Leveling = {
     }
     return { country, sex };
   },
-  // A worn piece the plan may replace: ordinary, low plus, known level, and nothing the player protects.
+  // A worn piece the plan may replace: low plus, known level, and nothing the player protects. Seal (SOX) and other rare
+  // pieces count too: live, a Seal blade or necklace kept the character in level 1 gear for good. The level check in
+  // plan() keeps one as good as the town's; a replaced one stays in the bag (shop() never sells it).
   replaceable(item) {
-    if (Equip.protected(item) || Items.soxOf(item) > 0 || (item.plus ?? 0) > LEVEL_GEAR_MAX_PLUS) return false;
-    if (item.tooltip?.fields?.rarity !== undefined && item.tooltip.fields.rarity !== 0) return false;
-    if (/_(RARE|MAGIC|LEGEND|MYTH|HONOR)/i.test(item.codename || Items.data?.get(item.refObjId)?.code || '')) return false;
+    if (Equip.protected(item) || (item.plus ?? 0) > LEVEL_GEAR_MAX_PLUS) return false;
     return Number.isInteger(this.reqLevel(item));
   },
   // What to buy now: [{ row, socket, role }], best piece per socket, weapon first, within the gold above the reserve.
@@ -130,7 +131,7 @@ const Leveling = {
       if (!item) { if (fill) wants.push({ row: r, socket, role: r[1], fill: true }); return; }
       if (item.refObjId === r[0] || !(r[6] > (this.reqLevel(item) ?? Infinity))) {
         notes?.push(label + ': ' + (this.reqLevel(item) === null ? 'its level is unknown, kept' : 'already as good as level ' + r[6] + ' in town'));
-      } else if (!this.replaceable(item)) notes?.push(label + ': kept (enhanced, rare, sealed or protected)');
+      } else if (!this.replaceable(item)) notes?.push(label + ': kept (enhanced above +' + LEVEL_GEAR_MAX_PLUS + ' or protected)');
       else wants.push({ row: r, socket, role: r[1] });
     };
     const weapon = worn.get(6);
@@ -357,7 +358,7 @@ const Leveling = {
     const c = () => this.cfg(), status = el('p', this.status(), 'muted');
     UI.refreshers.push(() => { status.textContent = this.status(); });
     return UI.group('Zero-setup leveling',
-      el('p', 'For levelling a character with no setup: the bot picks a hunting spot for your level from the game data, moves on as you level, and buys the next tier of weapon, armour and accessories from the town merchants on its town trips. Nothing better than ordinary +' + LEVEL_GEAR_MAX_PLUS + ' gear is ever replaced or sold. It can also raise your weapon\'s mastery, learn its skills, put new attack skills and buffs to use and spend stat points (Strength, or Intelligence for a caster); what you already set up there is kept.', 'muted'),
+      el('p', 'For levelling a character with no setup: the bot picks a hunting spot for your level from the game data, moves on as you level, and buys the next tier of weapon, armour and accessories from the town merchants on its town trips. Gear above +' + LEVEL_GEAR_MAX_PLUS + ' or protected gear is never replaced; Seal gear is replaced when the town sells a higher level, but kept in the bag, never sold. It can also raise your weapon\'s mastery, learn its skills, put new attack skills and buffs to use and spend stat points (Strength, or Intelligence for a caster); what you already set up there is kept.', 'muted'),
       UI.check('Level up by itself', () => c().on, v => this.enable(v)),
       UI.check('Pick hunting spots for my level', () => c().spots, v => { c().spots = v; this.reset(); }),
       UI.check('Buy better gear from the town merchants', () => c().gear, v => { c().gear = v; }),

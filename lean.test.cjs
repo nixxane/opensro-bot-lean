@@ -3781,6 +3781,19 @@ test('an auto spot the walk cannot reach is skipped and the next best one is tak
   f.WalkBack.cancel('Walk back interrupted.', false);
   assert.equal(f.Leveling.skipped.size, 1, 'an interrupted walk is not a failed one');
 });
+test('after five failed walks to auto spots in a row the bot stops trying new ones', () => {
+  const f = mallFixture(), H = f.Settings.profile.hunt;
+  f.Town.cfg().arrival = { regionId: 1, x: 100, y: 0, z: 100 };
+  f.Leveling.spots = [1, 2, 3, 4, 5, 6, 7].map(i => [1, 100 + i * 50, 0, 100, 9, 9, 9, 6]);
+  f.Settings.profile.leveling.on = true;
+  f.World.gp.progression = { ...(f.World.gp.progression || {}), level: 10 };
+  f.Hunt.start(); f.advance(4000);
+  assert.equal(f.LevelSpot.tick(), true);
+  const fail = () => { f.WalkBack.active = { resume: true, destination: { ...H.center }, onFail: null }; f.WalkBack.cancel('Walk back stopped: no walkable route to the hunting spot.'); };
+  for (let i = 0; i < 5; i++) { fail(); assert.equal(f.LevelSpot.retry, true, 'failure ' + (i + 1) + ': another spot is tried'); f.LevelSpot.retry = false; f.Leveling.current = f.Leveling.spot(10); H.center = { ...f.Leveling.current.center }; }
+  fail();
+  assert.equal(f.LevelSpot.retry, false, 'the sixth failure in a row: no more spots are tried');
+});
 test('a new character with no spot at its level takes the nearest one a level or two up, not the saved spot', () => {
   const f = mallFixture(), H = f.Settings.profile.hunt;
   f.Town.cfg().arrival = { regionId: 1, x: 100, y: 0, z: 100 };
@@ -3845,7 +3858,10 @@ test('the gear plan buys the next tier of the same kind, fills empty armour part
   assert.equal(plan().includes('6:'), false, 'an enhanced weapon is never replaced');
   gp.inventory.find(i => i.slot === 6).plus = 0;
   gp.inventory.find(i => i.slot === 6).tooltip.fields.rarity = 2;
-  assert.equal(plan().includes('6:'), false, 'a Seal weapon is never replaced');
+  assert.equal(plan().includes('6:74'), true, 'a Seal weapon of a lower level is replaced too (live: a Seal blade stayed for good)');
+  gp.inventory.find(i => i.slot === 6).tooltip.fields.requiredLevel = 20;
+  assert.equal(plan().includes('6:'), false, 'a Seal weapon as good as the town tier stays');
+  gp.inventory.find(i => i.slot === 6).tooltip.fields.requiredLevel = 1;
   gp.inventory.find(i => i.slot === 6).tooltip.fields.rarity = 0;
   gp.progression.level = 7;
   assert.equal(plan(), '4:400', 'level 7: only the empty legs, nothing above the worn tier yet');

@@ -51,10 +51,14 @@ const LevelSpot = {
     return true;
   },
   // The walk to the spot zero-setup leveling picked failed: skip that spot; the next tick picks another one.
+  // At most LEVEL_SPOT_WALK_FAILS in a row: past that the trouble is not the spot (stuck in town, say), and walking
+  // to spot after spot would only wander the map.
   skipCurrent() {
     const cur = Leveling.current;
     if (!cur) return;
-    Leveling.skipped.add(cur.key); Leveling.current = null; this.retry = true; this.nextAt = 0;
+    Leveling.skipped.add(cur.key); Leveling.current = null;
+    if (++Leveling.walkFails > LEVEL_SPOT_WALK_FAILS) { Log.warn('Leveling: could not walk to ' + LEVEL_SPOT_WALK_FAILS + ' spots in a row; not trying more.'); return; }
+    this.retry = true; this.nextAt = 0;
     Log.info('Leveling: could not walk to the level ' + cur.level + ' spot; trying another.');
   },
   // Add (or replace the entry of) a level with the current hunting spot.

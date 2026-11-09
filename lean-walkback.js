@@ -196,6 +196,7 @@ const WalkBack = {
       this.active = null;
       if (a.onDone) return a.onDone();
       UI.toast('Back at the hunting spot.', 'info', 2500);
+      Leveling.walkFails = 0; // zero-setup leveling counts failed walks in a row
       if (a.resume) Hunt.start();
       return;
     }
