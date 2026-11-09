@@ -3859,7 +3859,7 @@ test('a gear plan starts one town trip and visits the armour merchant before the
   f.Town.begin();
   assert.deepEqual([...f.Town.trip.gear.map(w => w.row[0])], [74, 396, 400]);
   f.Town.arrived();
-  assert.deepEqual([...f.Town.trip.order], ['vendor', 'smith', 'armor', 'gate'], 'the armour merchant is visited before the statue; nothing to store, so no warehouse');
+  assert.deepEqual([...f.Town.trip.order], ['vendor', 'smith', 'armor'], 'the armour merchant is the last stop: leveling walks back, so there is no statue; nothing to store, so no warehouse');
   assert.equal(f.Town.point('armor').refObjId, 640, 'its place comes from the game data, not from the saved town');
   assert.equal(f.Town.cfg().armor, undefined, 'and nothing is saved in the town settings');
   f.Town.trip = null; f.Leveling.checkAt = 0;
@@ -9083,4 +9083,57 @@ test('skipStar waits for an equipment drop the catalogue has never seen', () => 
   assert.equal(f.Loot.allowed(unseen), false, 'once the wire teaches it and it is Star, still skipped');
   f.Items.data.set(901, { name: 'Plain sword', icon: '', code: 'ITEM_CH_SWORD_01' });
   assert.equal(f.Loot.allowed(unseen), true, 'a seen plain sword is picked up');
+});
+
+test('zero-setup leveling walks back after town trips and deaths; with leveling off the reverse stays', () => {
+  const f = townFixture(), c = f.Town.cfg();
+  c.returnBy = 'reverse';
+  // Off: unchanged. The world statue is a stop, the trip reverses and a revival uses the death-location choice.
+  f.Town.begin(true);
+  assert.ok([...f.Town.order(true)].includes('gate'), 'leveling off keeps the world statue stop');
+  assert.equal(f.Town.reverses(), true);
+  assert.equal(f.Town.closeNext('close-smith'), 'walk-gate');
+  assert.equal(f.Town.trip.reverseChoice, 3, 'death location chosen');
+  f.Town.fail('reset');
+  // On: always walk, even with returnBy reverse and reverse scrolls in the bag.
+  f.Settings.profile.leveling.on = true;
+  f.commands.length = 0;
+  f.World.gp.inventory.find(i => i.refObjId === 15).quantity = 50; f.World.gp.inventory.find(i => i.slot === 6).durability = 10;
+  f.Town.begin(true);
+  assert.equal(f.Town.walks(), true); assert.equal(f.Town.reverses(), false);
+  assert.equal([...f.Town.order(true)].includes('gate'), false, 'no world statue stop');
+  assert.equal(f.Town.closeNext('close-smith'), 'leave');
+  assert.equal(f.commands.some(cmd => cmd.kind === 'travel-gate'), false, 'no reverse command');
+  f.Town.leave();
+  assert.ok(f.WalkBack.active, 'the way back is a walk');
+  assert.equal(f.commands.some(cmd => cmd.kind === 'travel-gate'), false);
+});
+test('zero-setup leveling needs no saved world statue and never tops up reverse scrolls', () => {
+  const f = townFixture(), c = f.Town.cfg(), gp = f.World.gp;
+  c.returnBy = 'reverse'; c.gate = null;
+  assert.match(f.Town.validate(), /world statue/, 'leveling off still needs it');
+  f.Settings.profile.leveling.on = true;
+  assert.equal(f.Town.validate(), '');
+  f.Town.begin(); f.Town.enter('buy'); gp.inventory.find(i => i.refObjId === 15).quantity = 50; gp.target = 61;
+  gp.inventory = gp.inventory.filter(i => i.slot !== 14);
+  gp.shop = { npc: 61, offers: [{ refObjId: 201, tab: 0, slot: 4, maxStack: 50, price: '50', currency: 1, previews: [{ refObjId: 201, typeFlags: 0x19ec }] }] };
+  f.Town.buy(); assert.equal(f.commands.some(cmd => cmd.kind === 'shop-buy'), false, 'no reverse scroll is bought');
+});
+test('the Item mall does not buy reverse scrolls while hunting with leveling on', () => {
+  const f = mallFixture();
+  f.Settings.profile.mall.hp.on = false; f.Settings.profile.mall.reverse = { on: true, low: 2, target: 5 };
+  f.Hunt.start();
+  assert.equal(f.MallBuyer.buyers().length, 1, 'off: the reverse buyer is active');
+  f.Settings.profile.leveling.on = true;
+  assert.equal(f.MallBuyer.buyers().length, 0, 'on: it is skipped');
+  f.MallBuyer.tick(); assert.equal(mallBuys(f).length, 0);
+  f.Settings.profile.leveling.on = false;
+  f.MallBuyer.tick(); assert.equal(mallBuys(f).length, 1, 'off again: it buys as before');
+});
+test('toggling leveling during a town trip ends the trip', () => {
+  const f = townFixture();
+  f.Town.begin(); assert.ok(f.Town.trip);
+  f.Settings.profile.leveling.on = true;
+  f.Town.tick();
+  assert.equal(f.Town.trip, null); assert.match(f.Town.message, /Settings or character changed/);
 });

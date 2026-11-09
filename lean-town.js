@@ -344,7 +344,9 @@ const Town = {
   // Already standing in a known town (all four services in range): no return scroll is needed or wanted.
   inTown(revival = false) { return !revival && !!World.pose() && !!this.detect(World.pose()); },
   // The way back after the services: the reverse scroll when that is the choice and one is carried, otherwise a walk.
-  walks() { return this.cfg().returnBy === 'walk'; },
+  // Zero-setup leveling always walks back: its spots are within a short walk of the town (lean-leveling.js maxM).
+  // Normal use keeps the "Back to the hunting spot" setting.
+  walks() { return this.cfg().returnBy === 'walk' || !!Leveling.cfg().on; },
   reverses() { return !this.walks() && !!this.scroll(0x19ec); },
   validate(revival = false) {
     const c = this.cfg(), supplies = this.supplies();
@@ -395,7 +397,7 @@ const Town = {
     this.trip = { phase: 'recall', at: now(), started: now(), origin: { ...origin }, revival, inTown, reverseChoice, why,
       huntArea: (revival || inTown) && !(reverseChoice === TOWN_REVERSE.death && this.deathPoint) && Hunt.cfg().center ? { center: { ...Hunt.cfg().center }, radius: Hunt.cfg().radius } : null,
       manualAt: Manual.lastAt, character: World.charName, petRef: Loot.pet()?.rec.refObjId,
-      config: JSON.stringify(this.cfg()), supplies: this.supplies(), sellFirst: !!this.cfg().sellBag };
+      config: JSON.stringify(this.cfg()), leveling: !!Leveling.cfg().on, supplies: this.supplies(), sellFirst: !!this.cfg().sellBag };
     Leveling.begin(this.trip);
     Hunt.targetGid = Hunt.lootGid = 0;
     // Bag selling reads codenames from the item catalogue: start loading it now, well before the merchant.
@@ -939,7 +941,7 @@ const Town = {
       if (!this.trip) return true;
     }
     const t = this.trip, gp = World.gp;
-    if (!c.enabled || !Hunt.running || t.character !== World.charName || t.config !== JSON.stringify(c)) { this.fail('Settings or character changed during the trip.'); return true; }
+    if (!c.enabled || !Hunt.running || t.character !== World.charName || t.config !== JSON.stringify(c) || t.leveling !== !!Leveling.cfg().on) { this.fail('Settings or character changed during the trip.'); return true; }
     if (Manual.lastAt !== t.manualAt) { this.fail('Manual control interrupted the trip.'); return true; }
     // Movement may wait indefinitely for collision coverage. Individual service
     // and transaction phases still enforce their own confirmation timeouts.

@@ -962,6 +962,7 @@ const UI = {
         this.number('Every (minutes)', () => town().every.minutes, v => town().every.minutes = v, 5, 600),
         this.check('Revive in town and go back to the hunting spot', () => town().revive, v => town().revive = v),
         this.check('Revive a dead pet with a Grass of life', () => town().revivePet, v => town().revivePet = v),
+        ...(Leveling.cfg().on ? [el('p', 'Zero-setup leveling is on: the character walks back.', 'muted')] : []),
         this.select('After death, reverse to', [['recall', 'Last return-scroll location (hunting area)'], ['death', 'Death location']], () => town().deathReturn, v => { town().deathReturn = v; Activity.emit({category:'settings',code:'reverse-choice-changed',text:'Revival reverse destination changed to ' + v + '.',details:{choice:v === 'death' ? 3 : 2}}); }),
         el('p', 'Service trips reverse to their departure point. After death, use the selected destination. A missing game destination stops the trip; it never substitutes another point. Without a reverse scroll, or with Back to the hunting spot set to Walk, the trip walks back to the saved hunting spot instead.', 'muted'),
         el('p', 'Worn gear means the most worn repairable item you are wearing, measured against its own maximum durability; the trip repairs it. A broken weapon (0 durability) has its own switch, on by default. The XP and timer clocks run only while hunting and restart with every trip.', 'muted'),
@@ -972,6 +973,7 @@ const UI = {
     const town = () => Town.cfg();
       const services = this.group('Scroll town cycle',
         this.check('Use return scroll → town services → back to the hunting spot', () => town().enabled, v => { town().enabled = v; this.draw(); }),
+        ...(Leveling.cfg().on ? [el('p', 'Zero-setup leveling is on: the character walks back.', 'muted')] : []),
         this.select('Back to the hunting spot', [['reverse', 'Reverse return scroll (walks when none is carried)'], ['walk', 'Walk']], () => town().returnBy, v => { town().returnBy = v; this.draw(); }),
         ...(town().returnBy === 'walk' ? [] : [
           this.check('Buy Reverse Return Scrolls from the Item mall (silk)', () => Settings.profile.mall.reverse.on, v => { Settings.profile.mall.reverse.on = v; this.draw(); }),

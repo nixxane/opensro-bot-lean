@@ -77,7 +77,8 @@ const MallBuyer = {
   buyers() {
     const c = this.cfg(), out = [];
     if (c.on) this.generalBuyers(c, out);
-    if (c.reverse?.on) out.push(this.reverseBuyer());
+    // Zero-setup leveling walks back and never uses reverse scrolls, so do not spend silk on them.
+    if (c.reverse?.on && !Leveling.cfg().on) out.push(this.reverseBuyer());
     return out;
   },
   generalBuyers(c, out) {
