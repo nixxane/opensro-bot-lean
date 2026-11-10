@@ -360,7 +360,7 @@ const Leveling = {
   // the walk back to the hunting spot. False when there is nothing to move to any more.
   startMove(key) {
     const town = Town.towns.find(t => t.key === key), home = this.townOf(this.home());
-    if (!town?.services?.gate || !this.moveOpen(key) || !World.inWorld() || World.isDead()) return false;
+    if (this.move || Town.trip || !town?.services?.gate || !this.moveOpen(key) || !World.inWorld() || World.isDead()) return false;
     const s = town.services.gate, stand = Town.standPoint(s, town.arrival);
     if (home?.key) this.movedFrom.add(home.key);
     this.move = { key: town.key, home: home?.key, name: town.name, phase: 'walk', at: now(), tries: 0, character: World.charName,
