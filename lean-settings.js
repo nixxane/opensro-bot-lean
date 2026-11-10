@@ -60,7 +60,7 @@ const DEFAULT_PROFILE = {
     levelMin: 0, levelMax: 0, include: '', exclude: '', priority: 'attackers', avoidKs: true, avoidKsScope: 'all', avoidKsBelow: 50,
     targetTimeoutS: 25,
     pickup: { enabled: true, soxOnly: false, skipStar: false, gold: true, potions: true, equipment: true, elixirs: true, powders: true, magicStones: true, attrStones: true, alchemy: true, others: true,
-      collector: 'character', by: {}, petFullSound: true, soxSound: true, include: '', exclude: '', radius: 300, afterKillOnly: true, retries: 2 },
+      collector: 'character', by: {}, petFullSound: true, soxSound: true, soxSoundFrom: 'star', include: '', exclude: '', radius: 300, afterKillOnly: true, retries: 2 },
     sit: { enabled: true, hpBelow: 35, mpBelow: 20, resumeAt: 90 },
     antiStuck: { enabled: true, minutes: 3, maxRecoveries: 3, recall: false },
     detour: { enabled: true, stallMs: 2500 },
@@ -95,6 +95,7 @@ function botProfile(input) {
   // Reverse Return Scrolls used to have two switches: a gold-merchant one (no merchant sells them) and the Item mall
   // one. Only the Item mall switch remains; an old merchant switch carries over to it.
   if (result.potion.restock.reverse.on) { result.mall.reverse.on = true; result.potion.restock.reverse.on = false; }
+  if (!['star', 'moon', 'sun'].includes(result.hunt.pickup.soxSoundFrom)) result.hunt.pickup.soxSoundFrom = 'star';
   // The anti-KS scope only has the two meanings; anything else is the old full behavior.
   if (result.hunt.avoidKsScope !== 'minor') result.hunt.avoidKsScope = 'all';
   // The finish-steal cutoff stops at 50: above it the kill can still be won, so avoiding is pointless.

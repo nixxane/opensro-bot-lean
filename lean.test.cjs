@@ -2753,6 +2753,19 @@ test('SoX pickups are counted and announced once; gold, unknown items and stoppe
   f.Settings.profile.hunt.pickup.soxSound = true; f.Hunt.stop(); pick(901); assert.equal(f.Stats.session.sox, 2);
   f.Hunt.start(); f.Stats.reset(); assert.equal(f.Stats.session.sox, 0);
 });
+test('SoX chime can be kept for Moon and Sun, or Sun only, while every pickup still counts', () => {
+  const f = fixture(); let chimes = 0;
+  f.Sound.play = kind => { if (kind === 'sox') chimes++; return true; };
+  f.Items.data.set(901, { name: 'Star sword', icon: '', code: 'ITEM_CH_SWORD_01_A_RARE' });
+  f.Items.data.set(903, { name: 'Sun sword', icon: '', code: 'ITEM_CH_SWORD_01_C_RARE' });
+  assert.equal(f.Items.sox(903), 3);
+  const pick = ref => f.Stats.pickup({ ref, name: 'Sword', gold: false, petGid: 0, before: 0 });
+  f.Hunt.start(); f.Settings.profile.hunt.pickup.soxSoundFrom = 'sun';
+  pick(901); assert.equal(chimes, 0); assert.equal(f.Stats.session.sox, 1);
+  pick(903); assert.equal(chimes, 1); assert.equal(f.Stats.session.sox, 2);
+  assert.equal(f.botProfile({ hunt: { pickup: { soxSoundFrom: 'bogus' } } }).hunt.pickup.soxSoundFrom, 'star');
+  assert.equal(f.botProfile({ hunt: { pickup: { soxSoundFrom: 'moon' } } }).hunt.pickup.soxSoundFrom, 'moon');
+});
 test('SoX chime is a distinct audible alert and unknown sounds stay silent', () => {
   const f = fixture(), notes = [];
   f.Sound.ctx = { state: 'running', currentTime: 0, destination: {}, createOscillator: () => ({ frequency: {}, connect() {}, disconnect() {}, start() { notes.push(this.frequency.value); }, stop() {} }),

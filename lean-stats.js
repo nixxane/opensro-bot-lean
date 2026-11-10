@@ -46,7 +46,9 @@ const Stats = {
   soxFound(a, tier) {
     this.session.sox++;
     const name = a.name || Items.name(a.ref), label = ['Star', 'Moon', 'Sun'][tier - 1];
-    if (!Hunt.cfg().pickup.soxSound) return;
+    const P = Hunt.cfg().pickup;
+    // The notice and sound can be kept for the rarer tiers only (e.g. Sun only); every pickup still counts.
+    if (!P.soxSound || tier < 1 + ['star', 'moon', 'sun'].indexOf(P.soxSoundFrom)) return;
     UI.toast('SoX found: ' + name + ' (' + label + ')', 'info', 10000);
     Sound.play('sox');
   },
