@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         nixxane bot
 // @namespace    https://opensro.online/
-// @version      1.2.249
+// @version      1.2.250
 // @updateURL    https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.meta.js
 // @downloadURL  https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -22,7 +22,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[NIX] Another SRO assistant is active. Disable it and reload to use NIX.');
   return;
 }
-const VERSION = '1.2.249';
+const VERSION = '1.2.250';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -7567,6 +7567,8 @@ const Town = {
     if (c.broken && this.weaponBroken()) return 'weapon broken';
     const worn = c.wear?.on ? this.wear() : null;
     if (worn && worn.pct < c.wear.pct) return `gear durability low (${worn.name} at ${Math.floor(worn.pct)}%)`;
+    const move = Leveling.moveDue();
+    if (move) return move;
     const gear = Leveling.due();
     if (gear) return gear;
     if (this.noXpDue()) return `no XP for ${c.noXp.minutes} minutes`;
@@ -7750,6 +7752,8 @@ const Town = {
     if (World.freeBagSlots() <= 1) return this.fail('Returned to town; free at least two character bag slots before hunting again.');
     if (!Hunt.cfg().center) return this.fail('No saved hunting spot to walk back to.');
     this.trip = null; Hunt.targetGid = Hunt.lootGid = 0; this.restartClocks();
+    // Zero-setup leveling moving to the next town: from here to its world statue instead of back to the spot.
+    if (t.move && Leveling.startMove(t.move)) { this.message = 'Town service complete; moving to the next town.'; return; }
     WalkBack.start(true);
     if (!WalkBack.active && !Travel.active) { this.message = 'Town cycle stopped: the walk back to the hunting spot did not start.'; Hunt.stop(this.message); return; }
     this.message = 'Town service complete; walking back to the hunting spot.';
@@ -11485,6 +11489,12 @@ const Leveling = {
   home() { return Town.cfg().arrival || World.pose(); },
   // The spot for this level, or null when the data has none in reach. The spot in use is kept while the best choice is
   // at most LEVEL_SPOT_KEEP levels above it, so the bot does not walk across the map for every level.
+  // The town a place belongs to: the town whose return-scroll arrival point is nearest (null in a dungeon or another world).
+  townOf(p) {
+    let best = null, bestD = Infinity;
+    for (const t of Town.towns) { const d = t.arrival ? dist2D(p, t.arrival) : Infinity; if (d < bestD) { best = t; bestD = d; } }
+    return best;
+  },
   spot(level) {
     const home = this.home();
     if (!home || !Number.isInteger(level)) return null;
@@ -11493,18 +11503,26 @@ const Leveling = {
     // up to LEVEL_SPOT_REACH_M, so a spot on another continent is never picked. Few towns have a spot at every level
     // within 400 m (Jangan's level 5 one is 407 m away, its level 8 one 903 m).
     const far = LEVEL_SPOT_REACH_M * 10, routes = Route.areas?.length > 0;
-    // above: when nothing at or below the level is in reach (a new character), the nearest few levels up.
-    let best = null, fallback = null, above = null;
+    // Spots around the town of the return point come first: a spot nearer another town (live: Donwhang's level 18-23
+    // spots picked from Jangan) means every death and town trip lands in the wrong town and walks across the map. The
+    // move to the next town takes over there; another town's spots are used only when this one has none near the level.
+    const homeTown = this.townOf(home)?.key, own = { best: null, fallback: null, above: null }, other = { best: null, fallback: null, above: null };
+    this.owners ||= new Map();
     for (const s of this.spots) {
       if (s[4] > level + LEVEL_SPOT_ABOVE || this.skipped.has(this.key(s))) continue;
       const center = { regionId: s[0], x: s[1], y: s[2], z: s[3] }, d = dist2D(home, center);
       if (!(d <= far) && !(Number.isFinite(d) && routes && Route.commonArea(home, center))) continue;
-      const pick = { level: s[4], center, key: this.key(s), auto: true, score: s[4] * 400 + Math.min(s[7], 12) * 40 - d / 30 };
-      if (s[4] > level) { pick.score = -s[4] * 400 + Math.min(s[7], 12) * 40 - d / 30; if (!above || pick.score > above.score) above = pick; continue; }
-      if (s[4] < level - LEVEL_SPOT_BELOW) { if (!fallback || pick.score > fallback.score) fallback = pick; continue; }
-      if (!best || pick.score > best.score) best = pick;
+      const key = this.key(s);
+      if (!this.owners.has(key)) this.owners.set(key, this.townOf(center)?.key ?? null);
+      const owner = this.owners.get(key), g = !homeTown || !owner || owner === homeTown ? own : other;
+      // above: when nothing at or below the level is in reach (a new character), the nearest few levels up.
+      const pick = { level: s[4], center, key, auto: true, score: s[4] * 400 + Math.min(s[7], 12) * 40 - d / 30 };
+      if (s[4] > level) { pick.score = -s[4] * 400 + Math.min(s[7], 12) * 40 - d / 30; if (!g.above || pick.score > g.above.score) g.above = pick; continue; }
+      if (s[4] < level - LEVEL_SPOT_BELOW) { if (!g.fallback || pick.score > g.fallback.score) g.fallback = pick; continue; }
+      if (!g.best || pick.score > g.best.score) g.best = pick;
     }
-    best ||= above || fallback;
+    // Far under the level is worse than far from town: another town's spot at the level beats this town's leftovers.
+    const best = own.best || own.above || other.best || own.fallback || other.above || other.fallback;
     const cur = this.current, H = Hunt.cfg();
     if (cur && cur.owner === World.charName && !this.skipped.has(cur.key) && cur.level <= level && LevelSpot.same(cur.center, H.center) &&
         (!best || best.level - cur.level <= LEVEL_SPOT_KEEP)) return cur;
@@ -11626,6 +11644,10 @@ const Leveling = {
   // Town.begin: the plan this trip carries, and where the armour and accessory merchants stand.
   begin(t) {
     t.gear = [];
+    // The move to the next town rides on this trip: at its end the bot goes there instead of back to the spot.
+    const c = this.cfg(), next = c.on && c.move && !t.revival && !this.move ? this.nextTown(World.gp?.progression?.level) : null;
+    t.move = next?.key || '';
+    if (next) Log.info('Leveling: after the services this trip goes on to ' + next.name + ' and makes it the return point.');
     if (!this.gearOn()) return;
     const notes = [];
     t.gear = this.plan(notes).map(w => ({ ...w }));
@@ -11729,10 +11751,13 @@ const Leveling = {
   },
   // ---- moving town
   // When the home town sells nothing above what the character wears and another town's next tier is open (Jangan's gear
-  // ends at level 21, Donwhang's next tier opens at 24), the character moves there: it walks to that town's world
-  // statue, makes it the return point (the statue's own service, gameplay recall-appoint, confirmed by the game's
-  // notice), then the town trips, the spots and the gear all come from the new town. A move that fails is not tried again
-  // this session; a death on the way only puts it off until after the revive.
+  // ends at level 21, Donwhang's next tier opens at 24), the character moves there. The move is a town trip: the return
+  // scroll takes it home (Jangan) and the services run there as usual; instead of the walk back, it takes the world
+  // statue's teleport (or the ferry, whichever Travel finds cheaper) to the new town, opens that town's statue and makes
+  // it the return point (the statue's own menu, gameplay recall-appoint: the game drops the request unless the menu is
+  // open; confirmed by the game's notice). Then the town is set up, a first trip there buys its potions and gear, and the
+  // bot walks to a spot of the new town. A move that fails is not tried again this session; a death on the way only puts
+  // it off until after the revive.
   nextTown(level) {
     const home = this.town();
     if (!home || !Number.isInteger(level)) return null;
@@ -11749,45 +11774,73 @@ const Leveling = {
     }
     return pick?.town || null;
   },
-  moveTick() {
-    const c = this.cfg(), m = this.move;
-    if (m) return this.moveStep(m);
-    if (!c.on || !c.move || now() < this.moveAt) return;
+  // The town trip reason (Town.reason): the next town is open. Checked every LEVEL_MOVE_CHECK_MS while hunting.
+  moveDue() {
+    const c = this.cfg();
+    if (!c.on || !c.move || this.move || Town.trip) return '';
+    if (now() < this.moveAt) return this.moveDue_ || '';
     this.moveAt = now() + LEVEL_MOVE_CHECK_MS;
-    const level = World.gp?.progression?.level;
-    if (!World.inWorld() || World.isDead() || !Hunt.running || Hunt.deathAt || !Town.cfg().enabled || World.gp?.inventoryPending) return;
-    if (Town.trip || Restock.trip || WalkBack.active || Travel.active || Quest.trip || Resurrect.trip || Controller.resumeAfterRevive || Trade.run) return;
-    const town = this.nextTown(level);
-    if (!town) return;
+    const town = this.nextTown(World.gp?.progression?.level);
+    this.moveDue_ = town ? 'moving to ' + town.name + ' (its gear is next for your level)' : '';
+    return this.moveDue_;
+  },
+  moveTick() { if (this.move) this.moveStep(this.move); },
+  // Town.leave, in the home town after the services: on to the new town's world statue (with its teleport), instead of
+  // the walk back to the hunting spot. False when there is nothing to move to any more.
+  startMove(key) {
+    const town = Town.towns.find(t => t.key === key);
+    if (!town?.services?.gate || this.moveFailed.has(key) || !World.inWorld() || World.isDead()) return false;
     const s = town.services.gate, stand = Town.standPoint(s, town.arrival);
     this.move = { key: town.key, name: town.name, phase: 'walk', at: now(), tries: 0, character: World.charName,
       gate: { ...stand.point, refObjId: s.refObjId, npc: { regionId: s.regionId, x: s.x, y: s.y, z: s.z } } };
+    this.moveDue_ = '';
     this.message = 'Moving to ' + town.name + ': its merchants sell the next gear for your level.';
     Log.info('Leveling: ' + this.message); UI.toast(this.message, 'info', 8000);
-    Hunt.stop();
+    if (Hunt.running) Hunt.stop();
     const started = WalkBack.startTo(this.move.gate, { label: 'the ' + town.name + ' world statue', stop: 60,
       onDone: () => { if (this.move) { this.move.phase = 'select'; this.move.at = now(); } },
       onFail: reason => this.moveFail(reason) });
+    // A walk that does not start fails the move, which walks back to the spot itself.
     if (!started && this.move) this.moveFail('the walk did not start');
+    return true;
   },
+  // At the new town's statue: select it, open its menu (npc-talk), then recall-appoint. The game's client drops the
+  // appoint unless that menu is open on the selected statue and it offers the return point (capability 0x40), so a sent
+  // request proves nothing: only the game's REBIRTH_POINT_APPOINT notice does.
   moveStep(m) {
     if (m.character !== World.charName) { this.move = null; return; }
     if (m.phase === 'walk' || !World.inWorld()) return;
     if (World.isDead()) return this.moveFail('the character died');
-    const gp = World.gp;
+    const gp = World.gp, retry = why => {
+      if (++m.tries >= 3) return this.moveFail(why);
+      if (gp.npcConversation?.phase) Cmd.raw({ kind: 'npc-close' }, 'Leveling: close the statue menu');
+      m.phase = 'select'; m.at = now();
+    };
     if (m.phase === 'select') {
       if (now() - m.at > LEVEL_MOVE_STEP_MS) return this.moveFail('the ' + m.name + ' world statue could not be selected');
       const statue = [...World.ents.values()].find(e => Town.serviceEntity('gate', e) && e.refObjId === m.gate.refObjId && dist2D(e, m.gate.npc) < 300);
       if (!statue || gp.targetPending || gp.inventoryPending) return;
       if (gp.target !== statue.gid) { if (Cmd.spaced('select')) Cmd.select(statue.gid); return; }
-      if (Cmd.raw({ kind: 'recall-appoint', gid: statue.gid }, 'Leveling: make ' + m.name + ' the return point')) { m.phase = 'appoint'; m.at = now(); m.appointed = false; }
+      if (!((gp.targetCapabilities ?? 0) & 0x40)) return this.moveFail('the ' + m.name + ' world statue offers no return point');
+      m.gid = statue.gid; m.phase = 'menu'; m.at = now(); m.talked = false;
+      return;
+    }
+    if (m.phase === 'menu') {
+      if (gp.target !== m.gid) return retry('the statue selection changed');
+      if (!(gp.npcConversation?.phase === 'menu' && gp.npcConversation.gid === m.gid)) {
+        if (!m.talked && now() - m.at > 1000 && Cmd.raw({ kind: 'npc-talk' }, 'Leveling: open the statue menu')) m.talked = true;
+        if (now() - m.at > LEVEL_MOVE_STEP_MS) retry('the statue menu did not open');
+        return;
+      }
+      if (Cmd.raw({ kind: 'recall-appoint', gid: m.gid }, 'Leveling: make ' + m.name + ' the return point')) { m.phase = 'appoint'; m.at = now(); m.appointed = false; }
       return;
     }
     if (m.phase === 'appoint') {
-      if (m.appointed) return this.moveDone(m);
-      if (now() - m.at < LEVEL_MOVE_STEP_MS) return;
-      if (++m.tries < 3) { m.phase = 'select'; m.at = now(); return; }
-      this.moveFail('the world statue did not set the return point');
+      if (m.appointed) {
+        if (gp.npcConversation?.phase) Cmd.raw({ kind: 'npc-close' }, 'Leveling: close the statue menu');
+        return this.moveDone(m);
+      }
+      if (now() - m.at >= LEVEL_MOVE_STEP_MS) retry('the world statue did not set the return point');
     }
   },
   notice(n) { if (this.move?.phase === 'appoint' && /REBIRTH_POINT_APPOINT/.test(String(n?.key || ''))) this.move.appointed = true; },
@@ -11801,6 +11854,14 @@ const Leveling = {
     Log.info('Leveling: ' + this.message); UI.toast(this.message, 'info', 8000);
     const spot = this.spotsOn() ? this.spot(World.gp?.progression?.level) : null, H = Hunt.cfg();
     if (spot) { H.center = { ...spot.center }; Settings.saveProfile(); bus.emit('center'); }
+    // A first trip right here: the new town's potions and gear, then the walk to its spot. Without what a trip needs
+    // (potions chosen, gold), straight to the spot.
+    if (!Town.validate()) {
+      Hunt.running = true;
+      Town.begin();
+      if (Town.trip) { Town.trip.why = Town.lastTrip.why = 'first visit to ' + m.name; return; }
+      if (!Hunt.running) return;
+    }
     WalkBack.start(true);
   },
   // A death on the way: hunting takes over (revive, back to the old spot) and the move is tried again later. Anything
@@ -16317,7 +16378,7 @@ const Alchemy = {
 };
 
 
-const RELEASE_NOTES = [{"version": "1.2.249", "title": "A completely full bag goes to the warehouse instead of stopping the trip", "items": ["A character whose bag had filled up all the way (no free slot) used to arrive in town and stop there with \"free a character bag slot\", even when the warehouse could take things out of its bag. With \"Sell items from the character bag\" off, that happened on almost every late trip. The warehouse now goes first and makes the room, and the trip carries on.", "A bag with nothing the warehouse takes still stops the trip with the same message, as before."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.248", "title": "Leveling reaches Donwhang, and the pet collects the drops", "items": ["The move to the next town never got there: its walk from Jangan to Donwhang tried to cross the river on foot, failed, and the bot then left Donwhang alone for the session. A character past level 24 kept hunting around Jangan, sometimes at a spot with no monsters. The move now uses the world statue's teleport (Jangan to Donwhang, later Donwhang to Hotan), then makes the new town the return point as before.", "Any walk the bot makes between places (not only the way to the hunting spot) now takes a ferry or teleport when one is needed. Auto trade still walks.", "With Level up by itself on and a pickup pet summoned, the pet now collects the drops, gold and gear included, instead of the character running for them. This happens once per character, and only when pickup was still on its default. If you switch it back by hand, it stays."], "note": "Tested in simulation with the game's real route data, not in a live game."}, {"version": "1.2.247", "title": "Spots across the river take the ferry", "items": ["A hunting spot across the river from Jangan (level 21 and up) made the bot check a walking route north into the Water Ghost Marshland, where there is no way across. The route data for one area can hold both banks of a river, and the bot took that to mean it could walk there. It now measures the real walk on the route data from both ends. When a spot cannot be reached on foot, or only the long way round, it takes the ferry: from Jangan, the China East Ferry to the far bank.", "This is decided before the slow route check, so the character no longer stands waiting for a walk that would never work.", "A ferry or teleport fee now counts for more when choosing the way, so the bot prefers a 500 gold ferry over a 5000 gold statue teleport. It pays that fee on every town trip.", "Auto trade keeps walking as before (no teleport or ferry takes a trade transport)."], "note": "Tested in simulation with the game's real route data, not in a live game."}, {"version": "1.2.246", "title": "Leveling moves on to the next town", "items": ["With Level up by itself on, a character no longer stays in its first town forever. Once that town sells nothing better and the next town's gear is open (Jangan's ends at level 21, Donwhang's next tier opens at 24), it walks to the next town's world statue, makes it the return point, and sets up its warehouse, merchants and statue there. From then on its town trips, hunting spots and gear come from the new town: Jangan, then Donwhang, then Hotan.", "If the character dies on the way, it revives as usual and tries again later. If the move fails any other way, it stays where it was and does not try that town again until the bot is reloaded.", "A new switch, \"Move to the next town when this one has no better gear\", is on by default.", "Not in NIX Deck's headless mode yet."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.245", "title": "Leveling goes to town for gear less often", "items": ["Town gear unlocks over a few levels (in Jangan the level 16 tier opens with the weapon and gloves at 16 and ends with the chest at 21). With Level up by itself on, a trip just for gear used to happen at almost every level. It now waits until the last piece of the tier is open, then buys the whole set in one trip.", "Any trip that happens anyway (after a death, for potions or repairs) still buys whatever is already open."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.244", "title": "Leveling replaces Seal gear too", "items": ["With Level up by itself on, Seal (SOX) and other rare pieces were never replaced, so a Seal blade, sword or a level 1 Seal necklace stayed on for good while ordinary pieces were upgraded. They are now replaced like any other piece when the town sells a higher level. The Seal piece goes to your bag and is never sold.", "Gear above +3 and gear you protect are still never replaced.", "If the walk to a picked hunting spot fails five times in a row, the bot stops trying new spots instead of wandering the map. Reaching a spot resets the count."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.243", "title": "Leveling: a rescued merchant trip keeps going, and unreachable spots are skipped", "items": ["When a merchant's standing spot was blocked and the bot found another one that worked, the trip ended a moment later with \"Settings or character changed\". It now carries on and the working spot is kept.", "With Level up by itself on, if the walk to the chosen hunting spot gives up (a spot behind a river or cliff), the bot skips that spot and tries the next best one instead of staying put.", "Small clean-ups: a leftover distance setting is gone from the defaults, and the wide settings panel lays out its boxes faster."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.242", "title": "Leveling has no distance limit for its spots", "items": ["The \"Spots at most this far from town\" setting is gone. With Level up by itself on, the bot picks the best spot for your level anywhere the game's route data connects to your town, and walks there however far it is. Without route data for the area it looks up to 5 km, so it never picks a spot on another continent.", "The level still counts far more than distance, so it does not cross the map for one level."], "note": "Tested in simulation only, not in a live game."}];
+const RELEASE_NOTES = [{"version": "1.2.250", "title": "Leveling really moves to Donwhang: return point, shopping and spots there", "items": ["The move to the next town never set the return point. The bot reached the Donwhang world statue but sent the request without opening the statue's menu, and the game ignores it then. The move counted as failed, so the return point stayed in Jangan: every death and town trip landed in Jangan and walked all the way back. The bot now opens the statue's menu first, then sets the return point.", "The move now starts as a town trip: the return scroll takes the character to Jangan, the services run there, then it takes the world statue teleport (or the ferry when that is cheaper) to Donwhang and makes Donwhang the return point.", "Right after the move, the bot does a first town trip in Donwhang: it buys the potions and the next gear there, then walks to a Donwhang hunting spot. From then on every trip goes to Donwhang. The same happens later from Donwhang to Hotan.", "Hunting spots now stay near the town of the return point. Before, a Jangan character at level 18 to 23 often walked to spots near Donwhang, far from where it revives. It only uses another town's spots when its own has nothing near its level."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.249", "title": "A completely full bag goes to the warehouse instead of stopping the trip", "items": ["A character whose bag had filled up all the way (no free slot) used to arrive in town and stop there with \"free a character bag slot\", even when the warehouse could take things out of its bag. With \"Sell items from the character bag\" off, that happened on almost every late trip. The warehouse now goes first and makes the room, and the trip carries on.", "A bag with nothing the warehouse takes still stops the trip with the same message, as before."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.248", "title": "Leveling reaches Donwhang, and the pet collects the drops", "items": ["The move to the next town never got there: its walk from Jangan to Donwhang tried to cross the river on foot, failed, and the bot then left Donwhang alone for the session. A character past level 24 kept hunting around Jangan, sometimes at a spot with no monsters. The move now uses the world statue's teleport (Jangan to Donwhang, later Donwhang to Hotan), then makes the new town the return point as before.", "Any walk the bot makes between places (not only the way to the hunting spot) now takes a ferry or teleport when one is needed. Auto trade still walks.", "With Level up by itself on and a pickup pet summoned, the pet now collects the drops, gold and gear included, instead of the character running for them. This happens once per character, and only when pickup was still on its default. If you switch it back by hand, it stays."], "note": "Tested in simulation with the game's real route data, not in a live game."}, {"version": "1.2.247", "title": "Spots across the river take the ferry", "items": ["A hunting spot across the river from Jangan (level 21 and up) made the bot check a walking route north into the Water Ghost Marshland, where there is no way across. The route data for one area can hold both banks of a river, and the bot took that to mean it could walk there. It now measures the real walk on the route data from both ends. When a spot cannot be reached on foot, or only the long way round, it takes the ferry: from Jangan, the China East Ferry to the far bank.", "This is decided before the slow route check, so the character no longer stands waiting for a walk that would never work.", "A ferry or teleport fee now counts for more when choosing the way, so the bot prefers a 500 gold ferry over a 5000 gold statue teleport. It pays that fee on every town trip.", "Auto trade keeps walking as before (no teleport or ferry takes a trade transport)."], "note": "Tested in simulation with the game's real route data, not in a live game."}, {"version": "1.2.246", "title": "Leveling moves on to the next town", "items": ["With Level up by itself on, a character no longer stays in its first town forever. Once that town sells nothing better and the next town's gear is open (Jangan's ends at level 21, Donwhang's next tier opens at 24), it walks to the next town's world statue, makes it the return point, and sets up its warehouse, merchants and statue there. From then on its town trips, hunting spots and gear come from the new town: Jangan, then Donwhang, then Hotan.", "If the character dies on the way, it revives as usual and tries again later. If the move fails any other way, it stays where it was and does not try that town again until the bot is reloaded.", "A new switch, \"Move to the next town when this one has no better gear\", is on by default.", "Not in NIX Deck's headless mode yet."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.245", "title": "Leveling goes to town for gear less often", "items": ["Town gear unlocks over a few levels (in Jangan the level 16 tier opens with the weapon and gloves at 16 and ends with the chest at 21). With Level up by itself on, a trip just for gear used to happen at almost every level. It now waits until the last piece of the tier is open, then buys the whole set in one trip.", "Any trip that happens anyway (after a death, for potions or repairs) still buys whatever is already open."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.244", "title": "Leveling replaces Seal gear too", "items": ["With Level up by itself on, Seal (SOX) and other rare pieces were never replaced, so a Seal blade, sword or a level 1 Seal necklace stayed on for good while ordinary pieces were upgraded. They are now replaced like any other piece when the town sells a higher level. The Seal piece goes to your bag and is never sold.", "Gear above +3 and gear you protect are still never replaced.", "If the walk to a picked hunting spot fails five times in a row, the bot stops trying new spots instead of wandering the map. Reaching a spot resets the count."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.243", "title": "Leveling: a rescued merchant trip keeps going, and unreachable spots are skipped", "items": ["When a merchant's standing spot was blocked and the bot found another one that worked, the trip ended a moment later with \"Settings or character changed\". It now carries on and the working spot is kept.", "With Level up by itself on, if the walk to the chosen hunting spot gives up (a spot behind a river or cliff), the bot skips that spot and tries the next best one instead of staying put.", "Small clean-ups: a leftover distance setting is gone from the defaults, and the wide settings panel lays out its boxes faster."], "note": "Tested in simulation only, not in a live game."}];
 
 // Check trusted repository metadata; never execute downloaded update code.
 const Updates = {

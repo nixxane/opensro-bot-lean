@@ -312,6 +312,8 @@ const Town = {
     if (c.broken && this.weaponBroken()) return 'weapon broken';
     const worn = c.wear?.on ? this.wear() : null;
     if (worn && worn.pct < c.wear.pct) return `gear durability low (${worn.name} at ${Math.floor(worn.pct)}%)`;
+    const move = Leveling.moveDue();
+    if (move) return move;
     const gear = Leveling.due();
     if (gear) return gear;
     if (this.noXpDue()) return `no XP for ${c.noXp.minutes} minutes`;
@@ -495,6 +497,8 @@ const Town = {
     if (World.freeBagSlots() <= 1) return this.fail('Returned to town; free at least two character bag slots before hunting again.');
     if (!Hunt.cfg().center) return this.fail('No saved hunting spot to walk back to.');
     this.trip = null; Hunt.targetGid = Hunt.lootGid = 0; this.restartClocks();
+    // Zero-setup leveling moving to the next town: from here to its world statue instead of back to the spot.
+    if (t.move && Leveling.startMove(t.move)) { this.message = 'Town service complete; moving to the next town.'; return; }
     WalkBack.start(true);
     if (!WalkBack.active && !Travel.active) { this.message = 'Town cycle stopped: the walk back to the hunting spot did not start.'; Hunt.stop(this.message); return; }
     this.message = 'Town service complete; walking back to the hunting spot.';

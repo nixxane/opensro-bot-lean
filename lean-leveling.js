@@ -39,6 +39,12 @@ const Leveling = {
   home() { return Town.cfg().arrival || World.pose(); },
   // The spot for this level, or null when the data has none in reach. The spot in use is kept while the best choice is
   // at most LEVEL_SPOT_KEEP levels above it, so the bot does not walk across the map for every level.
+  // The town a place belongs to: the town whose return-scroll arrival point is nearest (null in a dungeon or another world).
+  townOf(p) {
+    let best = null, bestD = Infinity;
+    for (const t of Town.towns) { const d = t.arrival ? dist2D(p, t.arrival) : Infinity; if (d < bestD) { best = t; bestD = d; } }
+    return best;
+  },
   spot(level) {
     const home = this.home();
     if (!home || !Number.isInteger(level)) return null;
@@ -47,18 +53,26 @@ const Leveling = {
     // up to LEVEL_SPOT_REACH_M, so a spot on another continent is never picked. Few towns have a spot at every level
     // within 400 m (Jangan's level 5 one is 407 m away, its level 8 one 903 m).
     const far = LEVEL_SPOT_REACH_M * 10, routes = Route.areas?.length > 0;
-    // above: when nothing at or below the level is in reach (a new character), the nearest few levels up.
-    let best = null, fallback = null, above = null;
+    // Spots around the town of the return point come first: a spot nearer another town (live: Donwhang's level 18-23
+    // spots picked from Jangan) means every death and town trip lands in the wrong town and walks across the map. The
+    // move to the next town takes over there; another town's spots are used only when this one has none near the level.
+    const homeTown = this.townOf(home)?.key, own = { best: null, fallback: null, above: null }, other = { best: null, fallback: null, above: null };
+    this.owners ||= new Map();
     for (const s of this.spots) {
       if (s[4] > level + LEVEL_SPOT_ABOVE || this.skipped.has(this.key(s))) continue;
       const center = { regionId: s[0], x: s[1], y: s[2], z: s[3] }, d = dist2D(home, center);
       if (!(d <= far) && !(Number.isFinite(d) && routes && Route.commonArea(home, center))) continue;
-      const pick = { level: s[4], center, key: this.key(s), auto: true, score: s[4] * 400 + Math.min(s[7], 12) * 40 - d / 30 };
-      if (s[4] > level) { pick.score = -s[4] * 400 + Math.min(s[7], 12) * 40 - d / 30; if (!above || pick.score > above.score) above = pick; continue; }
-      if (s[4] < level - LEVEL_SPOT_BELOW) { if (!fallback || pick.score > fallback.score) fallback = pick; continue; }
-      if (!best || pick.score > best.score) best = pick;
+      const key = this.key(s);
+      if (!this.owners.has(key)) this.owners.set(key, this.townOf(center)?.key ?? null);
+      const owner = this.owners.get(key), g = !homeTown || !owner || owner === homeTown ? own : other;
+      // above: when nothing at or below the level is in reach (a new character), the nearest few levels up.
+      const pick = { level: s[4], center, key, auto: true, score: s[4] * 400 + Math.min(s[7], 12) * 40 - d / 30 };
+      if (s[4] > level) { pick.score = -s[4] * 400 + Math.min(s[7], 12) * 40 - d / 30; if (!g.above || pick.score > g.above.score) g.above = pick; continue; }
+      if (s[4] < level - LEVEL_SPOT_BELOW) { if (!g.fallback || pick.score > g.fallback.score) g.fallback = pick; continue; }
+      if (!g.best || pick.score > g.best.score) g.best = pick;
     }
-    best ||= above || fallback;
+    // Far under the level is worse than far from town: another town's spot at the level beats this town's leftovers.
+    const best = own.best || own.above || other.best || own.fallback || other.above || other.fallback;
     const cur = this.current, H = Hunt.cfg();
     if (cur && cur.owner === World.charName && !this.skipped.has(cur.key) && cur.level <= level && LevelSpot.same(cur.center, H.center) &&
         (!best || best.level - cur.level <= LEVEL_SPOT_KEEP)) return cur;
@@ -180,6 +194,10 @@ const Leveling = {
   // Town.begin: the plan this trip carries, and where the armour and accessory merchants stand.
   begin(t) {
     t.gear = [];
+    // The move to the next town rides on this trip: at its end the bot goes there instead of back to the spot.
+    const c = this.cfg(), next = c.on && c.move && !t.revival && !this.move ? this.nextTown(World.gp?.progression?.level) : null;
+    t.move = next?.key || '';
+    if (next) Log.info('Leveling: after the services this trip goes on to ' + next.name + ' and makes it the return point.');
     if (!this.gearOn()) return;
     const notes = [];
     t.gear = this.plan(notes).map(w => ({ ...w }));
@@ -283,10 +301,13 @@ const Leveling = {
   },
   // ---- moving town
   // When the home town sells nothing above what the character wears and another town's next tier is open (Jangan's gear
-  // ends at level 21, Donwhang's next tier opens at 24), the character moves there: it walks to that town's world
-  // statue, makes it the return point (the statue's own service, gameplay recall-appoint, confirmed by the game's
-  // notice), then the town trips, the spots and the gear all come from the new town. A move that fails is not tried again
-  // this session; a death on the way only puts it off until after the revive.
+  // ends at level 21, Donwhang's next tier opens at 24), the character moves there. The move is a town trip: the return
+  // scroll takes it home (Jangan) and the services run there as usual; instead of the walk back, it takes the world
+  // statue's teleport (or the ferry, whichever Travel finds cheaper) to the new town, opens that town's statue and makes
+  // it the return point (the statue's own menu, gameplay recall-appoint: the game drops the request unless the menu is
+  // open; confirmed by the game's notice). Then the town is set up, a first trip there buys its potions and gear, and the
+  // bot walks to a spot of the new town. A move that fails is not tried again this session; a death on the way only puts
+  // it off until after the revive.
   nextTown(level) {
     const home = this.town();
     if (!home || !Number.isInteger(level)) return null;
@@ -303,45 +324,73 @@ const Leveling = {
     }
     return pick?.town || null;
   },
-  moveTick() {
-    const c = this.cfg(), m = this.move;
-    if (m) return this.moveStep(m);
-    if (!c.on || !c.move || now() < this.moveAt) return;
+  // The town trip reason (Town.reason): the next town is open. Checked every LEVEL_MOVE_CHECK_MS while hunting.
+  moveDue() {
+    const c = this.cfg();
+    if (!c.on || !c.move || this.move || Town.trip) return '';
+    if (now() < this.moveAt) return this.moveDue_ || '';
     this.moveAt = now() + LEVEL_MOVE_CHECK_MS;
-    const level = World.gp?.progression?.level;
-    if (!World.inWorld() || World.isDead() || !Hunt.running || Hunt.deathAt || !Town.cfg().enabled || World.gp?.inventoryPending) return;
-    if (Town.trip || Restock.trip || WalkBack.active || Travel.active || Quest.trip || Resurrect.trip || Controller.resumeAfterRevive || Trade.run) return;
-    const town = this.nextTown(level);
-    if (!town) return;
+    const town = this.nextTown(World.gp?.progression?.level);
+    this.moveDue_ = town ? 'moving to ' + town.name + ' (its gear is next for your level)' : '';
+    return this.moveDue_;
+  },
+  moveTick() { if (this.move) this.moveStep(this.move); },
+  // Town.leave, in the home town after the services: on to the new town's world statue (with its teleport), instead of
+  // the walk back to the hunting spot. False when there is nothing to move to any more.
+  startMove(key) {
+    const town = Town.towns.find(t => t.key === key);
+    if (!town?.services?.gate || this.moveFailed.has(key) || !World.inWorld() || World.isDead()) return false;
     const s = town.services.gate, stand = Town.standPoint(s, town.arrival);
     this.move = { key: town.key, name: town.name, phase: 'walk', at: now(), tries: 0, character: World.charName,
       gate: { ...stand.point, refObjId: s.refObjId, npc: { regionId: s.regionId, x: s.x, y: s.y, z: s.z } } };
+    this.moveDue_ = '';
     this.message = 'Moving to ' + town.name + ': its merchants sell the next gear for your level.';
     Log.info('Leveling: ' + this.message); UI.toast(this.message, 'info', 8000);
-    Hunt.stop();
+    if (Hunt.running) Hunt.stop();
     const started = WalkBack.startTo(this.move.gate, { label: 'the ' + town.name + ' world statue', stop: 60,
       onDone: () => { if (this.move) { this.move.phase = 'select'; this.move.at = now(); } },
       onFail: reason => this.moveFail(reason) });
+    // A walk that does not start fails the move, which walks back to the spot itself.
     if (!started && this.move) this.moveFail('the walk did not start');
+    return true;
   },
+  // At the new town's statue: select it, open its menu (npc-talk), then recall-appoint. The game's client drops the
+  // appoint unless that menu is open on the selected statue and it offers the return point (capability 0x40), so a sent
+  // request proves nothing: only the game's REBIRTH_POINT_APPOINT notice does.
   moveStep(m) {
     if (m.character !== World.charName) { this.move = null; return; }
     if (m.phase === 'walk' || !World.inWorld()) return;
     if (World.isDead()) return this.moveFail('the character died');
-    const gp = World.gp;
+    const gp = World.gp, retry = why => {
+      if (++m.tries >= 3) return this.moveFail(why);
+      if (gp.npcConversation?.phase) Cmd.raw({ kind: 'npc-close' }, 'Leveling: close the statue menu');
+      m.phase = 'select'; m.at = now();
+    };
     if (m.phase === 'select') {
       if (now() - m.at > LEVEL_MOVE_STEP_MS) return this.moveFail('the ' + m.name + ' world statue could not be selected');
       const statue = [...World.ents.values()].find(e => Town.serviceEntity('gate', e) && e.refObjId === m.gate.refObjId && dist2D(e, m.gate.npc) < 300);
       if (!statue || gp.targetPending || gp.inventoryPending) return;
       if (gp.target !== statue.gid) { if (Cmd.spaced('select')) Cmd.select(statue.gid); return; }
-      if (Cmd.raw({ kind: 'recall-appoint', gid: statue.gid }, 'Leveling: make ' + m.name + ' the return point')) { m.phase = 'appoint'; m.at = now(); m.appointed = false; }
+      if (!((gp.targetCapabilities ?? 0) & 0x40)) return this.moveFail('the ' + m.name + ' world statue offers no return point');
+      m.gid = statue.gid; m.phase = 'menu'; m.at = now(); m.talked = false;
+      return;
+    }
+    if (m.phase === 'menu') {
+      if (gp.target !== m.gid) return retry('the statue selection changed');
+      if (!(gp.npcConversation?.phase === 'menu' && gp.npcConversation.gid === m.gid)) {
+        if (!m.talked && now() - m.at > 1000 && Cmd.raw({ kind: 'npc-talk' }, 'Leveling: open the statue menu')) m.talked = true;
+        if (now() - m.at > LEVEL_MOVE_STEP_MS) retry('the statue menu did not open');
+        return;
+      }
+      if (Cmd.raw({ kind: 'recall-appoint', gid: m.gid }, 'Leveling: make ' + m.name + ' the return point')) { m.phase = 'appoint'; m.at = now(); m.appointed = false; }
       return;
     }
     if (m.phase === 'appoint') {
-      if (m.appointed) return this.moveDone(m);
-      if (now() - m.at < LEVEL_MOVE_STEP_MS) return;
-      if (++m.tries < 3) { m.phase = 'select'; m.at = now(); return; }
-      this.moveFail('the world statue did not set the return point');
+      if (m.appointed) {
+        if (gp.npcConversation?.phase) Cmd.raw({ kind: 'npc-close' }, 'Leveling: close the statue menu');
+        return this.moveDone(m);
+      }
+      if (now() - m.at >= LEVEL_MOVE_STEP_MS) retry('the world statue did not set the return point');
     }
   },
   notice(n) { if (this.move?.phase === 'appoint' && /REBIRTH_POINT_APPOINT/.test(String(n?.key || ''))) this.move.appointed = true; },
@@ -355,6 +404,14 @@ const Leveling = {
     Log.info('Leveling: ' + this.message); UI.toast(this.message, 'info', 8000);
     const spot = this.spotsOn() ? this.spot(World.gp?.progression?.level) : null, H = Hunt.cfg();
     if (spot) { H.center = { ...spot.center }; Settings.saveProfile(); bus.emit('center'); }
+    // A first trip right here: the new town's potions and gear, then the walk to its spot. Without what a trip needs
+    // (potions chosen, gold), straight to the spot.
+    if (!Town.validate()) {
+      Hunt.running = true;
+      Town.begin();
+      if (Town.trip) { Town.trip.why = Town.lastTrip.why = 'first visit to ' + m.name; return; }
+      if (!Hunt.running) return;
+    }
     WalkBack.start(true);
   },
   // A death on the way: hunting takes over (revive, back to the old spot) and the move is tried again later. Anything

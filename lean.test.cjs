@@ -3905,23 +3905,42 @@ function moveFixture() {
   gp.progression = { ...gp.progression, level: 11, gold: '100000' };
   return f;
 }
-test('leveling moves to the next town once its gear tier opens: walk, set the return point, set up the town', () => {
+// From the fixture's town trip state to the walk to the new town's statue: the move rides on a town trip.
+function moveTrip(f) {
+  f.Leveling.moveAt = 0;
+  assert.match(f.Town.reason(), /moving to Donwhang/, 'the open tier is a town trip reason');
+  f.Town.begin();
+  assert.equal(f.Town.trip.move, 'WC', 'the trip carries the move');
+  const t = f.Town.trip;
+  f.Town.trip = null; f.Leveling.startMove(t.move);
+}
+function statueReady(f) {
+  const gp = f.World.gp, done = f.WalkBack.active.onDone; f.WalkBack.active = null; done();
+  f.World.ents.set(990, { gid: 990, refObjId: 703, kind: 'teleport', name: 'gate', regionId: 1, x: 1650, y: 0, z: 100 });
+  gp.target = 990; gp.targetCapabilities = 0x40;
+}
+test('leveling moves to the next town once its gear tier opens: town trip, statue menu, return point, first trip there', () => {
   const f = moveFixture(), gp = f.World.gp, c = f.Town.cfg();
   assert.equal(f.Leveling.nextTown(11), null, 'level 11: Donwhang has nothing open above Jangan yet');
   assert.equal(f.Leveling.nextTown(12)?.key, 'WC', 'level 12: its next tier is open');
   gp.progression.level = 12;
-  f.Settings.profile.leveling.move = false; f.Leveling.moveTick();
-  assert.equal(f.Leveling.move, null, 'the switch off: no move');
-  f.Settings.profile.leveling.move = true; f.Leveling.moveAt = 0; f.Leveling.moveTick();
+  f.Settings.profile.leveling.move = false; f.Leveling.moveAt = 0;
+  assert.doesNotMatch(f.Town.reason() || '', /moving/, 'the switch off: no move');
+  f.Settings.profile.leveling.move = true;
+  moveTrip(f);
   assert.equal(f.Leveling.move?.phase, 'walk');
   assert.equal(f.Hunt.running, false, 'hunting stops for the walk');
   assert.ok(f.WalkBack.active?.onDone, 'it walks to the Donwhang world statue');
   assert.equal(f.WalkBack.active.destination.x > 1500, true);
-  const done = f.WalkBack.active.onDone; f.WalkBack.active = null; done();
+  statueReady(f);
   assert.equal(f.Leveling.move.phase, 'select');
-  const statue = { gid: 990, refObjId: 703, kind: 'teleport', name: 'gate', regionId: 1, x: 1650, y: 0, z: 100 };
-  f.World.ents.set(statue.gid, statue);
-  gp.target = 990; f.Leveling.moveTick();
+  f.Leveling.moveTick();
+  assert.equal(f.Leveling.move.phase, 'menu');
+  f.advance(1500); f.Leveling.moveTick();
+  assert.equal(f.commands.filter(x => x.kind === 'recall-appoint').length, 0, 'no appoint before the statue menu is open (the game drops it)');
+  assert.ok(f.commands.some(x => x.kind === 'npc-talk'), 'the statue menu is opened');
+  gp.npcConversation = { gid: 990, phase: 'menu' };
+  f.Leveling.moveTick();
   assert.deepEqual(f.commands.filter(x => x.kind === 'recall-appoint').map(x => x.gid), [990], 'the return point is set at the statue');
   assert.equal(c.arrival.x, 100, 'nothing switches before the game confirms');
   f.bus.emit('notice', { key: 'UIIT_MSG_STATE_REBIRTH_POINT_APPOINT', sequence: 1 });
@@ -3930,24 +3949,57 @@ test('leveling moves to the next town once its gear tier opens: walk, set the re
   assert.equal(c.arrival.x, 1500, 'the town trips now go to Donwhang');
   assert.equal(c.gate.refObjId, 703);
   assert.equal(f.Leveling.nextTown(12), null, 'and it stays there');
+  assert.ok(f.Town.trip, 'a first town trip starts right there');
+  assert.match(f.Town.lastTrip.why, /first visit to Donwhang/);
+  assert.ok(f.Town.trip.gear.some(w => w.row[0] === 80), 'and buys the Donwhang gear');
 });
-test('a move that gets no answer is not tried again this session; a death on the way only puts it off', () => {
+test('a trip without the open tier walks back as before; a refused or unanswered statue gives the town up for the session', () => {
   const f = moveFixture(), gp = f.World.gp;
-  gp.progression.level = 12; f.Leveling.moveTick();
-  const done = f.WalkBack.active.onDone; f.WalkBack.active = null; done();
-  f.World.ents.set(990, { gid: 990, refObjId: 703, kind: 'teleport', name: 'gate', regionId: 1, x: 1650, y: 0, z: 100 });
-  gp.target = 990;
-  for (let i = 0; i < 3; i++) { f.Leveling.moveTick(); f.advance(16000); f.Leveling.moveTick(); }
+  f.Town.begin();
+  assert.equal(f.Town.trip.move, '', 'level 11: no move on this trip');
+  f.Town.trip = null;
+  gp.progression.level = 12;
+  moveTrip(f); statueReady(f);
+  gp.npcConversation = { gid: 990, phase: 'menu' };
+  for (let i = 0; i < 3; i++) { f.Leveling.moveTick(); f.Leveling.moveTick(); f.advance(16000); f.Leveling.moveTick(); }
   assert.equal(f.Leveling.move, null);
   assert.match(f.Leveling.message, /did not set the return point/);
   assert.equal(f.Leveling.nextTown(12), null, 'Donwhang is left alone for the session');
   assert.equal(f.Town.cfg().arrival.x, 100, 'the town is unchanged');
+  const h = moveFixture();
+  h.World.gp.progression.level = 12; moveTrip(h); statueReady(h); h.World.gp.targetCapabilities = 0;
+  h.Leveling.moveTick();
+  assert.match(h.Leveling.message, /offers no return point/);
   const g = moveFixture();
-  g.World.gp.progression.level = 12; g.Leveling.moveTick();
+  g.World.gp.progression.level = 12; moveTrip(g);
   g.World.gp.dead = true; g.World.isDead = () => true;
   g.WalkBack.active.onFail('Walk back interrupted.');
   assert.equal(g.Leveling.move, null);
   assert.equal(g.Leveling.nextTown(12)?.key, 'WC', 'a death only puts the move off');
+});
+test('the end of a moving trip goes to the new town statue instead of back to the spot', () => {
+  const f = moveFixture(), gp = f.World.gp;
+  gp.progression.level = 12; f.Leveling.moveAt = 0;
+  f.Town.begin();
+  assert.equal(f.Town.trip.move, 'WC');
+  // The services are done (the fixture's potions are under the refill target, its gear worn down).
+  f.Town.supplyShort = () => false; f.Town.damaged = () => [];
+  f.Town.leave();
+  assert.equal(f.Town.trip, null);
+  assert.equal(f.Leveling.move?.phase, 'walk', 'the move takes over from the walk back');
+  assert.match(f.WalkBack.active?.label || '', /Donwhang world statue/);
+});
+test('spots around the town of the return point come first (live: Donwhang spots picked with the return point in Jangan)', () => {
+  const f = moveFixture();
+  f.Town.cfg().arrival = { regionId: 1, x: 100, y: 0, z: 100 };
+  // Jangan's best spot is level 9; Donwhang has a level 11 one, nearer Donwhang.
+  f.Leveling.spots = [[1, 300, 0, 100, 9, 9, 9, 6], [1, 1400, 0, 100, 11, 11, 11, 9]];
+  f.Leveling.reset(); f.Leveling.owners = null;
+  assert.equal(f.Leveling.spot(11).level, 9, 'the Jangan spot, not the higher one nearer Donwhang');
+  f.Leveling.reset();
+  assert.equal(f.Leveling.spot(16).level, 11, 'far under the level, another town at the level is better');
+  f.Leveling.spots = [[1, 1400, 0, 100, 11, 11, 11, 9]]; f.Leveling.reset();
+  assert.equal(f.Leveling.spot(11).level, 11, 'no Jangan spot at all: the other town is used');
 });
 test('a trip for gear alone waits for the last piece of the tier (live: a trip at every level from 8 to 13)', () => {
   const f = gearFixture(), gp = f.World.gp;
