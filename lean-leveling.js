@@ -22,11 +22,15 @@ const LEVEL_INT_MASTERIES = [514, 516, 517, 518], LEVEL_SKILL_CHECK_MS = 5000;
 // Raised after the weapon's mastery on every character that has them (Cold, Lightning, Fire; a mastery the character does
 // not have is skipped by Auto mastery), and the pattern of a weapon imbue skill (the same one the imbue picker offers first).
 const LEVEL_ELEMENT_MASTERIES = [273, 274, 275], LEVEL_IMBUE_SKILL = /GIGONGTA|POISON\w*_BLADE|MALL_PET_SKILL/;
+// A skill's family: its codename without SN_SKILL_ and the tier letter (CH_SPEAR_PIERCE for PIERCE_A, _B, _C).
+const levelFamily = s => String(s?.nameSymbol || '').replace(/^SN_SKILL_/, '').replace(/_[A-Z]$/, '');
 const LEVEL_PART = { 1: 'helmet', 2: 'shoulders', 3: 'chest', 4: 'legs', 5: 'gloves', 6: 'boots', '1a': 'necklace', '2a': 'earrings', '3a': 'ring' };
 const LEVEL_ARMOUR_SOCKET = { 1: 0, 2: 2, 3: 1, 4: 4, 5: 3, 6: 5 }, LEVEL_ACCESSORY_SOCKETS = { 1: [9], 2: [10], 3: [11, 12] };
 const Leveling = {
   // The generated tables, as properties so a test can lay its own over them.
   spots: LEVEL_SPOTS, gear: LEVEL_GEAR, shopsData: LEVEL_SHOPS,
+  // Builds (gen-builds.py): the presets, and the skill groups leveling never uses (walls and the like).
+  builds: BUILDS, blockedGroups: BUILD_BLOCKED_GROUPS, warned: new Set(), familyCache: null,
   skillAt: 0,
   current: null, walkFails: 0, move: null, moveAt: 0, moveFailed: new Set(), moveFailedAt: new Map(), movedFrom: new Set(), skipped: new Set(), tried: new Set(), refused: new Set(), checkAt: 0, due_: '', index: null, message: '',
   cfg() { return Settings.profile.leveling; },
@@ -150,10 +154,20 @@ const Leveling = {
       } else if (!this.replaceable(item)) notes?.push(label + ': kept (enhanced above +' + LEVEL_GEAR_MAX_PLUS + ' or protected)');
       else wants.push({ row: r, socket, role: r[1] });
     };
-    const weapon = worn.get(6);
-    if (weapon) consider(6, 6, this.tids(weapon)[1], false, 'weapon');
+    const weapon = worn.get(6), build = this.build();
+    // A build with another weapon type: buy its weapon (any level the town sells, never over enhanced or protected gear).
+    if (build && weapon && !build.weapon.includes(this.tids(weapon)[1])) {
+      const r = best(6, build.weapon[0]);
+      if (!r) notes?.push('weapon: the town sells no ' + build.label + ' weapon at your level');
+      else if (!this.replaceable(weapon)) notes?.push('weapon: kept (enhanced above +' + LEVEL_GEAR_MAX_PLUS + ' or protected)');
+      else wants.push({ row: r, socket: 6, role: r[1] });
+    } else if (weapon) consider(6, 6, this.tids(weapon)[1], false, 'weapon');
     const second = worn.get(7);
     if (second && ItemType.isEquipment(second.typeFlags) && this.tids(second)[0] === 4) consider(7, 4, this.tids(second)[1], false, 'shield');
+    else if (build?.shield && !second && weapon) {
+      const r = rows.filter(r => r[2] === 4).sort((a, b) => b[6] - a[6] || b[7] - a[7])[0];
+      if (r) wants.push({ row: r, socket: 7, role: r[1], fill: true });
+    }
     // Armour: the material most of the worn pieces have; empty parts are filled with it.
     const materials = {};
     for (const s of [0, 1, 2, 3, 4, 5]) { const i = worn.get(s); if (i) { const t3 = this.tids(i)[0]; materials[t3] = (materials[t3] || 0) + 1; } }
@@ -456,14 +470,17 @@ const Leveling = {
   // (Auto mastery, scope "masteries"), and stat points go to Strength, or to Intelligence for a caster (a European
   // caster weapon, or more Intelligence than Strength already). Only what is not set up yet is changed.
   prepare() {
-    const c = this.cfg(), gp = World.gp, weapon = (gp?.inventory || []).find(i => i.slot === 6);
+    const c = this.cfg(), gp = World.gp, weapon = (gp?.inventory || []).find(i => i.slot === 6), build = this.build();
     // prepared names the character it was done for: settings copied to another character set that one up again.
-    if (!this.skillsOn() || !World.charName || c.prepared === World.charName || !World.inWorld() || !weapon || !gp.progression) return false;
-    const mastery = LEVEL_WEAPON_MASTERY[this.tids(weapon)[1]];
+    if (!this.skillsOn() || !World.charName || c.prepared === World.charName || !World.inWorld() || (!weapon && !build) || !gp.progression) return false;
+    const mastery = build ? build.masteries[0] : LEVEL_WEAPON_MASTERY[this.tids(weapon)[1]];
     if (!mastery) return false;
     const M = Settings.profile.mastery, S = Settings.profile.statPoints, stats = gp.progression.stats || {}, done = [];
-    if (!M.enabled || !M.ids.length) { M.enabled = true; M.ids = [mastery]; M.gap = 0; done.push(AutoMastery.name(mastery) + ' mastery'); }
-    if (!M.skills || M.scope !== 'masteries') { M.skills = true; M.scope = 'masteries'; done.push('its skills'); }
+    // A chosen build sets the masteries in its order and learns only its own skills (scope "build").
+    if (build) { M.enabled = true; M.ids = [...build.masteries]; M.gap = 0; done.push(build.masteries.map(id => AutoMastery.name(id)).join(', ') + ' for the ' + build.label + ' build'); }
+    else if (!M.enabled || !M.ids.length) { M.enabled = true; M.ids = [mastery]; M.gap = 0; done.push(AutoMastery.name(mastery) + ' mastery'); }
+    const scope = build ? 'build' : 'masteries';
+    if (!M.skills || M.scope !== scope) { M.skills = true; M.scope = scope; done.push('its skills'); }
     if (!S.enabled) {
       const caster = LEVEL_INT_MASTERIES.includes(mastery) || (stats.intellect ?? 0) > (stats.strength ?? 0);
       Object.assign(S, { enabled: true, str: caster ? 0 : 1, int: caster ? 1 : 0 });
@@ -482,6 +499,7 @@ const Leveling = {
     const c = this.cfg(), weapon = (World.gp?.inventory || []).find(i => i.slot === 6);
     if (c.elements === World.charName || !M.enabled || !weapon) return false;
     c.elements = World.charName;
+    if (this.build()) return false;
     if (M.ids.length !== 1 || M.ids[0] !== LEVEL_WEAPON_MASTERY[this.tids(weapon)[1]]) return false;
     const add = LEVEL_ELEMENT_MASTERIES.filter(id => !M.ids.includes(id));
     if (!add.length) return false;
@@ -492,10 +510,27 @@ const Leveling = {
   // again by hand is respected; a newly learned imbue skill group is picked up the same way.
   imbueTick() {
     const M = Settings.profile.macro, c = this.cfg(), done = new Set(c.imbued || []);
+    const build = this.build();
+    if (build) return this.buildImbue(build, M, c, done);
     const skill = UI.learnedSkills(true).find(s => LEVEL_IMBUE_SKILL.test(s.nameSymbol || '') && !done.has(s.group ?? s.id));
     if (!skill) return false;
     done.add(skill.group ?? skill.id); c.imbued = [...done];
     if (!M.imbue) { M.imbue = { id: skill.id, group: skill.group ?? skill.id }; this.message = 'Imbue in use: ' + World.skillName(skill.id) + '.'; Log.info('Leveling: ' + this.message); UI.toast(this.message, 'info', 5000); }
+    Settings.saveProfile();
+    return true;
+  },
+  // A build uses one imbue: its own family, the highest tier learned. A higher tier replaces the lower one of the same family.
+  buildImbue(build, M, c, done) {
+    if (!build.imbue) return false;
+    const groups = this.familyGroups().get(build.imbue) || [];
+    const skill = UI.learnedSkills(true).filter(s => groups.includes(s.group ?? s.id) && !done.has(s.group ?? s.id)).sort((a, b) => (b.group ?? b.id) - (a.group ?? a.id))[0];
+    if (!skill) return false;
+    const group = skill.group ?? skill.id;
+    done.add(group); c.imbued = [...done];
+    if (!M.imbue || groups.includes(M.imbue.group) && M.imbue.group < group) {
+      M.imbue = { id: skill.id, group };
+      this.message = 'Imbue in use: ' + World.skillName(skill.id) + '.'; Log.info('Leveling: ' + this.message); UI.toast(this.message, 'info', 5000);
+    }
     Settings.saveProfile();
     return true;
   },
@@ -513,26 +548,94 @@ const Leveling = {
     Settings.saveProfile();
     return true;
   },
+  // ---- builds
+  // The chosen build, or null for Auto (an unknown key is Auto too).
+  build() { const key = this.cfg().build; return key && key !== 'auto' ? this.builds.find(b => b.key === key) || null : null; },
+  fits(b) { const { country } = this.who(); return country === null || country === undefined || b.race === country; },
+  about() { const b = this.build(); return b ? b.about : 'Uses the weapon you wear: its mastery, then Cold, Lightning and Fire. Skills that root or block the character are never used.'; },
+  // Skill families -> the groups the game has for them (lowest tier first), without the blocked ones.
+  familyGroups() {
+    const w = World.groups;
+    if (this.familyCache?.src === w && this.familyCache.size === w.size) return this.familyCache.map;
+    const map = new Map();
+    for (const [group, rows] of w) {
+      const f = levelFamily(rows[0]);
+      if (!f || this.blockedGroups[group]) continue;
+      if (!map.has(f)) map.set(f, []);
+      map.get(f).push(group);
+    }
+    for (const list of map.values()) list.sort((a, b) => a - b);
+    this.familyCache = { src: w, size: w.size, map };
+    return map;
+  },
+  // Every group the build raises and learns, in order: rotation, buffs, imbue, extra learns, then the passives of its masteries.
+  buildGroups() {
+    const b = this.build();
+    if (!b) return [];
+    const fg = this.familyGroups(), out = [], seen = new Set();
+    const add = f => { for (const g of fg.get(f) || []) if (!seen.has(g)) { seen.add(g); out.push(g); } };
+    [...b.rotation, ...b.buffs, b.imbue, ...(b.learn || [])].filter(Boolean).forEach(add);
+    for (const [f, e] of Object.entries(BUILD_SKILLS)) if (e[2] === 'passive' && b.masteries.includes(e[0])) add(f);
+    return out;
+  },
+  setBuild(key) {
+    const c = this.cfg();
+    c.build = key === 'auto' || this.builds.some(b => b.key === key) ? key : 'auto';
+    c.prepared = ''; c.elements = ''; c.added = []; c.imbued = []; this.skillAt = 0;
+    AutoMastery.reset(); Settings.saveProfile();
+  },
+  // Skills leveling added on its own that root the character (Crystal Wall, Fire Wall) come out of the rotation and the
+  // buffs. One the player added by hand stays, with one line in the log.
+  dropBlocked() {
+    const c = this.cfg(), M = Settings.profile.macro, added = new Set(c.added || []), names = [];
+    for (const list of [M.rotations.normal, M.buffs]) {
+      for (let i = list.length - 1; i >= 0; i--) {
+        const group = list[i].group ?? list[i].id, why = this.blockedGroups[group];
+        if (!why) continue;
+        if (added.has(group)) { names.push(World.skillName(list[i].id)); list.splice(i, 1); }
+        else if (!this.warned.has(group)) { this.warned.add(group); Log.warn('Leveling: ' + World.skillName(list[i].id) + ' (added by you) ' + why + '; it stays in your list.'); }
+      }
+    }
+    if (!names.length) return;
+    Settings.saveProfile();
+    this.message = 'Taken out: ' + names.join(', ') + ' (they keep the character from moving).';
+    Log.info('Leveling: ' + this.message); UI.toast(this.message, 'info', 6000);
+  },
   // Newly learned attack skills join the normal rotation, newly learned self buffs the buffs, each group once: a skill
-  // the player takes out stays out. Only skills of the chosen masteries.
+  // the player takes out stays out. Only skills of the chosen masteries, never a blocked one. With a build only the
+  // build's own skills, placed in the build's order; a higher tier of a skill replaces the lower one.
   skillTick() {
     if (!this.skillsOn() || now() < this.skillAt) return;
     this.skillAt = now() + LEVEL_SKILL_CHECK_MS;
     this.prepare();
+    this.dropBlocked();
     if (!World.inWorld() || !World.groups.size) return;
     if (World.charName && this.cfg().elements !== World.charName && this.cfg().prepared === World.charName && this.addElements(Settings.profile.mastery)) { AutoMastery.reset(); Settings.saveProfile(); }
     this.imbueTick();
     this.petTick();
-    const c = this.cfg(), M = Settings.profile.macro, mine = new Set(AutoMastery.masteryGroups()), added = new Set(c.added || []), names = [];
-    const take = (s, list, extra) => {
+    const c = this.cfg(), M = Settings.profile.macro, build = this.build(), mine = new Set(AutoMastery.masteryGroups()), added = new Set(c.added || []), names = [];
+    const fg = build ? this.familyGroups() : null, learned = new Set(Learned.rows().map(s => s.group ?? s.id));
+    const rank = fams => { const r = new Map(); fams.forEach((f, i) => (fg.get(f) || []).forEach(g => r.set(g, i))); return r; };
+    const take = (s, list, extra, ranks) => {
       const group = s.group ?? s.id;
-      if (!mine.has(group) || added.has(group)) return;
+      if (this.blockedGroups[group] || added.has(group)) return;
+      if (build) {
+        if (!ranks.has(group)) return;
+        const tiers = fg.get(levelFamily(s)) || [], at = tiers.indexOf(group);
+        if (tiers.slice(at + 1).some(g => learned.has(g))) { added.add(group); return; }
+        // The lower tiers this one replaces: only those leveling put there itself.
+        for (const g of tiers.slice(0, at)) { const i = list.findIndex(e => (e.group ?? e.id) === g); if (i >= 0 && added.has(g)) list.splice(i, 1); }
+      } else if (!mine.has(group)) return;
       added.add(group);
       if (list.some(e => (e.group ?? e.id) === group)) return;
-      list.push({ id: s.id, group, ...extra }); names.push(World.skillName(s.id));
+      const entry = { id: s.id, group, ...extra };
+      const place = build ? list.findIndex(e => ranks.has(e.group ?? e.id) && ranks.get(e.group ?? e.id) > ranks.get(group)) : -1;
+      if (place >= 0) list.splice(place, 0, entry); else list.push(entry);
+      names.push(World.skillName(s.id));
     };
-    for (const s of UI.learnedSkills(false)) take(s, M.rotations.normal, {});
-    for (const s of UI.learnedSkills(true)) take(s, M.buffs, { enabled: true, mode: 'hunt', refreshS: 3 });
+    const attackRanks = build ? rank(build.rotation) : null, buffRanks = build ? rank(build.buffs) : null;
+    for (const s of UI.learnedSkills(false)) take(s, M.rotations.normal, {}, attackRanks);
+    for (const s of UI.learnedSkills(true)) take(s, M.buffs, { enabled: true, mode: 'hunt', refreshS: 3 }, buffRanks);
     if (added.size === (c.added || []).length) return;
     c.added = [...added]; Settings.saveProfile();
     if (names.length) { this.message = 'New skills in use: ' + names.join(', ') + '.'; Log.info('Leveling: ' + this.message); UI.toast(this.message, 'info', 5000); }
@@ -550,8 +653,8 @@ const Leveling = {
     UI.toast(on ? 'Zero-setup leveling on: the bot picks spots for your level and buys better NPC gear on town trips.' : 'Zero-setup leveling off.', 'info', 6000);
   },
   draw() {
-    const c = () => this.cfg(), status = el('p', this.status(), 'muted');
-    UI.refreshers.push(() => { status.textContent = this.status(); });
+    const c = () => this.cfg(), status = el('p', this.status(), 'muted'), about = el('p', this.about(), 'muted');
+    UI.refreshers.push(() => { status.textContent = this.status(); about.textContent = this.about(); });
     return UI.group('Zero-setup leveling',
       el('p', 'For levelling a character with no setup: the bot picks a hunting spot for your level from the game data, moves on as you level, and buys the next tier of weapon, armour and accessories from the town merchants on its town trips. Gear above +' + LEVEL_GEAR_MAX_PLUS + ' or protected gear is never replaced; Seal gear is replaced when the town sells a higher level, but kept in the bag, never sold. It can also raise your weapon\'s mastery, learn its skills, put new attack skills and buffs to use and spend stat points (Strength, or Intelligence for a caster); what you already set up there is kept.', 'muted'),
       UI.check('Level up by itself', () => c().on, v => this.enable(v)),
@@ -561,6 +664,8 @@ const Leveling = {
       UI.check('Sell the replaced piece back', () => c().sellOld, v => { c().sellOld = v; }),
       UI.check('Move to the next town when this one has no better gear (Jangan, then Donwhang, then Hotan)', () => c().move, v => { c().move = v; this.moveFailed.clear(); this.moveFailedAt.clear(); this.movedFrom.clear(); }),
       UI.check('Raise my weapon mastery, learn its skills and use them', () => c().skills, v => { c().skills = v; c().prepared = ''; c().elements = ''; c().imbued = []; this.skillAt = 0; }),
+      UI.select('Character build', () => [['auto', 'Auto (from my weapon)'], ...this.builds.filter(b => this.fits(b) || b.key === c().build).map(b => [b.key, b.label])], () => this.build()?.key || 'auto', v => this.setBuild(v)),
+      about,
       UI.number('Always keep this much gold', () => c().reserve, v => { c().reserve = v; }, 0, 100000000, 1000),
       status);
   },

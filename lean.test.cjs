@@ -3100,6 +3100,89 @@ test('newly learned attack skills of the mastery join the rotation once; one the
   f.advance(6000); f.Leveling.skillTick();
   assert.deepEqual([...f.Settings.profile.macro.rotations.normal], [], 'taken out by the player: it stays out, even after a new level');
 });
+// Real group ids from the game data: Crystal Wall A 246, Fire Wall A 283, Wolf bite spear A/B 196/197, Dancing demon spear A 202,
+// Soul spear A 205, Ghost spear A 208, Flying dragon A 213.
+function buildSkills(f, rows) {
+  const row = ([id, group, symbol, targeted, mastery, level = 1]) => ({ id, group, level, nameSymbol: 'SN_SKILL_' + symbol, trainable: true, spCost: 10, masteries: [{ ID: mastery, Level: 1 }],
+    prerequisites: [], reqStr: 0, reqInt: 0, targetRequired: targeted, targets: targeted ? 4 : 1, active: true });
+  f.World.rebuildCatalog(rows.map(row));
+}
+const WALL_ROWS = [[99, 246, 'CH_COLD_BINGBYEOK_A', false, 273], [136, 283, 'CH_FIRE_HWABYEOK_A', false, 275], [300, 270, 'CH_FIRE_GONGUP_A', false, 275], [301, 271, 'CH_SWORD_SMASH_A', true, 257]];
+const gs = l => [...l].map(e => e.group);
+const learnNow = (f, ids) => { f.World.applyGameplay({ ...f.World.gp, skills: ids }); f.advance(6000); f.Leveling.skillTick(); };
+test('zero-setup leveling in Auto never uses Crystal Wall or Fire Wall, as attack or buff', () => {
+  const f = levelingSkillFixture(); buildSkills(f, WALL_ROWS);
+  assert.equal(f.Leveling.blockedGroups[246], 'roots the character'); assert.equal(f.Leveling.blockedGroups[283], 'roots the character');
+  f.Leveling.skillTick(); learnNow(f, [99, 136, 300, 301]);
+  const M = f.Settings.profile.macro;
+  assert.deepEqual(gs(M.buffs), [270], 'only the ordinary buff is used');
+  assert.deepEqual(gs(M.rotations.normal), [271]);
+  assert.deepEqual([...f.Settings.profile.leveling.added].sort(), [270, 271], 'a blocked skill is not marked as added either');
+});
+test('walls that leveling added come out of existing profiles; walls the player added stay', () => {
+  const f = levelingSkillFixture(); buildSkills(f, WALL_ROWS);
+  const M = f.Settings.profile.macro, L = f.Settings.profile.leveling;
+  M.buffs = [{ id: 99, group: 246, enabled: true }, { id: 136, group: 283, enabled: true }, { id: 300, group: 270, enabled: true }];
+  M.rotations.normal = [{ id: 99, group: 246 }, { id: 301, group: 271 }];
+  L.added = [246, 270, 271];
+  f.Leveling.skillTick();
+  assert.deepEqual(gs(M.buffs), [283, 270], 'Crystal Wall went (leveling added it); the Fire Wall the player chose stays');
+  assert.deepEqual(gs(M.rotations.normal), [271]);
+  assert.match(f.Leveling.message, /Taken out: .*keep the character from moving/);
+  assert.equal(f.Leveling.warned.has(283), true, 'the one the player added is noted once, not removed');
+});
+const GLAIVE_ROWS = [[208, 208, 'CH_SPEAR_ROUNDAREA_A', true, 258], [202, 202, 'CH_SPEAR_FRONTAREA_A', true, 258], [205, 205, 'CH_SPEAR_STUN_A', true, 258], [196, 196, 'CH_SPEAR_PIERCE_A', true, 258],
+  [197, 197, 'CH_SPEAR_PIERCE_B', true, 258], [213, 213, 'CH_SPEAR_SHOOT_A', true, 258], [300, 270, 'CH_FIRE_GONGUP_A', false, 275], [302, 272, 'CH_FIRE_SHIELD_A', false, 275],
+  [310, 310, 'CH_FIRE_GIGONGTA_A', false, 275], [311, 311, 'CH_LIGHTNING_GIGONGTA_A', false, 274], [320, 320, 'CH_SPEAR_PASSIVE_A', false, 258], [321, 321, 'CH_COLD_PASSIVE_A', false, 273]];
+test('a build raises its masteries in order, learns and uses only its skills in its order, and one imbue', () => {
+  const f = levelingSkillFixture(5); buildSkills(f, GLAIVE_ROWS);
+  f.Leveling.setBuild('glaive');
+  f.Leveling.skillTick();
+  const M = f.Settings.profile.mastery, R = f.Settings.profile.macro;
+  assert.deepEqual([...M.ids], [258, 275, 274], 'Heuksal, Fire, Lightning');
+  assert.equal(M.scope, 'build'); assert.equal(M.enabled, true);
+  assert.match(f.Leveling.message, /Heuksal, Fire, Lightning for the Glaive nuker build/);
+  assert.deepEqual([...f.AutoMastery.wanted()].sort((a, b) => a - b), [196, 197, 202, 205, 208, 270, 310, 320], 'only the build skills are learned: no Flying dragon, Fire shield, Lightning imbue or Cold passive');
+  learnNow(f, [196]);
+  learnNow(f, [196, 208]);
+  learnNow(f, [196, 208, 213, 205, 202, 302, 300]);
+  assert.deepEqual(gs(R.rotations.normal), [208, 202, 205, 196], 'the build order, whatever order they were learned in; Flying dragon is left out');
+  assert.deepEqual(gs(R.buffs), [270], 'Fire Force yes, Fire Shield no');
+  learnNow(f, [196, 197, 208, 213, 205, 202, 302, 300]);
+  assert.deepEqual(gs(R.rotations.normal), [208, 202, 205, 197], 'a higher tier replaces the lower one of the same skill');
+  learnNow(f, [196, 197, 208, 213, 205, 202, 302, 300, 310, 311]);
+  assert.equal(R.imbue.group, 310, 'the build own imbue, one only');
+  assert.equal(f.Settings.profile.statPoints.str, 1, 'a Chinese glaive goes Strength');
+});
+test('changing the build starts the setup again; an old profile and an unknown build are Auto', () => {
+  const f = levelingSkillFixture(5), L = f.Settings.profile.leveling;
+  Object.assign(L, { prepared: 'Tester', elements: 'Tester', added: [1, 2], imbued: [3] });
+  f.Leveling.setBuild('bow');
+  assert.deepEqual([L.build, L.prepared, L.elements, [...L.added], [...L.imbued]], ['bow', '', '', [], []]);
+  assert.equal(f.Leveling.build().label, 'Bow nuker');
+  f.Leveling.setBuild('nonsense'); assert.equal(L.build, 'auto'); assert.equal(f.Leveling.build(), null);
+  L.build = 'gone'; assert.equal(f.Leveling.build(), null, 'a build that no longer exists is Auto');
+  assert.equal(f.botProfile({ leveling: { on: true, reserve: 77 } }).leveling.build, 'auto', 'an old profile has no build: Auto');
+  assert.equal(f.DEFAULT_PROFILE.leveling.build, 'auto');
+  assert.ok(f.Leveling.builds.every(b => b.masteries.length && b.rotation.length && b.weapon.length), 'every preset is complete');
+});
+test('the gear plan buys the build weapon type and a shield, never over enhanced gear', () => {
+  const f = gearFixture(), gp = f.World.gp;
+  gp.progression.gold = '100000';
+  f.Leveling.gear.T.push([80, 'smith', 6, 6, 0, 2, 8, 3000], [90, 'smith', 4, 1, 0, 2, 1, 500]);
+  f.Leveling.index = null;
+  const plan = () => f.Leveling.plan().map(w => w.socket + ':' + w.row[0]).join(' ');
+  f.Settings.profile.leveling.build = 'bow';
+  assert.ok(plan().split(' ').includes('6:80'), 'a bow build wearing a sword buys the bow');
+  f.Settings.profile.leveling.build = 'sword';
+  assert.ok(!plan().includes('6:80') && plan().split(' ').includes('7:90'), 'a sword build keeps its sword type and fills the empty shield socket');
+  f.Settings.profile.leveling.build = 'bow';
+  gp.inventory.find(i => i.slot === 6).plus = 5;
+  assert.ok(!plan().includes('6:80'), 'an enhanced weapon is never replaced for a build');
+  gp.inventory.find(i => i.slot === 6).plus = 0;
+  f.Settings.profile.leveling.build = 'auto';
+  assert.ok(!plan().includes('6:80'), 'Auto keeps the worn weapon type');
+});
 test('Max every skill learns every skill group, unlearned ones too, one confirmed level at a time, then says what is left', () => {
   const f = skillFixture({}, []);
   f.Settings.profile.mastery.skills = false; f.Settings.profile.mastery.reserve = 1000; f.Settings.profile.mastery.gap = 25;
