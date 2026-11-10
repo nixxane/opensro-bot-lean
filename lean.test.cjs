@@ -3989,6 +3989,18 @@ test('the end of a moving trip goes to the new town statue instead of back to th
   assert.equal(f.Leveling.move?.phase, 'walk', 'the move takes over from the walk back');
   assert.match(f.WalkBack.active?.label || '', /Donwhang world statue/);
 });
+test('started in the old town (live: recalled to Jangan, then started), the town trip carries the move', () => {
+  const f = moveFixture(), gp = f.World.gp;
+  gp.progression.level = 12; f.Hunt.running = true;
+  f.World.pose = () => ({ regionId: 1, x: 120, y: 0, z: 100 });
+  const detect = f.Town.detect; f.Town.detect = (p = f.World.pose()) => detect(p);
+  assert.equal(f.Controller.townReturn(), true, 'in the town of the saved services: the town cycle takes over');
+  assert.equal(f.Town.trip?.move, 'WC', 'and goes on to Donwhang after the services');
+  f.Town.supplyShort = () => false; f.Town.damaged = () => [];
+  f.Town.leave();
+  assert.equal(f.Leveling.move?.phase, 'walk');
+  assert.match(f.WalkBack.active?.label || '', /Donwhang world statue/);
+});
 test('spots around the town of the return point come first (live: Donwhang spots picked with the return point in Jangan)', () => {
   const f = moveFixture();
   f.Town.cfg().arrival = { regionId: 1, x: 100, y: 0, z: 100 };

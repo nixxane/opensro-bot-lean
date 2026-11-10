@@ -194,8 +194,10 @@ const Leveling = {
   // Town.begin: the plan this trip carries, and where the armour and accessory merchants stand.
   begin(t) {
     t.gear = [];
-    // The move to the next town rides on this trip: at its end the bot goes there instead of back to the spot.
-    const c = this.cfg(), next = c.on && c.move && !t.revival && !this.move ? this.nextTown(World.gp?.progression?.level) : null;
+    // The move to the next town rides on this trip: at its end the bot goes there instead of back to the spot. Revival
+    // trips too: a start in town (live: recalled to Jangan by hand, then started) and a trip after a death both run as
+    // one, and both already stand in the old town.
+    const c = this.cfg(), next = c.on && c.move && !this.move ? this.nextTown(World.gp?.progression?.level) : null;
     t.move = next?.key || '';
     if (next) Log.info('Leveling: after the services this trip goes on to ' + next.name + ' and makes it the return point.');
     if (!this.gearOn()) return;
