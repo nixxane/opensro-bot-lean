@@ -28,6 +28,9 @@ const LevelSpot = {
     if (Leveling.spotsOn()) {
       const next = Leveling.advance(level);
       if (!next) return false;
+      // Another town's spot: move there first (return point), the spot is picked again on arrival.
+      if (Leveling.foreign(next) && Leveling.startMove(next.townKey)) return true;
+      if (Leveling.foreign(next)) return false;
       const H = Hunt.cfg();
       H.center = { ...next.center };
       Settings.saveProfile(); bus.emit('center');
@@ -85,6 +88,11 @@ const LevelSpot = {
     this.retry = false;
     const spot = (Leveling.spotsOn() ? null : this.heldSpot()) || this.spotFor(level), H = Hunt.cfg();
     if (!spot || this.same(spot.center, H.center)) return false;
+    // A spot around another town: the character moves there and makes it the return point, then hunts (lean-leveling.js).
+    if (Leveling.spotsOn() && Leveling.foreign(spot)) {
+      if (Leveling.startMove(spot.townKey)) return true;
+      return false;
+    }
     H.center = { ...spot.center };
     Settings.saveProfile(); bus.emit('center');
     this.message = spot.auto ? 'Level ' + level + ': hunting moved to a level ' + spot.level + ' spot.' : 'Level ' + level + ': moved the hunting spot to the one from level ' + spot.level + '.';

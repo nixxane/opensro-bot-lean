@@ -13,7 +13,7 @@
 // armour or accessory socket is filled. Purchases happen on any town trip, in the shop, one confirmed transaction at a
 // time; the new piece is worn at once and the old one sold back there. A plan the town can pay for starts a trip by
 // itself, once per plan.
-const LEVEL_SPOT_REACH_M = 5000, LEVEL_SPOT_BELOW = 5, LEVEL_SPOT_ABOVE = 2, LEVEL_SPOT_KEEP = 2, LEVEL_GEAR_MAX_PLUS = 3, LEVEL_GEAR_CHECK_MS = 20000, LEVEL_SPOT_WALK_FAILS = 5, LEVEL_TIER_GAP = 3, LEVEL_MOVE_CHECK_MS = 10000, LEVEL_MOVE_STEP_MS = 15000;
+const LEVEL_SPOT_REACH_M = 5000, LEVEL_SPOT_BELOW = 5, LEVEL_SPOT_ABOVE = 2, LEVEL_SPOT_KEEP = 2, LEVEL_GEAR_MAX_PLUS = 3, LEVEL_GEAR_CHECK_MS = 20000, LEVEL_SPOT_WALK_FAILS = 5, LEVEL_TIER_GAP = 3, LEVEL_MOVE_CHECK_MS = 10000, LEVEL_MOVE_STEP_MS = 15000, LEVEL_MOVE_RETRY_MS = 600000;
 // Equipment sockets by TID4 (OpenSRO inventory/slots.go, native sub_594980): armour parts and accessories.
 // The mastery each weapon type trains (TID4 of the weapon; OpenSRO masteries 257-276 Chinese, 513-518 European), and the
 // European masteries that fight with Intelligence.
@@ -28,7 +28,7 @@ const Leveling = {
   // The generated tables, as properties so a test can lay its own over them.
   spots: LEVEL_SPOTS, gear: LEVEL_GEAR, shopsData: LEVEL_SHOPS,
   skillAt: 0,
-  current: null, walkFails: 0, move: null, moveAt: 0, moveFailed: new Set(), skipped: new Set(), tried: new Set(), refused: new Set(), checkAt: 0, due_: '', index: null, message: '',
+  current: null, walkFails: 0, move: null, moveAt: 0, moveFailed: new Set(), moveFailedAt: new Map(), movedFrom: new Set(), skipped: new Set(), tried: new Set(), refused: new Set(), checkAt: 0, due_: '', index: null, message: '',
   cfg() { return Settings.profile.leveling; },
   spotsOn() { const c = this.cfg(); return !!(c.on && c.spots); },
   gearOn() { const c = this.cfg(); return !!(c.on && c.gear); },
@@ -65,8 +65,10 @@ const Leveling = {
       const key = this.key(s);
       if (!this.owners.has(key)) this.owners.set(key, this.townOf(center)?.key ?? null);
       const owner = this.owners.get(key), g = !homeTown || !owner || owner === homeTown ? own : other;
+      // Another town's spot is only for a character that can move there (and so make it the return point first).
+      if (g === other && !this.moveOpen(owner)) continue;
       // above: when nothing at or below the level is in reach (a new character), the nearest few levels up.
-      const pick = { level: s[4], center, key, auto: true, score: s[4] * 400 + Math.min(s[7], 12) * 40 - d / 30 };
+      const pick = { level: s[4], center, key, auto: true, townKey: owner, score: s[4] * 400 + Math.min(s[7], 12) * 40 - d / 30 };
       if (s[4] > level) { pick.score = -s[4] * 400 + Math.min(s[7], 12) * 40 - d / 30; if (!g.above || pick.score > g.above.score) g.above = pick; continue; }
       if (s[4] < level - LEVEL_SPOT_BELOW) { if (!g.fallback || pick.score > g.fallback.score) g.fallback = pick; continue; }
       if (!g.best || pick.score > g.best.score) g.best = pick;
@@ -320,11 +322,28 @@ const Leveling = {
     let pick = null;
     for (const [key, rows] of Object.entries(this.gear)) {
       const town = Town.towns.find(t => t.key === key);
-      if (key === home.key || this.moveFailed.has(key) || !town?.services?.gate) continue;
+      if (key === home.key || !this.moveOpen(key) || !town?.services?.gate) continue;
       const start = Math.min(...rows.filter(r => mine(r) && r[6] > homeMax && r[6] <= level).map(r => r[6]));
       if (Number.isFinite(start) && (!pick || start < pick.start)) pick = { town, start };
     }
     return pick?.town || null;
+  },
+  // A move to this town may be started: the switch is on, the town has a world statue, an earlier move there did not fail
+  // (until the retry time) and it is not a town this session already moved away from.
+  moveOpen(key) {
+    const c = this.cfg(), town = Town.towns.find(t => t.key === key);
+    if (!c.on || !c.move || !town?.services?.gate || this.movedFrom.has(key)) return false;
+    if (this.moveFailed.has(key)) {
+      if (now() - (this.moveFailedAt.get(key) ?? -Infinity) < LEVEL_MOVE_RETRY_MS) return false;
+      this.moveFailed.delete(key); this.moveFailedAt.delete(key);
+    }
+    return true;
+  },
+  // A hunting spot of another town than the return point's: the character moves there (return point first) instead of
+  // only walking or teleporting to it (live: hunted in Donwhang with the return point still in Jangan).
+  foreign(spot) {
+    const home = this.townOf(this.home())?.key;
+    return !!(spot?.townKey && home && spot.townKey !== home);
   },
   // The town trip reason (Town.reason): the next town is open. Checked every LEVEL_MOVE_CHECK_MS while hunting.
   moveDue() {
@@ -340,10 +359,11 @@ const Leveling = {
   // Town.leave, in the home town after the services: on to the new town's world statue (with its teleport), instead of
   // the walk back to the hunting spot. False when there is nothing to move to any more.
   startMove(key) {
-    const town = Town.towns.find(t => t.key === key);
-    if (!town?.services?.gate || this.moveFailed.has(key) || !World.inWorld() || World.isDead()) return false;
+    const town = Town.towns.find(t => t.key === key), home = this.townOf(this.home());
+    if (!town?.services?.gate || !this.moveOpen(key) || !World.inWorld() || World.isDead()) return false;
     const s = town.services.gate, stand = Town.standPoint(s, town.arrival);
-    this.move = { key: town.key, name: town.name, phase: 'walk', at: now(), tries: 0, character: World.charName,
+    if (home?.key) this.movedFrom.add(home.key);
+    this.move = { key: town.key, home: home?.key, name: town.name, phase: 'walk', at: now(), tries: 0, character: World.charName,
       gate: { ...stand.point, refObjId: s.refObjId, npc: { regionId: s.regionId, x: s.x, y: s.y, z: s.z } } };
     this.moveDue_ = '';
     this.message = 'Moving to ' + town.name + ': its merchants sell the next gear for your level.';
@@ -404,7 +424,8 @@ const Leveling = {
     this.reset();
     this.message = 'Moved to ' + m.name + ': it is the return point now, and the bot hunts and shops there.';
     Log.info('Leveling: ' + this.message); UI.toast(this.message, 'info', 8000);
-    const spot = this.spotsOn() ? this.spot(World.gp?.progression?.level) : null, H = Hunt.cfg();
+    let spot = this.spotsOn() ? this.spot(World.gp?.progression?.level) : null; const H = Hunt.cfg();
+    if (spot && this.foreign(spot)) spot = null;
     if (spot) { H.center = { ...spot.center }; Settings.saveProfile(); bus.emit('center'); }
     // A first trip right here: the new town's potions and gear, then the walk to its spot. Without what a trip needs
     // (potions chosen, gold), straight to the spot.
@@ -420,10 +441,11 @@ const Leveling = {
   // else: this town is left alone for the session and hunting goes on where it was.
   moveFail(reason, m = this.move) {
     if (!m) return;
+    if (m.home) this.movedFrom.delete(m.home);
     this.move = null; this.moveAt = now() + LEVEL_MOVE_CHECK_MS;
     const died = World.isDead();
-    if (!died) this.moveFailed.add(m.key);
-    this.message = 'Move to ' + m.name + ' stopped: ' + reason + (died ? '; it is tried again after the revive.' : '.');
+    if (!died) { this.moveFailed.add(m.key); this.moveFailedAt.set(m.key, now()); }
+    this.message = 'Move to ' + m.name + ' stopped: ' + reason + (died ? '; it is tried again after the revive.' : '; the return point is unchanged, it is tried again in ' + Math.round(LEVEL_MOVE_RETRY_MS / 60000) + ' minutes.');
     Log.warn('Leveling: ' + this.message); UI.toast(this.message, 'warn', 8000);
     if (WalkBack.active?.onDone) WalkBack.cancel('', true);
     if (died) Hunt.start(); else if (World.inWorld()) WalkBack.start(true);
@@ -520,7 +542,7 @@ const Leveling = {
     const c = this.cfg(), T = Town.cfg();
     c.on = on;
     if (on) {
-      c.prepared = ''; c.elements = ''; c.imbued = []; c.pet = ''; this.skillAt = 0; this.moveFailed.clear();
+      c.prepared = ''; c.elements = ''; c.imbued = []; c.pet = ''; this.skillAt = 0; this.moveFailed.clear(); this.moveFailedAt.clear(); this.movedFrom.clear();
       T.noXp = { ...T.noXp, on: true, action: 'nextSpot' };
       if (!T.enabled && World.inWorld()) Setup.setupTown();
     }
@@ -537,7 +559,7 @@ const Leveling = {
       UI.check('Buy better gear from the town merchants', () => c().gear, v => { c().gear = v; }),
       UI.check('Also buy earrings, necklaces and rings', () => c().accessories, v => { c().accessories = v; }),
       UI.check('Sell the replaced piece back', () => c().sellOld, v => { c().sellOld = v; }),
-      UI.check('Move to the next town when this one has no better gear (Jangan, then Donwhang, then Hotan)', () => c().move, v => { c().move = v; this.moveFailed.clear(); }),
+      UI.check('Move to the next town when this one has no better gear (Jangan, then Donwhang, then Hotan)', () => c().move, v => { c().move = v; this.moveFailed.clear(); this.moveFailedAt.clear(); this.movedFrom.clear(); }),
       UI.check('Raise my weapon mastery, learn its skills and use them', () => c().skills, v => { c().skills = v; c().prepared = ''; c().elements = ''; c().imbued = []; this.skillAt = 0; }),
       UI.number('Always keep this much gold', () => c().reserve, v => { c().reserve = v; }, 0, 100000000, 1000),
       status);

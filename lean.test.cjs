@@ -4044,6 +4044,57 @@ test('spots around the town of the return point come first (live: Donwhang spots
   f.Leveling.spots = [[1, 1400, 0, 100, 11, 11, 11, 9]]; f.Leveling.reset();
   assert.equal(f.Leveling.spot(11).level, 11, 'no Jangan spot at all: the other town is used');
 });
+function foreignSpotFixture() {
+  const f = moveFixture(), gp = f.World.gp;
+  f.Settings.profile.leveling.spots = true;
+  f.Town.cfg().arrival = { regionId: 1, x: 100, y: 0, z: 100 };
+  // Jangan has no spot near level 11; Donwhang has one (live: Donwhang spots hunted with the return point in Jangan).
+  f.Leveling.spots = [[1, 1400, 0, 100, 11, 11, 11, 9]];
+  f.Leveling.reset(); f.Leveling.owners = null;
+  f.Hunt.cfg().center = { regionId: 1, x: 300, y: 0, z: 100 };
+  f.Hunt.running = true; f.LevelSpot.nextAt = 0;
+  return { f, gp };
+}
+test('a hunting spot in another town moves there first: the return point is set at its statue before hunting (live: Donwhang spot, Jangan return point)', () => {
+  const { f, gp } = foreignSpotFixture(), c = f.Town.cfg();
+  const old = JSON.stringify(f.Hunt.cfg().center);
+  assert.equal(f.LevelSpot.tick(), true);
+  assert.equal(f.Leveling.move?.key, 'WC', 'the move to Donwhang starts');
+  assert.equal(JSON.stringify(f.Hunt.cfg().center), old, 'the hunting spot is not switched before the return point is set');
+  assert.equal(f.Hunt.running, false);
+  assert.match(f.WalkBack.active?.label || '', /Donwhang world statue/);
+  statueReady(f);
+  f.Leveling.moveTick(); f.advance(1500); f.Leveling.moveTick();
+  gp.npcConversation = { gid: 990, phase: 'menu' };
+  f.Leveling.moveTick();
+  assert.deepEqual(f.commands.filter(x => x.kind === 'recall-appoint').map(x => x.gid), [990]);
+  assert.equal(c.arrival.x, 100, 'not confirmed yet');
+  f.bus.emit('notice', { key: 'UIIT_MSG_STATE_REBIRTH_POINT_APPOINT', sequence: 1 });
+  f.Leveling.moveTick();
+  assert.equal(c.arrival.x, 1500, 'confirmed: Donwhang is the return point');
+  assert.equal(f.Hunt.cfg().center.x, 1400, 'and only now the hunting spot is the Donwhang one');
+});
+test('without the move (switch off or failed) another town\'s spot is never walked to', () => {
+  const { f } = foreignSpotFixture();
+  f.Settings.profile.leveling.move = false;
+  assert.equal(f.Leveling.spot(11), null, 'move off: no spot in the other town');
+  assert.equal(f.LevelSpot.tick(), false);
+  assert.equal(f.Leveling.move, null);
+  assert.equal(f.Hunt.cfg().center.x, 300);
+  f.Settings.profile.leveling.move = true;
+  f.World.gp.progression.level = 12; moveTrip(f); statueReady(f); f.World.gp.targetCapabilities = 0; f.Leveling.moveTick();
+  assert.ok(f.Leveling.moveFailed.has('WC'));
+  assert.equal(f.Leveling.spot(11), null, 'a failed move: not hunting there with the old return point');
+});
+test('a failed move to the next town is tried again after a while, and the failure says the return point is unchanged', () => {
+  const f = moveFixture();
+  f.World.gp.progression.level = 12; moveTrip(f); statueReady(f);
+  f.World.gp.targetCapabilities = 0; f.Leveling.moveTick();
+  assert.match(f.Leveling.message, /return point is unchanged/);
+  assert.equal(f.Leveling.nextTown(12), null, 'not at once');
+  f.advance(11 * 60000);
+  assert.equal(f.Leveling.nextTown(12)?.key, 'WC', 'a later trip tries again');
+});
 test('a trip for gear alone waits for the last piece of the tier (live: a trip at every level from 8 to 13)', () => {
   const f = gearFixture(), gp = f.World.gp;
   // The tier opens at 8 (weapon) and ends at 11 (a helmet); the next tier starts at 16.
