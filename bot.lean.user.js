@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         nixxane bot
 // @namespace    https://opensro.online/
-// @version      1.2.255
+// @version      1.2.256
 // @updateURL    https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.meta.js
 // @downloadURL  https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -22,7 +22,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[NIX] Another SRO assistant is active. Disable it and reload to use NIX.');
   return;
 }
-const VERSION = '1.2.255';
+const VERSION = '1.2.256';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -370,12 +370,57 @@ const Sound = {
     });
     bus.on('profile', () => { this.level = null; });
   },
+  // A user-chosen audio file replaces the chime for these alerts. It lives in local storage (not the profile, so shares stay small).
+  customKinds: ['sox'],
+  customMaxBytes: 1024 * 1024,
+  buffers: {},
+  customKey(kind) { return 'sound:' + kind; },
+  custom(kind) { return this.customKinds.includes(kind) ? Store.get(this.customKey(kind), null) : null; },
+  setCustom(kind, file) {
+    return new Promise((resolve, reject) => {
+      if (!file) return reject(new Error('no file'));
+      if (file.size > this.customMaxBytes) return reject(new Error('the file is larger than 1 MB'));
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('the file could not be read'));
+      reader.onload = async () => {
+        const data = String(reader.result || '');
+        this.unlock();
+        try { await this.decode(data); } catch { return reject(new Error('the browser cannot play that file')); }
+        if (!Store.set(this.customKey(kind), { name: file.name, data })) return reject(new Error('browser storage is full'));
+        delete this.buffers[kind];
+        resolve();
+      };
+      reader.readAsDataURL(file);
+    });
+  },
+  clearCustom(kind) { Store.remove(this.customKey(kind)); delete this.buffers[kind]; },
+  async decode(dataUrl) {
+    const ctx = this.ctx; if (!ctx) throw new Error('no audio');
+    const bytes = Uint8Array.from(W.atob(dataUrl.slice(dataUrl.indexOf(',') + 1)), c => c.charCodeAt(0));
+    return await ctx.decodeAudioData(bytes.buffer);
+  },
+  playBuffer(buffer) {
+    const ctx = this.ctx, source = ctx.createBufferSource(), gain = ctx.createGain();
+    source.buffer = buffer; gain.gain.value = 0.8;
+    source.connect(gain); gain.connect(ctx.destination);
+    source.onended = () => { source.disconnect(); gain.disconnect(); };
+    source.start();
+  },
   play(kind) {
     const tone = this.tones[kind];
     if (!tone) return false;
     try {
       const ctx = this.ctx;
       if (!ctx || ctx.state !== 'running') return false;
+      const custom = this.custom(kind);
+      if (custom?.data) {
+        const cached = this.buffers[kind];
+        if (cached?.data === custom.data) { this.playBuffer(cached.buffer); return true; }
+        // First play after a reload decodes the saved file; a file that no longer decodes falls back to the chime.
+        this.decode(custom.data).then(buffer => { this.buffers[kind] = { data: custom.data, buffer }; this.playBuffer(buffer); })
+          .catch(() => { Store.remove(this.customKey(kind)); this.play(kind); });
+        return true;
+      }
       tone.notes.forEach((frequency, i) => {
         const oscillator = ctx.createOscillator(), gain = ctx.createGain();
         const at = ctx.currentTime + i * tone.gap;
@@ -16904,7 +16949,7 @@ const Alchemy = {
 };
 
 
-const RELEASE_NOTES = [{"version": "1.2.255", "title": "Leveling keeps the weapon type your character started with", "items": ["A blade character could end up buying swords. Auto-equip treated every weapon as the same kind, so a dropped sword with better stats replaced the blade, and leveling then bought the next sword at every tier.", "With Level up by itself on, the bot now remembers the weapon type your character had when leveling first saw it (a new character's starting weapon) and keeps buying that type. If it holds another type, the next town trip buys the right one back. Choosing a build in \"Character build\" still decides the weapon instead.", "Auto-equip now only swaps a weapon for one of the same type.", "A character that already switched type is remembered with the weapon it holds now. If that is wrong, pick a build with the right weapon in \"Character build\"."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.254", "title": "Leveling never uses wall skills, and you can pick a character build", "items": ["Zero-setup leveling no longer uses Crystal Wall and Fire Wall (they keep the character from moving). Teleports, dashes, hides, traps, auras and transforms are left out too.", "Wall skills that leveling added to an existing profile are taken out. Skills you added yourself stay.", "New \"Character build\" choice in zero-setup leveling: Auto (as before, minus the blocked skills), or Glaive nuker, Spear fighter, Blade tank, Sword fighter, Bow nuker, Force support, Wizard, Warlock, Warrior, Rogue, Cleric, Bard.", "A build sets the masteries and their order, learns only its own skills, puts them in its order, uses one imbue and buys its weapon type (and a shield) on a town trip. Enhanced or protected gear is never replaced.", "Changing the build starts the setup again for that character. Skills already learned stay learned; skill points are not refunded."], "note": "Only tested in simulation. Not tried on the live server yet. The builds come from community guides and the game data, so check one before you rely on it."}, {"version": "1.2.253", "title": "Leveling makes Donwhang the return point before hunting there", "items": ["A Jangan character could teleport to Donwhang and hunt there with the return point still in Jangan. When Jangan had no hunting spot near the character's level, the bot picked a Donwhang spot and simply travelled to it, skipping the move. Every death and return scroll then went back to Jangan.", "Now a hunting spot near another town always starts the move first: the bot goes to that town's world statue, makes it the return point, and only hunts there once the game confirms it. With \"Move to the next town\" off, it never hunts around another town.", "A move that fails no longer gives up on that town for the whole session. The log says the return point is unchanged, and the bot tries again after 10 minutes."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.252", "title": "Leveling uses the town the character is really in", "items": ["A character whose bot town was saved as Donwhang while the game's return point was still Jangan (for example, leveling was switched on while hunting near Donwhang) walked from Jangan all the way to the Donwhang warehouse on every trip. The move to Donwhang never came either, because the bot thought it already lived there.", "With Level up by itself on, the town services now follow the town the character is really in: the town it stands in when the bot starts or after a revive, and the town its return scroll lands in. Starting the bot in Jangan uses the Jangan warehouse and merchants. Once Donwhang is due (level 24 for Chinese characters), the trip goes on to Donwhang by the statue teleport and makes it the return point.", "Without Level up by itself, the saved town is never changed."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.251", "title": "Leveling moves to Donwhang when started in Jangan, or after a death", "items": ["With the character in Jangan (recalled by hand, or revived there after a death), starting the bot did the town services and then walked back to the old Jangan hunting spot, even when Donwhang was due (level 24 for Chinese characters). The move to Donwhang only rode on trips started in the field. Now any town trip carries it: after the services in Jangan, the bot takes the world statue teleport to Donwhang, makes Donwhang the return point, shops there and hunts there."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.250", "title": "Leveling really moves to Donwhang: return point, shopping and spots there", "items": ["The move to the next town never set the return point. The bot reached the Donwhang world statue but sent the request without opening the statue's menu, and the game ignores it then. The move counted as failed, so the return point stayed in Jangan: every death and town trip landed in Jangan and walked all the way back. The bot now opens the statue's menu first, then sets the return point.", "The move now starts as a town trip: the return scroll takes the character to Jangan, the services run there, then it takes the world statue teleport (or the ferry when that is cheaper) to Donwhang and makes Donwhang the return point.", "Right after the move, the bot does a first town trip in Donwhang: it buys the potions and the next gear there, then walks to a Donwhang hunting spot. From then on every trip goes to Donwhang. The same happens later from Donwhang to Hotan.", "Hunting spots now stay near the town of the return point. Before, a Jangan character at level 18 to 23 often walked to spots near Donwhang, far from where it revives. It only uses another town's spots when its own has nothing near its level."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.249", "title": "A completely full bag goes to the warehouse instead of stopping the trip", "items": ["A character whose bag had filled up all the way (no free slot) used to arrive in town and stop there with \"free a character bag slot\", even when the warehouse could take things out of its bag. With \"Sell items from the character bag\" off, that happened on almost every late trip. The warehouse now goes first and makes the room, and the trip carries on.", "A bag with nothing the warehouse takes still stops the trip with the same message, as before."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.248", "title": "Leveling reaches Donwhang, and the pet collects the drops", "items": ["The move to the next town never got there: its walk from Jangan to Donwhang tried to cross the river on foot, failed, and the bot then left Donwhang alone for the session. A character past level 24 kept hunting around Jangan, sometimes at a spot with no monsters. The move now uses the world statue's teleport (Jangan to Donwhang, later Donwhang to Hotan), then makes the new town the return point as before.", "Any walk the bot makes between places (not only the way to the hunting spot) now takes a ferry or teleport when one is needed. Auto trade still walks.", "With Level up by itself on and a pickup pet summoned, the pet now collects the drops, gold and gear included, instead of the character running for them. This happens once per character, and only when pickup was still on its default. If you switch it back by hand, it stays."], "note": "Tested in simulation with the game's real route data, not in a live game."}];
+const RELEASE_NOTES = [{"version": "1.2.256", "title": "Pick your own sound for SoX drops", "items": ["Hunting → Loot has a new \"Custom SoX sound…\" button under the SoX chime. Choose an audio file (mp3, wav, ogg, up to 1 MB) and the bot plays it instead of the built-in chime when it picks up Star, Moon or Sun gear.", "\"Use built-in chime\" puts the old sound back. Test SoX chime plays whichever sound is set.", "The sound is saved in this browser only, so it is not part of shared or exported settings."]}, {"version": "1.2.255", "title": "Leveling keeps the weapon type your character started with", "items": ["A blade character could end up buying swords. Auto-equip treated every weapon as the same kind, so a dropped sword with better stats replaced the blade, and leveling then bought the next sword at every tier.", "With Level up by itself on, the bot now remembers the weapon type your character had when leveling first saw it (a new character's starting weapon) and keeps buying that type. If it holds another type, the next town trip buys the right one back. Choosing a build in \"Character build\" still decides the weapon instead.", "Auto-equip now only swaps a weapon for one of the same type.", "A character that already switched type is remembered with the weapon it holds now. If that is wrong, pick a build with the right weapon in \"Character build\"."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.254", "title": "Leveling never uses wall skills, and you can pick a character build", "items": ["Zero-setup leveling no longer uses Crystal Wall and Fire Wall (they keep the character from moving). Teleports, dashes, hides, traps, auras and transforms are left out too.", "Wall skills that leveling added to an existing profile are taken out. Skills you added yourself stay.", "New \"Character build\" choice in zero-setup leveling: Auto (as before, minus the blocked skills), or Glaive nuker, Spear fighter, Blade tank, Sword fighter, Bow nuker, Force support, Wizard, Warlock, Warrior, Rogue, Cleric, Bard.", "A build sets the masteries and their order, learns only its own skills, puts them in its order, uses one imbue and buys its weapon type (and a shield) on a town trip. Enhanced or protected gear is never replaced.", "Changing the build starts the setup again for that character. Skills already learned stay learned; skill points are not refunded."], "note": "Only tested in simulation. Not tried on the live server yet. The builds come from community guides and the game data, so check one before you rely on it."}, {"version": "1.2.253", "title": "Leveling makes Donwhang the return point before hunting there", "items": ["A Jangan character could teleport to Donwhang and hunt there with the return point still in Jangan. When Jangan had no hunting spot near the character's level, the bot picked a Donwhang spot and simply travelled to it, skipping the move. Every death and return scroll then went back to Jangan.", "Now a hunting spot near another town always starts the move first: the bot goes to that town's world statue, makes it the return point, and only hunts there once the game confirms it. With \"Move to the next town\" off, it never hunts around another town.", "A move that fails no longer gives up on that town for the whole session. The log says the return point is unchanged, and the bot tries again after 10 minutes."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.252", "title": "Leveling uses the town the character is really in", "items": ["A character whose bot town was saved as Donwhang while the game's return point was still Jangan (for example, leveling was switched on while hunting near Donwhang) walked from Jangan all the way to the Donwhang warehouse on every trip. The move to Donwhang never came either, because the bot thought it already lived there.", "With Level up by itself on, the town services now follow the town the character is really in: the town it stands in when the bot starts or after a revive, and the town its return scroll lands in. Starting the bot in Jangan uses the Jangan warehouse and merchants. Once Donwhang is due (level 24 for Chinese characters), the trip goes on to Donwhang by the statue teleport and makes it the return point.", "Without Level up by itself, the saved town is never changed."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.251", "title": "Leveling moves to Donwhang when started in Jangan, or after a death", "items": ["With the character in Jangan (recalled by hand, or revived there after a death), starting the bot did the town services and then walked back to the old Jangan hunting spot, even when Donwhang was due (level 24 for Chinese characters). The move to Donwhang only rode on trips started in the field. Now any town trip carries it: after the services in Jangan, the bot takes the world statue teleport to Donwhang, makes Donwhang the return point, shops there and hunts there."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.250", "title": "Leveling really moves to Donwhang: return point, shopping and spots there", "items": ["The move to the next town never set the return point. The bot reached the Donwhang world statue but sent the request without opening the statue's menu, and the game ignores it then. The move counted as failed, so the return point stayed in Jangan: every death and town trip landed in Jangan and walked all the way back. The bot now opens the statue's menu first, then sets the return point.", "The move now starts as a town trip: the return scroll takes the character to Jangan, the services run there, then it takes the world statue teleport (or the ferry when that is cheaper) to Donwhang and makes Donwhang the return point.", "Right after the move, the bot does a first town trip in Donwhang: it buys the potions and the next gear there, then walks to a Donwhang hunting spot. From then on every trip goes to Donwhang. The same happens later from Donwhang to Hotan.", "Hunting spots now stay near the town of the return point. Before, a Jangan character at level 18 to 23 often walked to spots near Donwhang, far from where it revives. It only uses another town's spots when its own has nothing near its level."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.249", "title": "A completely full bag goes to the warehouse instead of stopping the trip", "items": ["A character whose bag had filled up all the way (no free slot) used to arrive in town and stop there with \"free a character bag slot\", even when the warehouse could take things out of its bag. With \"Sell items from the character bag\" off, that happened on almost every late trip. The warehouse now goes first and makes the room, and the trip carries on.", "A bag with nothing the warehouse takes still stops the trip with the same message, as before."], "note": "Tested in simulation only, not in a live game."}];
 
 // Check trusted repository metadata; never execute downloaded update code.
 const Updates = {
@@ -18960,7 +19005,7 @@ const UI = {
       const options = this.group('Collection');
       options.append(this.select('Default collector', [['character', 'Character'], ['pet', 'Pickup pet']], () => L().collector, v => { L().collector = v; Loot.reset(); }));
       options.append(this.check('Chime when pet bag is full', () => L().petFullSound, v => { L().petFullSound = v; Loot.fullAlert = null; }), this.button('Test pet chime', () => Sound.test()),
-        this.check('Chime and notice when a SoX item is picked up', () => L().soxSound, v => L().soxSound = v), this.button('Test SoX chime', () => Sound.test('sox')));
+        this.check('Chime and notice when a SoX item is picked up', () => L().soxSound, v => L().soxSound = v), this.button('Test SoX chime', () => Sound.test('sox')), this.soxSoundPicker());
       this.petNote = el('p', '', 'muted pet-note'); options.append(this.petNote);
       options.append(this.row(...[['Elixirs only','elixirs'],['Elixirs + gold','elixirs-gold'],['All items','all']].map(([label,mode]) => this.button(label, () => { Loot.preset(mode); this.draw(); }))));
       for (const [key, label] of [['enabled', 'Collect drops'], ['soxOnly', 'Equipment: only SoX (Star / Moon / Sun)'], ['skipStar', "Equipment: don't pick up Star gear (Moon and Sun still are)"], ['afterKillOnly', 'Character: finish the current fight before picking up']]) options.append(this.check(label, () => L()[key], v => L()[key] = v));
@@ -18976,6 +19021,20 @@ const UI = {
         this.check('Chime on a level up', () => Settings.profile.sounds.levelUp, v => Settings.profile.sounds.levelUp = v),
         this.check('Chime when a unique monster comes into view', () => Settings.profile.sounds.unique, v => Settings.profile.sounds.unique = v),
         el('p', 'Short chimes, one per switch, all off by default (the player one uses the player alert detection). A click in the game unlocks the sound when the browser blocked it. The pet and SoX chimes above preview the sound.', 'muted')));
+  },
+  soxSoundPicker() {
+    const file = el('input'); file.type = 'file'; file.accept = 'audio/*,.mp3,.wav,.ogg,.m4a'; file.hidden = true;
+    const name = () => Sound.custom('sox')?.name;
+    const status = el('p', name() ? 'SoX sound: ' + name() : 'SoX sound: built-in chime', 'muted');
+    const reset = this.button('Use built-in chime', () => { Sound.clearCustom('sox'); this.draw(); });
+    reset.hidden = !name();
+    file.addEventListener('change', async () => {
+      const f = file.files?.[0]; file.value = ''; if (!f) return;
+      try { await Sound.setCustom('sox', f); UI.toast('SoX sound set to ' + f.name + '.'); Sound.test('sox'); this.draw(); }
+      catch (e) { UI.toast('Could not use that sound: ' + e.message + '.', 'warn'); }
+    });
+    const box = el('div'); box.append(file, this.row(this.button('Custom SoX sound…', () => file.click()), reset), status);
+    return box;
   },
   section_lootWho(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();

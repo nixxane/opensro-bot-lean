@@ -186,12 +186,57 @@ const Sound = {
     });
     bus.on('profile', () => { this.level = null; });
   },
+  // A user-chosen audio file replaces the chime for these alerts. It lives in local storage (not the profile, so shares stay small).
+  customKinds: ['sox'],
+  customMaxBytes: 1024 * 1024,
+  buffers: {},
+  customKey(kind) { return 'sound:' + kind; },
+  custom(kind) { return this.customKinds.includes(kind) ? Store.get(this.customKey(kind), null) : null; },
+  setCustom(kind, file) {
+    return new Promise((resolve, reject) => {
+      if (!file) return reject(new Error('no file'));
+      if (file.size > this.customMaxBytes) return reject(new Error('the file is larger than 1 MB'));
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('the file could not be read'));
+      reader.onload = async () => {
+        const data = String(reader.result || '');
+        this.unlock();
+        try { await this.decode(data); } catch { return reject(new Error('the browser cannot play that file')); }
+        if (!Store.set(this.customKey(kind), { name: file.name, data })) return reject(new Error('browser storage is full'));
+        delete this.buffers[kind];
+        resolve();
+      };
+      reader.readAsDataURL(file);
+    });
+  },
+  clearCustom(kind) { Store.remove(this.customKey(kind)); delete this.buffers[kind]; },
+  async decode(dataUrl) {
+    const ctx = this.ctx; if (!ctx) throw new Error('no audio');
+    const bytes = Uint8Array.from(W.atob(dataUrl.slice(dataUrl.indexOf(',') + 1)), c => c.charCodeAt(0));
+    return await ctx.decodeAudioData(bytes.buffer);
+  },
+  playBuffer(buffer) {
+    const ctx = this.ctx, source = ctx.createBufferSource(), gain = ctx.createGain();
+    source.buffer = buffer; gain.gain.value = 0.8;
+    source.connect(gain); gain.connect(ctx.destination);
+    source.onended = () => { source.disconnect(); gain.disconnect(); };
+    source.start();
+  },
   play(kind) {
     const tone = this.tones[kind];
     if (!tone) return false;
     try {
       const ctx = this.ctx;
       if (!ctx || ctx.state !== 'running') return false;
+      const custom = this.custom(kind);
+      if (custom?.data) {
+        const cached = this.buffers[kind];
+        if (cached?.data === custom.data) { this.playBuffer(cached.buffer); return true; }
+        // First play after a reload decodes the saved file; a file that no longer decodes falls back to the chime.
+        this.decode(custom.data).then(buffer => { this.buffers[kind] = { data: custom.data, buffer }; this.playBuffer(buffer); })
+          .catch(() => { Store.remove(this.customKey(kind)); this.play(kind); });
+        return true;
+      }
       tone.notes.forEach((frequency, i) => {
         const oscillator = ctx.createOscillator(), gain = ctx.createGain();
         const at = ctx.currentTime + i * tone.gap;

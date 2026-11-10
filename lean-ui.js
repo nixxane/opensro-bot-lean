@@ -803,7 +803,7 @@ const UI = {
       const options = this.group('Collection');
       options.append(this.select('Default collector', [['character', 'Character'], ['pet', 'Pickup pet']], () => L().collector, v => { L().collector = v; Loot.reset(); }));
       options.append(this.check('Chime when pet bag is full', () => L().petFullSound, v => { L().petFullSound = v; Loot.fullAlert = null; }), this.button('Test pet chime', () => Sound.test()),
-        this.check('Chime and notice when a SoX item is picked up', () => L().soxSound, v => L().soxSound = v), this.button('Test SoX chime', () => Sound.test('sox')));
+        this.check('Chime and notice when a SoX item is picked up', () => L().soxSound, v => L().soxSound = v), this.button('Test SoX chime', () => Sound.test('sox')), this.soxSoundPicker());
       this.petNote = el('p', '', 'muted pet-note'); options.append(this.petNote);
       options.append(this.row(...[['Elixirs only','elixirs'],['Elixirs + gold','elixirs-gold'],['All items','all']].map(([label,mode]) => this.button(label, () => { Loot.preset(mode); this.draw(); }))));
       for (const [key, label] of [['enabled', 'Collect drops'], ['soxOnly', 'Equipment: only SoX (Star / Moon / Sun)'], ['skipStar', "Equipment: don't pick up Star gear (Moon and Sun still are)"], ['afterKillOnly', 'Character: finish the current fight before picking up']]) options.append(this.check(label, () => L()[key], v => L()[key] = v));
@@ -819,6 +819,20 @@ const UI = {
         this.check('Chime on a level up', () => Settings.profile.sounds.levelUp, v => Settings.profile.sounds.levelUp = v),
         this.check('Chime when a unique monster comes into view', () => Settings.profile.sounds.unique, v => Settings.profile.sounds.unique = v),
         el('p', 'Short chimes, one per switch, all off by default (the player one uses the player alert detection). A click in the game unlocks the sound when the browser blocked it. The pet and SoX chimes above preview the sound.', 'muted')));
+  },
+  soxSoundPicker() {
+    const file = el('input'); file.type = 'file'; file.accept = 'audio/*,.mp3,.wav,.ogg,.m4a'; file.hidden = true;
+    const name = () => Sound.custom('sox')?.name;
+    const status = el('p', name() ? 'SoX sound: ' + name() : 'SoX sound: built-in chime', 'muted');
+    const reset = this.button('Use built-in chime', () => { Sound.clearCustom('sox'); this.draw(); });
+    reset.hidden = !name();
+    file.addEventListener('change', async () => {
+      const f = file.files?.[0]; file.value = ''; if (!f) return;
+      try { await Sound.setCustom('sox', f); UI.toast('SoX sound set to ' + f.name + '.'); Sound.test('sox'); this.draw(); }
+      catch (e) { UI.toast('Could not use that sound: ' + e.message + '.', 'warn'); }
+    });
+    const box = el('div'); box.append(file, this.row(this.button('Custom SoX sound…', () => file.click()), reset), status);
+    return box;
   },
   section_lootWho(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
