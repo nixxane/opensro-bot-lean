@@ -174,7 +174,32 @@ const Town = {
       UI.toast(this.message, 'warn', 6000); return null;
     }
     if (!(c.arrival && this.detect(c.arrival)?.key === town.key)) overwrite = true;
-    const saved = [];
+    const { saved, unverified } = this.fill(town, overwrite, here);
+    this.message = saved.length ? `Automatic setup for ${town.name}: saved ${saved.join(', ')}.` + (unverified ? ' Walkable spots could not be checked without collision data; the first trip will tell.' : '')
+      : `Automatic setup for ${town.name}: everything was already saved.`;
+    Settings.saveProfile(); UI.toast(this.message, 'info', 6000); UI.draw();
+    return { town: town.name, saved, unverified };
+  },
+  // Zero-setup leveling: the saved services follow the town the character really is in (where its return scroll landed,
+  // or where it stands when started). Live: services saved in Donwhang with the game's return point still in Jangan; a
+  // trip started in Jangan walked across the map to the Donwhang warehouse, and the move to Donwhang never came, since
+  // the bot thought it lived there already. True when the town changed; a trip in progress carries on with the new one.
+  follow(here = World.pose()) {
+    const c = this.cfg(), town = here && this.detect(here), saved = this.detect(c.vendor || c.storage || c.arrival || {});
+    if (!Leveling.cfg().on || !town || saved?.key === town.key) return false;
+    this.fill(town, true, here);
+    this.lastScrollPoint = null; this.deathPoint = null;
+    Leveling.reset();
+    const t = this.trip;
+    if (t) { Leveling.begin(t); t.config = JSON.stringify(c); }
+    this.message = 'Leveling: the character is in ' + town.name + ', so its town services are used now' + (saved ? ' instead of ' + saved.name : '') + '.';
+    Log.info(this.message); UI.toast(this.message, 'info', 8000);
+    Settings.saveProfile(); UI.draw();
+    return true;
+  },
+  // The arrival point and the four services from the town table (only empty entries unless `overwrite`).
+  fill(town, overwrite, here) {
+    const c = this.cfg(), saved = [];
     if (overwrite || !c.arrival) { c.arrival = { ...(town.arrival || here) }; saved.push('arrival point'); }
     let unverified = 0;
     for (const [role, label] of [['storage', 'warehouse'], ['vendor', 'potion merchant'], ['smith', 'repair merchant'], ['gate', 'world statue']]) {
@@ -185,10 +210,7 @@ const Town = {
         npc: { regionId: s.regionId, x: s.x, y: s.y, z: s.z } };
       saved.push(label);
     }
-    this.message = saved.length ? `Automatic setup for ${town.name}: saved ${saved.join(', ')}.` + (unverified ? ' Walkable spots could not be checked without collision data; the first trip will tell.' : '')
-      : `Automatic setup for ${town.name}: everything was already saved.`;
-    Settings.saveProfile(); UI.toast(this.message, 'info', 6000); UI.draw();
-    return { town: town.name, saved, unverified };
+    return { saved, unverified };
   },
   disposable(item) {
     const c = this.cfg(), name = (item.name || '').toLowerCase(), tf = item.typeFlags;
@@ -380,6 +402,8 @@ const Town = {
     return false;
   },
   begin(revival = false) {
+    // Standing in a town (started there, or revived there): with leveling, that town's services.
+    if (World.inWorld() && !World.isDead()) this.follow();
     const error = this.validate(revival);
     if (error) return this.fail(error);
     // The death spot is used only when it lies inside the hunting area: hunting starts again only from there. A death
@@ -1026,7 +1050,12 @@ const Town = {
       // stand, say), adopt the spot the character settled on after a confirmed trip, but only in the saved services' town.
       if (t.phase === 'recall-wait' && t.transition && dist2D(World.pose(), c.arrival) > radius && !gp.inventoryPending && !gp.returnScroll) {
         const here = World.pose(), town = this.detect(here), saved = this.detect(c.vendor || c.storage || c.arrival);
-        if (!town || !saved || town.key !== saved.key) t.landed = null;
+        // Landed in another town: the game's return point is there. Leveling takes that town's services (follow);
+        // otherwise the trip waits as before.
+        if (town && saved && town.key !== saved.key && Leveling.cfg().on) {
+          if (!t.landed || dist2D(t.landed.pose, here) > 3) t.landed = { pose: { ...here }, at: now() };
+          else if (now() - t.landed.at >= 3000) { t.landed = null; this.follow(here); }
+        } else if (!town || !saved || town.key !== saved.key) t.landed = null;
         else if (!t.landed || dist2D(t.landed.pose, here) > 3) t.landed = { pose: { ...here }, at: now() };
         else if (now() - t.landed.at >= 3000) {
           c.arrival = { ...here }; t.config = JSON.stringify(c); t.landed = null; Settings.saveProfile();

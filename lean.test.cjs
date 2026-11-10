@@ -4001,6 +4001,37 @@ test('started in the old town (live: recalled to Jangan, then started), the town
   assert.equal(f.Leveling.move?.phase, 'walk');
   assert.match(f.WalkBack.active?.label || '', /Donwhang world statue/);
 });
+test('services saved in Donwhang with the character in Jangan (live: walked to the Donwhang warehouse): the Jangan services are used, and the move comes', () => {
+  const f = moveFixture(), gp = f.World.gp, c = f.Town.cfg();
+  f.Town.fill(f.Town.towns[1], true);
+  assert.equal(c.arrival.x, 1500, 'saved in Donwhang');
+  gp.progression.level = 12; f.Hunt.running = true;
+  f.World.pose = () => ({ regionId: 1, x: 120, y: 0, z: 100 });
+  const detect = f.Town.detect; f.Town.detect = (p = f.World.pose()) => detect(p);
+  f.Town.begin();
+  assert.equal(c.arrival.x, 100, 'standing in Jangan: Jangan is the town now');
+  assert.ok(f.Town.point('storage').x < 600, 'the warehouse is the Jangan one');
+  assert.equal(f.Town.trip.move, 'WC', 'and the trip goes on to Donwhang, making it the return point');
+  assert.equal(f.Town.trip.config, JSON.stringify(c));
+  f.Settings.profile.leveling.on = false; f.Town.trip = null;
+  f.Town.fill(f.Town.towns[1], true); f.Town.begin();
+  assert.equal(c.arrival.x, 1500, 'without leveling the saved town is never changed');
+});
+test('a return scroll that lands in another town: leveling takes that town and the trip goes on', () => {
+  const f = moveFixture(), gp = f.World.gp, c = f.Town.cfg();
+  gp.progression.level = 11;
+  f.Town.fill(f.Town.towns[1], true);
+  let pose = { regionId: 1, x: 900, y: 0, z: 100 };
+  f.World.pose = () => pose;
+  const detect = f.Town.detect; f.Town.detect = (p = f.World.pose()) => detect(p);
+  f.Hunt.running = true; f.Town.begin();
+  const t = f.Town.trip;
+  t.phase = 'recall-wait'; t.transition = true;
+  pose = { regionId: 1, x: 100, y: 0, z: 100 }; gp.returnScroll = null; gp.inventoryPending = false;
+  f.Town.tick(); f.advance(3500); f.Town.tick();
+  assert.equal(c.arrival.x, 100, 'the scroll landed in Jangan: Jangan it is');
+  assert.equal(f.Town.trip?.phase === 'recall-wait', false, 'and the trip is past the arrival');
+});
 test('spots around the town of the return point come first (live: Donwhang spots picked with the return point in Jangan)', () => {
   const f = moveFixture();
   f.Town.cfg().arrival = { regionId: 1, x: 100, y: 0, z: 100 };
