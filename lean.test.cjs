@@ -3925,6 +3925,45 @@ function gearFixture() {
   gp.progression = { ...(gp.progression || {}), level: 8, gold: '10000' };
   return f;
 }
+test('leveling keeps the weapon type the character started with (live: a blade character bought swords)', () => {
+  const f = gearFixture(), gp = f.World.gp, c = f.Settings.profile.leveling; f.World.charName = 'Tester';
+  const sword = gp.inventory.find(i => i.slot === 6);
+  // Started with a blade (TID4 3), now holds a sword (TID4 2): the next blade is bought, not the next sword.
+  c.weapon = { name: f.World.charName, tid4: 3 };
+  assert.ok(f.Leveling.plan().some(w => w.socket === 6 && w.row[0] === 75), 'the blade');
+  assert.ok(!f.Leveling.plan().some(w => w.row[0] === 74), 'never the sword');
+  // A new character: the weapon in its hands is remembered, and that type is bought.
+  c.weapon = null;
+  assert.equal(f.Leveling.homeWeapon(), 2);
+  assert.equal(JSON.stringify(c.weapon), JSON.stringify({ name: 'Tester', tid4: 2 }));
+  assert.ok(f.Leveling.plan().some(w => w.socket === 6 && w.row[0] === 74));
+  sword.typeFlags = 44 | (6 << 7) | (3 << 11);
+  assert.equal(f.Leveling.homeWeapon(), 2, 'a later weapon of another type does not change it');
+  // A build decides instead.
+  c.weapon = { name: f.World.charName, tid4: 2 };
+  f.Leveling.builds = [{ key: 'b', label: 'Blade', race: 0, weapon: [3], masteries: [257] }]; c.build = 'b';
+  assert.equal(JSON.stringify(f.Leveling.weaponTypes()), '[3]');
+  c.on = false;
+  assert.equal(f.Leveling.weaponTypes(), null, 'leveling off: no type is forced');
+});
+test('auto-equip never swaps a weapon for another weapon type', () => {
+  const f = gearFixture(), gp = f.World.gp, c = f.Settings.profile.leveling; f.World.charName = 'Tester';
+  f.Settings.profile.items.autoEquip = true;
+  gp.progression.level = 30;
+  const fields = hi => ({ canRepair: 1, canSell: 1, reqLevelType1: 1, requiredLevel: 1,
+    varianceIntMin240: 10, varianceIntMax244: hi, varianceIntMin248: 10, varianceIntMax24c: hi, varianceFloatPerPlus250: 0,
+    varianceIntMin254: 1, varianceIntMax258: 2, varianceIntMin25c: 1, varianceIntMax260: 2, varianceFloatPerPlus264: 0 });
+  const rolls = String(31n << 20n);
+  const weapon = (slot, ref, tid4, hi) => ({ slot, refObjId: ref, typeFlags: 44 | (6 << 7) | (tid4 << 11), quantity: 1, plus: 0, magic: [], variance: rolls, durability: 10, tooltip: { fields: fields(hi) } });
+  gp.inventory = gp.inventory.filter(i => i.slot !== 6);
+  gp.inventory.push(weapon(6, 900, 3, 20), weapon(20, 901, 2, 90));
+  c.weapon = { name: f.World.charName, tid4: 3 };
+  assert.equal(f.Equip.pick(), null, 'a much better sword does not replace the blade');
+  gp.inventory.push(weapon(21, 902, 3, 60));
+  assert.equal(f.Equip.pick()?.item.refObjId, 902, 'a better blade does');
+  c.on = false; gp.inventory = gp.inventory.filter(i => i.slot !== 21);
+  assert.equal(f.Equip.pick(), null, 'without leveling, the worn weapon type rules');
+});
 test('the gear plan buys the next tier of the same kind, fills empty armour parts and stays inside the gold', () => {
   const f = gearFixture(), gp = f.World.gp;
   const plan = () => f.Leveling.plan().map(w => w.socket + ':' + w.row[0]).join(' ');

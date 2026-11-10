@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         nixxane bot
 // @namespace    https://opensro.online/
-// @version      1.2.254
+// @version      1.2.255
 // @updateURL    https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.meta.js
 // @downloadURL  https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -22,7 +22,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[NIX] Another SRO assistant is active. Disable it and reload to use NIX.');
   return;
 }
-const VERSION = '1.2.254';
+const VERSION = '1.2.255';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -197,7 +197,7 @@ const DEFAULT_PROFILE = {
     attr: { targets: {}, limit: 100 } },
   statPoints: { enabled: false, str: 1, int: 0, reserve: 0 },
   // Zero-setup leveling (lean-leveling.js): spots from the game data and NPC gear upgrades.
-  leveling: { on: false, spots: true, gear: true, accessories: true, sellOld: true, move: true, reserve: 5000, skills: true, prepared: '', added: [], elements: '', imbued: [], pet: '', build: 'auto' },
+  leveling: { on: false, spots: true, gear: true, accessories: true, sellOld: true, move: true, reserve: 5000, skills: true, prepared: '', added: [], elements: '', imbued: [], pet: '', build: 'auto', weapon: null },
   // Auto Quest: learned tokens bind a quest codename (QNO_...) to its refId, and learned targets
   // name the monster types whose kills advance each refId. Both fill themselves while playing.
   quest: { on: false, accept: true, picked: [], include: '', exclude: '', skip: [], learned: {}, targets: {} },
@@ -11951,6 +11951,25 @@ const Leveling = {
     if (Equip.protected(item) || (item.plus ?? 0) > LEVEL_GEAR_MAX_PLUS) return false;
     return Number.isInteger(this.reqLevel(item));
   },
+  // The character's own weapon type (TID4), remembered from the first weapon seen in its hands (a new character's starting
+  // weapon), so a dropped or bought piece of another type never changes what it levels with. Per character.
+  homeWeapon() {
+    const c = this.cfg();
+    if (World.charName && c.weapon?.name === World.charName && c.weapon.tid4) return c.weapon.tid4;
+    const w = (World.gp?.inventory || []).find(i => i.slot === 6 && ItemType.isEquipment(i.typeFlags) && this.tids(i)[0] === 6);
+    if (!w || !World.charName) return null;
+    c.weapon = { name: World.charName, tid4: this.tids(w)[1] };
+    Settings.saveProfile();
+    return c.weapon.tid4;
+  },
+  // Weapon types leveling buys and wears: the chosen build's, else the character's own. null with leveling off.
+  weaponTypes() {
+    if (!this.cfg().on) return null;
+    const build = this.build();
+    if (build) return build.weapon;
+    const own = this.homeWeapon();
+    return own ? [own] : null;
+  },
   // What to buy now: [{ row, socket, role }], best piece per socket, weapon first, within the gold above the reserve.
   plan(notes) {
     const gp = World.gp, level = gp?.progression?.level, town = this.town();
@@ -11971,11 +11990,13 @@ const Leveling = {
       } else if (!this.replaceable(item)) notes?.push(label + ': kept (enhanced above +' + LEVEL_GEAR_MAX_PLUS + ' or protected)');
       else wants.push({ row: r, socket, role: r[1] });
     };
-    const weapon = worn.get(6), build = this.build();
-    // A build with another weapon type: buy its weapon (any level the town sells, never over enhanced or protected gear).
-    if (build && weapon && !build.weapon.includes(this.tids(weapon)[1])) {
-      const r = best(6, build.weapon[0]);
-      if (!r) notes?.push('weapon: the town sells no ' + build.label + ' weapon at your level');
+    const weapon = worn.get(6), build = this.build(), types = this.weaponTypes();
+    // A worn weapon of another type than the build's, or than the character's own (the one it started with, live: a blade
+    // character that ended up with a sword kept buying swords): buy the right type (any level the town sells, never over
+    // enhanced or protected gear).
+    if (types && weapon && !types.includes(this.tids(weapon)[1])) {
+      const r = best(6, types[0]);
+      if (!r) notes?.push('weapon: the town sells no ' + (build ? build.label : 'weapon of your type') + ' at your level');
       else if (!this.replaceable(weapon)) notes?.push('weapon: kept (enhanced above +' + LEVEL_GEAR_MAX_PLUS + ' or protected)');
       else wants.push({ row: r, socket: 6, role: r[1] });
     } else if (weapon) consider(6, 6, this.tids(weapon)[1], false, 'weapon');
@@ -12290,7 +12311,7 @@ const Leveling = {
     const c = this.cfg(), gp = World.gp, weapon = (gp?.inventory || []).find(i => i.slot === 6), build = this.build();
     // prepared names the character it was done for: settings copied to another character set that one up again.
     if (!this.skillsOn() || !World.charName || c.prepared === World.charName || !World.inWorld() || (!weapon && !build) || !gp.progression) return false;
-    const mastery = build ? build.masteries[0] : LEVEL_WEAPON_MASTERY[this.tids(weapon)[1]];
+    const mastery = build ? build.masteries[0] : LEVEL_WEAPON_MASTERY[this.homeWeapon() ?? this.tids(weapon)[1]];
     if (!mastery) return false;
     const M = Settings.profile.mastery, S = Settings.profile.statPoints, stats = gp.progression.stats || {}, done = [];
     // A chosen build sets the masteries in its order and learns only its own skills (scope "build").
@@ -12317,7 +12338,7 @@ const Leveling = {
     if (c.elements === World.charName || !M.enabled || !weapon) return false;
     c.elements = World.charName;
     if (this.build()) return false;
-    if (M.ids.length !== 1 || M.ids[0] !== LEVEL_WEAPON_MASTERY[this.tids(weapon)[1]]) return false;
+    if (M.ids.length !== 1 || M.ids[0] !== LEVEL_WEAPON_MASTERY[this.homeWeapon() ?? this.tids(weapon)[1]]) return false;
     const add = LEVEL_ELEMENT_MASTERIES.filter(id => !M.ids.includes(id));
     if (!add.length) return false;
     M.ids = [...M.ids, ...add];
@@ -16883,7 +16904,7 @@ const Alchemy = {
 };
 
 
-const RELEASE_NOTES = [{"version": "1.2.254", "title": "Leveling never uses wall skills, and you can pick a character build", "items": ["Zero-setup leveling no longer uses Crystal Wall and Fire Wall (they keep the character from moving). Teleports, dashes, hides, traps, auras and transforms are left out too.", "Wall skills that leveling added to an existing profile are taken out. Skills you added yourself stay.", "New \"Character build\" choice in zero-setup leveling: Auto (as before, minus the blocked skills), or Glaive nuker, Spear fighter, Blade tank, Sword fighter, Bow nuker, Force support, Wizard, Warlock, Warrior, Rogue, Cleric, Bard.", "A build sets the masteries and their order, learns only its own skills, puts them in its order, uses one imbue and buys its weapon type (and a shield) on a town trip. Enhanced or protected gear is never replaced.", "Changing the build starts the setup again for that character. Skills already learned stay learned; skill points are not refunded."], "note": "Only tested in simulation. Not tried on the live server yet. The builds come from community guides and the game data, so check one before you rely on it."}, {"version": "1.2.253", "title": "Leveling makes Donwhang the return point before hunting there", "items": ["A Jangan character could teleport to Donwhang and hunt there with the return point still in Jangan. When Jangan had no hunting spot near the character's level, the bot picked a Donwhang spot and simply travelled to it, skipping the move. Every death and return scroll then went back to Jangan.", "Now a hunting spot near another town always starts the move first: the bot goes to that town's world statue, makes it the return point, and only hunts there once the game confirms it. With \"Move to the next town\" off, it never hunts around another town.", "A move that fails no longer gives up on that town for the whole session. The log says the return point is unchanged, and the bot tries again after 10 minutes."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.252", "title": "Leveling uses the town the character is really in", "items": ["A character whose bot town was saved as Donwhang while the game's return point was still Jangan (for example, leveling was switched on while hunting near Donwhang) walked from Jangan all the way to the Donwhang warehouse on every trip. The move to Donwhang never came either, because the bot thought it already lived there.", "With Level up by itself on, the town services now follow the town the character is really in: the town it stands in when the bot starts or after a revive, and the town its return scroll lands in. Starting the bot in Jangan uses the Jangan warehouse and merchants. Once Donwhang is due (level 24 for Chinese characters), the trip goes on to Donwhang by the statue teleport and makes it the return point.", "Without Level up by itself, the saved town is never changed."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.251", "title": "Leveling moves to Donwhang when started in Jangan, or after a death", "items": ["With the character in Jangan (recalled by hand, or revived there after a death), starting the bot did the town services and then walked back to the old Jangan hunting spot, even when Donwhang was due (level 24 for Chinese characters). The move to Donwhang only rode on trips started in the field. Now any town trip carries it: after the services in Jangan, the bot takes the world statue teleport to Donwhang, makes Donwhang the return point, shops there and hunts there."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.250", "title": "Leveling really moves to Donwhang: return point, shopping and spots there", "items": ["The move to the next town never set the return point. The bot reached the Donwhang world statue but sent the request without opening the statue's menu, and the game ignores it then. The move counted as failed, so the return point stayed in Jangan: every death and town trip landed in Jangan and walked all the way back. The bot now opens the statue's menu first, then sets the return point.", "The move now starts as a town trip: the return scroll takes the character to Jangan, the services run there, then it takes the world statue teleport (or the ferry when that is cheaper) to Donwhang and makes Donwhang the return point.", "Right after the move, the bot does a first town trip in Donwhang: it buys the potions and the next gear there, then walks to a Donwhang hunting spot. From then on every trip goes to Donwhang. The same happens later from Donwhang to Hotan.", "Hunting spots now stay near the town of the return point. Before, a Jangan character at level 18 to 23 often walked to spots near Donwhang, far from where it revives. It only uses another town's spots when its own has nothing near its level."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.249", "title": "A completely full bag goes to the warehouse instead of stopping the trip", "items": ["A character whose bag had filled up all the way (no free slot) used to arrive in town and stop there with \"free a character bag slot\", even when the warehouse could take things out of its bag. With \"Sell items from the character bag\" off, that happened on almost every late trip. The warehouse now goes first and makes the room, and the trip carries on.", "A bag with nothing the warehouse takes still stops the trip with the same message, as before."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.248", "title": "Leveling reaches Donwhang, and the pet collects the drops", "items": ["The move to the next town never got there: its walk from Jangan to Donwhang tried to cross the river on foot, failed, and the bot then left Donwhang alone for the session. A character past level 24 kept hunting around Jangan, sometimes at a spot with no monsters. The move now uses the world statue's teleport (Jangan to Donwhang, later Donwhang to Hotan), then makes the new town the return point as before.", "Any walk the bot makes between places (not only the way to the hunting spot) now takes a ferry or teleport when one is needed. Auto trade still walks.", "With Level up by itself on and a pickup pet summoned, the pet now collects the drops, gold and gear included, instead of the character running for them. This happens once per character, and only when pickup was still on its default. If you switch it back by hand, it stays."], "note": "Tested in simulation with the game's real route data, not in a live game."}, {"version": "1.2.247", "title": "Spots across the river take the ferry", "items": ["A hunting spot across the river from Jangan (level 21 and up) made the bot check a walking route north into the Water Ghost Marshland, where there is no way across. The route data for one area can hold both banks of a river, and the bot took that to mean it could walk there. It now measures the real walk on the route data from both ends. When a spot cannot be reached on foot, or only the long way round, it takes the ferry: from Jangan, the China East Ferry to the far bank.", "This is decided before the slow route check, so the character no longer stands waiting for a walk that would never work.", "A ferry or teleport fee now counts for more when choosing the way, so the bot prefers a 500 gold ferry over a 5000 gold statue teleport. It pays that fee on every town trip.", "Auto trade keeps walking as before (no teleport or ferry takes a trade transport)."], "note": "Tested in simulation with the game's real route data, not in a live game."}];
+const RELEASE_NOTES = [{"version": "1.2.255", "title": "Leveling keeps the weapon type your character started with", "items": ["A blade character could end up buying swords. Auto-equip treated every weapon as the same kind, so a dropped sword with better stats replaced the blade, and leveling then bought the next sword at every tier.", "With Level up by itself on, the bot now remembers the weapon type your character had when leveling first saw it (a new character's starting weapon) and keeps buying that type. If it holds another type, the next town trip buys the right one back. Choosing a build in \"Character build\" still decides the weapon instead.", "Auto-equip now only swaps a weapon for one of the same type.", "A character that already switched type is remembered with the weapon it holds now. If that is wrong, pick a build with the right weapon in \"Character build\"."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.254", "title": "Leveling never uses wall skills, and you can pick a character build", "items": ["Zero-setup leveling no longer uses Crystal Wall and Fire Wall (they keep the character from moving). Teleports, dashes, hides, traps, auras and transforms are left out too.", "Wall skills that leveling added to an existing profile are taken out. Skills you added yourself stay.", "New \"Character build\" choice in zero-setup leveling: Auto (as before, minus the blocked skills), or Glaive nuker, Spear fighter, Blade tank, Sword fighter, Bow nuker, Force support, Wizard, Warlock, Warrior, Rogue, Cleric, Bard.", "A build sets the masteries and their order, learns only its own skills, puts them in its order, uses one imbue and buys its weapon type (and a shield) on a town trip. Enhanced or protected gear is never replaced.", "Changing the build starts the setup again for that character. Skills already learned stay learned; skill points are not refunded."], "note": "Only tested in simulation. Not tried on the live server yet. The builds come from community guides and the game data, so check one before you rely on it."}, {"version": "1.2.253", "title": "Leveling makes Donwhang the return point before hunting there", "items": ["A Jangan character could teleport to Donwhang and hunt there with the return point still in Jangan. When Jangan had no hunting spot near the character's level, the bot picked a Donwhang spot and simply travelled to it, skipping the move. Every death and return scroll then went back to Jangan.", "Now a hunting spot near another town always starts the move first: the bot goes to that town's world statue, makes it the return point, and only hunts there once the game confirms it. With \"Move to the next town\" off, it never hunts around another town.", "A move that fails no longer gives up on that town for the whole session. The log says the return point is unchanged, and the bot tries again after 10 minutes."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.252", "title": "Leveling uses the town the character is really in", "items": ["A character whose bot town was saved as Donwhang while the game's return point was still Jangan (for example, leveling was switched on while hunting near Donwhang) walked from Jangan all the way to the Donwhang warehouse on every trip. The move to Donwhang never came either, because the bot thought it already lived there.", "With Level up by itself on, the town services now follow the town the character is really in: the town it stands in when the bot starts or after a revive, and the town its return scroll lands in. Starting the bot in Jangan uses the Jangan warehouse and merchants. Once Donwhang is due (level 24 for Chinese characters), the trip goes on to Donwhang by the statue teleport and makes it the return point.", "Without Level up by itself, the saved town is never changed."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.251", "title": "Leveling moves to Donwhang when started in Jangan, or after a death", "items": ["With the character in Jangan (recalled by hand, or revived there after a death), starting the bot did the town services and then walked back to the old Jangan hunting spot, even when Donwhang was due (level 24 for Chinese characters). The move to Donwhang only rode on trips started in the field. Now any town trip carries it: after the services in Jangan, the bot takes the world statue teleport to Donwhang, makes Donwhang the return point, shops there and hunts there."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.250", "title": "Leveling really moves to Donwhang: return point, shopping and spots there", "items": ["The move to the next town never set the return point. The bot reached the Donwhang world statue but sent the request without opening the statue's menu, and the game ignores it then. The move counted as failed, so the return point stayed in Jangan: every death and town trip landed in Jangan and walked all the way back. The bot now opens the statue's menu first, then sets the return point.", "The move now starts as a town trip: the return scroll takes the character to Jangan, the services run there, then it takes the world statue teleport (or the ferry when that is cheaper) to Donwhang and makes Donwhang the return point.", "Right after the move, the bot does a first town trip in Donwhang: it buys the potions and the next gear there, then walks to a Donwhang hunting spot. From then on every trip goes to Donwhang. The same happens later from Donwhang to Hotan.", "Hunting spots now stay near the town of the return point. Before, a Jangan character at level 18 to 23 often walked to spots near Donwhang, far from where it revives. It only uses another town's spots when its own has nothing near its level."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.249", "title": "A completely full bag goes to the warehouse instead of stopping the trip", "items": ["A character whose bag had filled up all the way (no free slot) used to arrive in town and stop there with \"free a character bag slot\", even when the warehouse could take things out of its bag. With \"Sell items from the character bag\" off, that happened on almost every late trip. The warehouse now goes first and makes the room, and the trip carries on.", "A bag with nothing the warehouse takes still stops the trip with the same message, as before."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.248", "title": "Leveling reaches Donwhang, and the pet collects the drops", "items": ["The move to the next town never got there: its walk from Jangan to Donwhang tried to cross the river on foot, failed, and the bot then left Donwhang alone for the session. A character past level 24 kept hunting around Jangan, sometimes at a spot with no monsters. The move now uses the world statue's teleport (Jangan to Donwhang, later Donwhang to Hotan), then makes the new town the return point as before.", "Any walk the bot makes between places (not only the way to the hunting spot) now takes a ferry or teleport when one is needed. Auto trade still walks.", "With Level up by itself on and a pickup pet summoned, the pet now collects the drops, gold and gear included, instead of the character running for them. This happens once per character, and only when pickup was still on its default. If you switch it back by hand, it stays."], "note": "Tested in simulation with the game's real route data, not in a live game."}];
 
 // Check trusted repository metadata; never execute downloaded update code.
 const Updates = {
@@ -17668,6 +17689,12 @@ const Equip = {
       if (!stats) continue;
       const need = Leveling.reqLevel(item);
       if (!Number.isInteger(need) || need > level) continue;
+      // A weapon only replaces one of the same type (live: a dropped sword replaced a blade, and leveling then bought
+      // swords): the type leveling uses (its build or the character's own), else the worn weapon's.
+      if (this.family(item) === 6) {
+        const type = (item.typeFlags >>> 11) & 31, types = Leveling.weaponTypes();
+        if (types ? !types.includes(type) : !worn.some(w => this.family(w) === 6 && ((w.typeFlags >>> 11) & 31) === type)) continue;
+      }
       const family = worn.filter(w => this.family(w) === this.family(item));
       if (!family.length) continue;
       let target = null, targetStats = null, targetScore = 0;

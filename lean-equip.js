@@ -91,6 +91,12 @@ const Equip = {
       if (!stats) continue;
       const need = Leveling.reqLevel(item);
       if (!Number.isInteger(need) || need > level) continue;
+      // A weapon only replaces one of the same type (live: a dropped sword replaced a blade, and leveling then bought
+      // swords): the type leveling uses (its build or the character's own), else the worn weapon's.
+      if (this.family(item) === 6) {
+        const type = (item.typeFlags >>> 11) & 31, types = Leveling.weaponTypes();
+        if (types ? !types.includes(type) : !worn.some(w => this.family(w) === 6 && ((w.typeFlags >>> 11) & 31) === type)) continue;
+      }
       const family = worn.filter(w => this.family(w) === this.family(item));
       if (!family.length) continue;
       let target = null, targetStats = null, targetScore = 0;

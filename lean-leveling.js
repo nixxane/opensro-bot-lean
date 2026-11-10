@@ -134,6 +134,25 @@ const Leveling = {
     if (Equip.protected(item) || (item.plus ?? 0) > LEVEL_GEAR_MAX_PLUS) return false;
     return Number.isInteger(this.reqLevel(item));
   },
+  // The character's own weapon type (TID4), remembered from the first weapon seen in its hands (a new character's starting
+  // weapon), so a dropped or bought piece of another type never changes what it levels with. Per character.
+  homeWeapon() {
+    const c = this.cfg();
+    if (World.charName && c.weapon?.name === World.charName && c.weapon.tid4) return c.weapon.tid4;
+    const w = (World.gp?.inventory || []).find(i => i.slot === 6 && ItemType.isEquipment(i.typeFlags) && this.tids(i)[0] === 6);
+    if (!w || !World.charName) return null;
+    c.weapon = { name: World.charName, tid4: this.tids(w)[1] };
+    Settings.saveProfile();
+    return c.weapon.tid4;
+  },
+  // Weapon types leveling buys and wears: the chosen build's, else the character's own. null with leveling off.
+  weaponTypes() {
+    if (!this.cfg().on) return null;
+    const build = this.build();
+    if (build) return build.weapon;
+    const own = this.homeWeapon();
+    return own ? [own] : null;
+  },
   // What to buy now: [{ row, socket, role }], best piece per socket, weapon first, within the gold above the reserve.
   plan(notes) {
     const gp = World.gp, level = gp?.progression?.level, town = this.town();
@@ -154,11 +173,13 @@ const Leveling = {
       } else if (!this.replaceable(item)) notes?.push(label + ': kept (enhanced above +' + LEVEL_GEAR_MAX_PLUS + ' or protected)');
       else wants.push({ row: r, socket, role: r[1] });
     };
-    const weapon = worn.get(6), build = this.build();
-    // A build with another weapon type: buy its weapon (any level the town sells, never over enhanced or protected gear).
-    if (build && weapon && !build.weapon.includes(this.tids(weapon)[1])) {
-      const r = best(6, build.weapon[0]);
-      if (!r) notes?.push('weapon: the town sells no ' + build.label + ' weapon at your level');
+    const weapon = worn.get(6), build = this.build(), types = this.weaponTypes();
+    // A worn weapon of another type than the build's, or than the character's own (the one it started with, live: a blade
+    // character that ended up with a sword kept buying swords): buy the right type (any level the town sells, never over
+    // enhanced or protected gear).
+    if (types && weapon && !types.includes(this.tids(weapon)[1])) {
+      const r = best(6, types[0]);
+      if (!r) notes?.push('weapon: the town sells no ' + (build ? build.label : 'weapon of your type') + ' at your level');
       else if (!this.replaceable(weapon)) notes?.push('weapon: kept (enhanced above +' + LEVEL_GEAR_MAX_PLUS + ' or protected)');
       else wants.push({ row: r, socket: 6, role: r[1] });
     } else if (weapon) consider(6, 6, this.tids(weapon)[1], false, 'weapon');
@@ -473,7 +494,7 @@ const Leveling = {
     const c = this.cfg(), gp = World.gp, weapon = (gp?.inventory || []).find(i => i.slot === 6), build = this.build();
     // prepared names the character it was done for: settings copied to another character set that one up again.
     if (!this.skillsOn() || !World.charName || c.prepared === World.charName || !World.inWorld() || (!weapon && !build) || !gp.progression) return false;
-    const mastery = build ? build.masteries[0] : LEVEL_WEAPON_MASTERY[this.tids(weapon)[1]];
+    const mastery = build ? build.masteries[0] : LEVEL_WEAPON_MASTERY[this.homeWeapon() ?? this.tids(weapon)[1]];
     if (!mastery) return false;
     const M = Settings.profile.mastery, S = Settings.profile.statPoints, stats = gp.progression.stats || {}, done = [];
     // A chosen build sets the masteries in its order and learns only its own skills (scope "build").
@@ -500,7 +521,7 @@ const Leveling = {
     if (c.elements === World.charName || !M.enabled || !weapon) return false;
     c.elements = World.charName;
     if (this.build()) return false;
-    if (M.ids.length !== 1 || M.ids[0] !== LEVEL_WEAPON_MASTERY[this.tids(weapon)[1]]) return false;
+    if (M.ids.length !== 1 || M.ids[0] !== LEVEL_WEAPON_MASTERY[this.homeWeapon() ?? this.tids(weapon)[1]]) return false;
     const add = LEVEL_ELEMENT_MASTERIES.filter(id => !M.ids.includes(id));
     if (!add.length) return false;
     M.ids = [...M.ids, ...add];
