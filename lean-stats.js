@@ -31,7 +31,7 @@ const Stats = {
     this.potions = []; this.potionTotals.clear();
     this.sample(); this.render();
   },
-  huntStart() { this.sample(); this.loadLevels(); if (Hunt.cfg().pickup.soxSound) Loot.ensureCatalogue(); },
+  huntStart() { this.sample(); this.loadLevels(); Loot.ensureCatalogue(); },
   huntStop() { this.sample(); },
   count(kind) {
     if (kind in this.values) this.values[kind]++;

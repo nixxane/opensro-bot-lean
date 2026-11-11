@@ -115,6 +115,21 @@ module.exports = function loggingTests( { test, fixture, townFixture } ) {
 		assert.match( f.Activity.export( true ), /Town phase: walk-smith/ );
 		assert.equal( f.Activity.userMessage( { code: "pickup-confirmed" } ), "Picked up loot." );
 	} );
+	test( "confirmed pickups name the item and its Star/Moon/Sun seal in the log", () => {
+		const f = fixture();
+		f.Items.data.set( 903, { name: "Sun sword", icon: "", code: "ITEM_CH_SWORD_01_C_RARE" } );
+		f.Items.data.set( 902, { name: "Moon blade", icon: "", code: "ITEM_CH_BLADE_01_B_RARE" } );
+		f.Items.data.set( 900, { name: "Plain sword", icon: "", code: "ITEM_CH_SWORD_01" } );
+		const logged = a => {
+			f.Activity.clear();
+			f.Loot.count = () => 1;
+			f.Loot.gained( Object.assign( { gid: 5, gold: false, petGid: 0, before: 0 }, a ) );
+			return f.Activity.userMessage( f.Log.lines.find( entry => entry.code === "pickup-confirmed" ) );
+		};
+		assert.equal( logged( { ref: 903, name: "Sun sword" } ), "Picked up Sun sword (Seal of Sun)." );
+		assert.equal( logged( { ref: 902 } ), "Picked up Moon blade (Seal of Moon)." );
+		assert.equal( logged( { ref: 900, name: "Plain sword" } ), "Picked up Plain sword." );
+	} );
 	test( "command capture is opt-in and cannot evict normal warnings", () => {
 		const f = fixture();
 		f.Log.warn( "Important warning" );
