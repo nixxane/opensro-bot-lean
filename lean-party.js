@@ -4,9 +4,11 @@ const Party = {
   registration: null,
   lastRegisterAt: -Infinity,
   message: 'Auto-recruit off.',
+  inviteMessage: '', invitedAt: new Map(), lastInviteAt: -Infinity,
   joinMessage: '', joinedKey: '', lastPageAt: -Infinity, lastJoinAt: -Infinity, scanDoneAt: -Infinity, wantPage: 1,
   reset() {
     this.answered = ''; this.registration = null; this.lastRegisterAt = -Infinity; this.message = 'Waiting for party state.';
+    this.inviteMessage = ''; this.invitedAt.clear(); this.lastInviteAt = -Infinity;
     this.joinMessage = ''; this.joinedKey = ''; this.lastPageAt = this.lastJoinAt = this.scanDoneAt = -Infinity; this.wantPage = 1;
   },
   // Comma or line separated character names; empty means everyone.
@@ -190,13 +192,43 @@ const Party = {
       UI.toast('Accepted resurrection from ' + caster.name, 'info', 3000);
     }
   },
+  // Invite players in view: the listed names at any distance, and optionally anyone within the radius. Each player is
+  // asked again only after a growing wait (30 s, 60 s ... 10 min), because an invite can go unanswered (invites off).
+  autoInvite() {
+    const c = Settings.profile.party, names = this.names(c.inviteNames), gp = World.gp, social = gp?.social;
+    if (!c.autoInvite || (!names.length && !c.inviteAnyone)) { this.inviteMessage = ''; return; }
+    if (!social || !Array.isArray(social.members)) { this.inviteMessage = 'Waiting for party state.'; return; }
+    const lower = v => String(v || '').trim().toLowerCase(), me = lower(social.localName), main = lower(c.mainName);
+    if (c.joinMain && main && me !== main) { this.inviteMessage = 'Off while joining the party leader.'; return; }
+    if (social.leader ? social.self !== social.leader && !(social.options & 4) : social.members.length > 1) { this.inviteMessage = 'Only the party leader can invite.'; return; }
+    const options = social.leader ? social.options : (gp.partyMatching ? this.options(gp.partyMatching, social) : (c.expShare ? 1 : 0) | (c.itemShare ? 2 : 0));
+    if (!Number.isInteger(options)) { this.inviteMessage = 'Waiting for party options.'; return; }
+    if (social.members.length >= ((options & 1) ? 8 : 4)) { this.inviteMessage = 'Party full.'; return; }
+    const t = now(), members = new Set(social.members.map(m => lower(m?.name)).filter(Boolean)), pose = World.pose();
+    for (const n of members) this.invitedAt.delete(n);
+    const wanted = [...World.ents.values()].filter(e => e.kind === 'player' && e.gid !== gp.localGid && lower(e.name) && lower(e.name) !== me && !members.has(lower(e.name)) &&
+      (names.includes(lower(e.name)) || c.inviteAnyone && dist2D(e, pose) <= c.inviteRadius));
+    let waiting = false, sent = '';
+    for (const e of wanted) {
+      const key = lower(e.name), seen = this.invitedAt.get(key);
+      if (seen) seen.seenAt = t;
+      if (seen && t - seen.at < Math.min(600000, 30000 * 2 ** (seen.tries - 1))) { waiting = true; continue; }
+      if (sent || t - this.lastInviteAt < 3000 || !Cmd.spaced('party-invite')) continue;
+      if (Cmd.raw({ kind: 'party-invite', gid: e.gid, options }, 'Auto-invite ' + e.name)) {
+        this.invitedAt.set(key, { at: t, seenAt: t, tries: (seen?.tries || 0) + 1 }); this.lastInviteAt = t; sent = e.name;
+        UI.toast('Party invite sent: ' + e.name, 'info', 2500);
+      }
+    }
+    for (const [key, v] of this.invitedAt) if (t - v.seenAt > 30 * 60000) this.invitedAt.delete(key);
+    this.inviteMessage = sent ? 'Invited ' + sent + '.' : waiting ? 'Waiting before inviting again.' : 'Nobody to invite in view.';
+  },
   tick() {
     this.acceptResurrection();
     if (World.inWorld() && Settings.profile.party.acceptRes) this.helping();
     const c = Settings.profile.party;
     // Optional: party joining, leaving, recruiting and accepting wait until the bot is running (default: they work while stopped).
-    if (c.onlyWhileRunning && !Hunt.running) { this.joinMessage = ''; this.message = 'Waiting for the bot to be started.'; return; }
-    if (World.inWorld()) { this.leaveWrongParty(); this.joinMain(); } else this.joinMessage = '';
+    if (c.onlyWhileRunning && !Hunt.running) { this.joinMessage = this.inviteMessage = ''; this.message = 'Waiting for the bot to be started.'; return; }
+    if (World.inWorld()) { this.leaveWrongParty(); this.joinMain(); this.autoInvite(); } else this.joinMessage = this.inviteMessage = '';
     if (!World.inWorld() || (!c.autoAcceptMatching && !c.autoRecruit)) return;
     const gp = World.gp, matching = gp?.partyMatching, request = matching?.request, social = gp?.social;
     if (!matching || !social || !Array.isArray(social.members)) return;

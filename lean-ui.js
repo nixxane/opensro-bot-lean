@@ -1203,8 +1203,13 @@ const UI = {
         this.check("Leave someone else's party when the party leader is back", () => party().leaveIfNotLeader, v => { party().leaveIfNotLeader = v; Party.reset(); }),
         el('p', 'For your other accounts. While you are not in a party, the bot accepts a party invitation from that character, or finds their party listing on the party-matching board and applies to it. The main account needs Auto-recruit and Auto-accept party-matching joins ticked. It also rejoins after a disconnect, once the character is back in the game. Leave this off on the main account.', 'muted'),
         el('p', 'With the leave option on, a party led by someone else is left only once the party leader is in view near your hunting spot. If the party leader disconnects, the party the game hands to another member stays together until they are back.', 'muted'),
+        this.check('Auto-invite players', () => party().autoInvite, v => { party().autoInvite = v; Party.reset(); }),
+        this.text('Invite these players', () => party().inviteNames, v => party().inviteNames = v, 'names, comma separated'),
+        this.check('Also invite anyone nearby', () => party().inviteAnyone, v => party().inviteAnyone = v),
+        this.number('Invite radius (m)', () => party().inviteRadius / 10, v => party().inviteRadius = v * 10, 1, 100),
+        el('p', 'Off by default. Sends a party invite to the listed players whenever they are in view, and to anyone within the radius if the nearby option is on. Only you as party leader (or any member, if the party lets members invite) can invite, and not while the party is full. A player who does not answer is asked again after 30 seconds, then 1, 2, 4 minutes and so on, up to 10 minutes. They still have to accept, or use auto-accept on their side. Inviting anyone nearby can annoy other players. With "Join the party leader" on, only the leader account invites.', 'muted'),
         this.check('Only join and accept parties while the bot is running', () => party().onlyWhileRunning, v => { party().onlyWhileRunning = v; Party.reset(); }),
-        el('p', 'Off by default: Auto-recruit, Auto-accept and joining the party leader also work while hunting is stopped. Turn this on to make all of them wait until you press Start. Resurrection is not affected.', 'muted'),
+        el('p', 'Off by default: Auto-recruit, Auto-accept, Auto-invite and joining the party leader also work while hunting is stopped. Turn this on to make all of them wait until you press Start. Resurrection is not affected.', 'muted'),
         this.check('Accept resurrection from party members', () => party().acceptRes, v => party().acceptRes = v),
         this.number('Wait for a party resurrection (s)', () => party().reviveWaitS, v => party().reviveWaitS = v, 5, 600),
         el('p', 'When you are dead and a party member casts Rebirth on you, the bot answers Yes. Works during hunting and while stopped; resurrection offers from other players are left to you. With a living party member in view it waits this long after dying before reviving itself in town (20 s by default).', 'muted'),
@@ -1473,6 +1478,7 @@ const UI = {
     if (this.is('Party') && this.partyNote) {
       const notes = [Settings.profile.party.autoRecruit ? Party.message : 'Auto-recruit off.'];
       if (Settings.profile.party.joinMain && Party.joinMessage) notes.push(Party.joinMessage);
+      if (Settings.profile.party.autoInvite && Party.inviteMessage) notes.push(Party.inviteMessage);
       if (Settings.profile.party.autoRes) notes.push(Resurrect.message);
       this.partyNote.textContent = notes.join(' ');
     }

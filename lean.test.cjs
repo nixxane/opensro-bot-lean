@@ -1612,6 +1612,96 @@ test('auto-accept answers only applicants on the name list, and everyone when th
   assert.equal(f.commands.filter(c => c.kind === 'party-match-answer').length, 1, 'empty list accepts everyone');
 });
 
+function inviteFixture(extra = {}) {
+  const f = fixture();
+  Object.assign(f.Settings.profile.party, { autoInvite: true, inviteNames: 'Friend, other', ...extra });
+  f.World.gp.social = { localName: 'Me', self: 0, leader: 0, options: 0, members: [], invitation: null };
+  f.World.gp.partyMatching = { own: null, request: null, pending: null, joining: null, page: 1, pages: 1, rows: [] };
+  const player = (gid, name, x = 100, z = 100) => f.World.ents.set(gid, { gid, kind: 'player', name, regionId: 1, x, y: 0, z });
+  const invites = () => f.commands.filter(c => c.kind === 'party-invite');
+  return { f, player, invites };
+}
+
+test('auto-invite is off by default and needs a name or the nearby option', () => {
+  const { f, player, invites } = inviteFixture({ autoInvite: false }); player(5, 'Friend');
+  f.Party.tick(); assert.equal(invites().length, 0, 'off by default');
+  f.Settings.profile.party.autoInvite = true; f.Settings.profile.party.inviteNames = ''; f.Party.tick();
+  assert.equal(invites().length, 0, 'no names and not anyone');
+  assert.equal(f.Party.inviteMessage, '');
+});
+
+test('auto-invite asks listed players in view, any letter case, never unlisted players, yourself or members', () => {
+  const { f, player, invites } = inviteFixture(); player(5, 'FRIEND', 9000, 9000); player(6, 'Stranger'); player(7, 'Me');
+  f.Party.tick();
+  assert.deepEqual(invites().map(c => c.gid), [5], 'listed, far away, other letter case');
+  assert.equal(invites()[0].options, 3, 'solo: options follow the share settings');
+  const g = inviteFixture(); g.player(5, 'Friend');
+  g.f.World.gp.social = { localName: 'Me', self: 1, leader: 1, options: 1, members: [{ id: 1, name: 'Me' }, { id: 2, name: 'friend' }] };
+  g.f.Party.tick(); assert.equal(g.invites().length, 0, 'already a member');
+});
+
+test('auto-invite options bits follow expShare and itemShare while solo', () => {
+  const { f, player, invites } = inviteFixture(); f.Settings.profile.party.expShare = false; player(5, 'Friend'); f.Party.tick();
+  assert.equal(invites()[0].options, 2);
+  const g = inviteFixture(); g.f.Settings.profile.party.itemShare = false; g.player(5, 'Friend'); g.f.Party.tick();
+  assert.equal(g.invites()[0].options, 1);
+});
+
+test('auto-invite anyone nearby stays within the radius', () => {
+  const { f, player, invites } = inviteFixture({ inviteNames: '', inviteAnyone: true, inviteRadius: 300 });
+  player(5, 'Near', 250, 100); player(6, 'Far', 500, 100); f.Party.tick();
+  assert.deepEqual(invites().map(c => c.gid), [5]);
+});
+
+test('auto-invite needs the party leader or member invites, and a free slot', () => {
+  const { f, player, invites } = inviteFixture(); player(5, 'Friend');
+  const party = (self, options, count) => { f.World.gp.social = { localName: 'Me', self, leader: 1, options, members: Array.from({ length: count }, (_, i) => ({ id: i + 1, name: i ? 'M' + i : 'Leader' })) }; };
+  party(2, 1, 2); f.Party.tick(); assert.equal(invites().length, 0, 'member without the invite option');
+  assert.equal(f.Party.inviteMessage, 'Only the party leader can invite.');
+  party(2, 5, 2); f.Party.tick(); assert.equal(invites().length, 1, 'member when options & 4');
+  const g = inviteFixture(); g.player(5, 'Friend');
+  g.f.World.gp.social = { localName: 'Me', self: 1, leader: 1, options: 0, members: [1, 2, 3, 4].map(id => ({ id, name: 'M' + id })) };
+  g.f.Party.tick(); assert.equal(g.invites().length, 0, 'party of four without EXP share is full');
+  assert.equal(g.f.Party.inviteMessage, 'Party full.');
+  g.f.World.gp.social.options = 1; g.f.Party.tick(); assert.equal(g.invites().length, 1, 'eight with EXP share');
+});
+
+test('auto-invite backs off 30 s, 60 s, 120 s and resets once the player is in the party', () => {
+  const { f, player, invites } = inviteFixture(); player(5, 'Friend');
+  f.Party.tick(); f.Party.tick(); assert.equal(invites().length, 1, 'not repeated at once');
+  f.advance(29000); f.Party.tick(); assert.equal(invites().length, 1);
+  f.advance(1500); f.Party.tick(); assert.equal(invites().length, 2, 'asked again after 30 s');
+  f.advance(59000); f.Party.tick(); assert.equal(invites().length, 2, 'the wait doubled');
+  f.advance(1500); f.Party.tick(); assert.equal(invites().length, 3, 'asked again after 60 s');
+  f.advance(119000); f.Party.tick(); assert.equal(invites().length, 3);
+  f.advance(1500); f.Party.tick(); assert.equal(invites().length, 4);
+  f.World.gp.social = { localName: 'Me', self: 1, leader: 1, options: 1, members: [{ id: 1, name: 'Me' }, { id: 5, name: 'Friend' }] };
+  f.Party.tick(); assert.equal(f.Party.invitedAt.size, 0, 'a member resets the back-off');
+});
+
+test('auto-invite sends one invite at a time', () => {
+  const { f, player, invites } = inviteFixture(); player(5, 'Friend'); player(6, 'Other');
+  f.Party.tick(); assert.equal(invites().length, 1);
+  f.advance(1000); f.Party.tick(); assert.equal(invites().length, 1, 'less than 3 s apart');
+  f.advance(2500); f.Party.tick(); assert.deepEqual(invites().map(c => c.gid), [5, 6]);
+});
+
+test('auto-invite stays off for an alt that joins the party leader, and while stopped when asked', () => {
+  const { f, player, invites } = inviteFixture({ joinMain: true, mainName: 'MainChar' }); player(5, 'Friend');
+  f.Party.tick(); assert.equal(invites().length, 0); assert.equal(f.Party.inviteMessage, 'Off while joining the party leader.');
+  f.World.gp.social.localName = 'mainchar'; f.Party.tick(); assert.equal(invites().length, 1, 'the named main may invite');
+  const g = inviteFixture({ onlyWhileRunning: true }); g.player(5, 'Friend');
+  g.f.Party.tick(); assert.equal(g.invites().length, 0, 'stopped');
+  g.f.Hunt.running = true; g.f.Party.tick(); assert.equal(g.invites().length, 1, 'running');
+});
+
+test('auto-invite does nothing outside the world and reset clears its memory', () => {
+  const { f, player, invites } = inviteFixture(); player(5, 'Friend');
+  f.World.phase = 'login'; f.Party.tick(); assert.equal(invites().length, 0);
+  f.World.phase = 'world'; f.Party.tick(); assert.equal(invites().length, 1);
+  f.Party.reset(); assert.equal(f.Party.invitedAt.size, 0); f.advance(3500); f.Party.tick(); assert.equal(invites().length, 2, 'reset forgets the back-off');
+});
+
 test('the alt leaves a party led by someone else only when asked to, and keeps the named leader party', () => {
   const f = joinMainFixture(); const party = f.Settings.profile.party;
   const inParty = leaderName => { f.World.gp.social = { localName: 'AltChar', self: 2, leader: 1, options: 1, members: [{ id: 1, name: leaderName }, { id: 2, name: 'AltChar' }], invitation: null }; };

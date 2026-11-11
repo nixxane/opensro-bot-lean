@@ -208,7 +208,7 @@ const DEFAULT_PROFILE = {
   pet: { attack: { on: false, recall: true, radius: 15, timeout: 3, resend: 5 } },
   scroll: { damageInc: false, damageAbs: false },
   mall: { on: false, budgetSilk: 0, hp: { on: false, low: 10, target: 1000 }, mp: { on: false, low: 10, target: 1000 }, damageInc: { on: false, low: 5, target: 20 }, damageAbs: { on: false, low: 5, target: 20 }, reverse: { on: false, low: 1, target: 5 } },
-  party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', leaveIfNotLeader: false, onlyWhileRunning: false, acceptNames: '', autoRes: false, acceptRes: false, reviveWaitS: 20, resRadius: 300, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
+  party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', leaveIfNotLeader: false, onlyWhileRunning: false, acceptNames: '', autoInvite: false, inviteNames: '', inviteAnyone: false, inviteRadius: 300, autoRes: false, acceptRes: false, reviveWaitS: 20, resRadius: 300, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
     support: { enabled: false, whileStopped: false, range: 30, heal: { id: 0, group: 0, pct: 60, self: false }, group: { id: 0, group: 0, pct: 60, count: 2 }, buffs: [] } },
   wardrobe: { on: true, phantom: true, realAnim: true, hideAvatars: false,
     eq: {}, av: {}, pet: { atk: 0, pick: 0, mount: 0 }, presets: {}, undo: null },
@@ -6746,9 +6746,11 @@ const Party = {
   registration: null,
   lastRegisterAt: -Infinity,
   message: 'Auto-recruit off.',
+  inviteMessage: '', invitedAt: new Map(), lastInviteAt: -Infinity,
   joinMessage: '', joinedKey: '', lastPageAt: -Infinity, lastJoinAt: -Infinity, scanDoneAt: -Infinity, wantPage: 1,
   reset() {
     this.answered = ''; this.registration = null; this.lastRegisterAt = -Infinity; this.message = 'Waiting for party state.';
+    this.inviteMessage = ''; this.invitedAt.clear(); this.lastInviteAt = -Infinity;
     this.joinMessage = ''; this.joinedKey = ''; this.lastPageAt = this.lastJoinAt = this.scanDoneAt = -Infinity; this.wantPage = 1;
   },
   // Comma or line separated character names; empty means everyone.
@@ -6932,13 +6934,43 @@ const Party = {
       UI.toast('Accepted resurrection from ' + caster.name, 'info', 3000);
     }
   },
+  // Invite players in view: the listed names at any distance, and optionally anyone within the radius. Each player is
+  // asked again only after a growing wait (30 s, 60 s ... 10 min), because an invite can go unanswered (invites off).
+  autoInvite() {
+    const c = Settings.profile.party, names = this.names(c.inviteNames), gp = World.gp, social = gp?.social;
+    if (!c.autoInvite || (!names.length && !c.inviteAnyone)) { this.inviteMessage = ''; return; }
+    if (!social || !Array.isArray(social.members)) { this.inviteMessage = 'Waiting for party state.'; return; }
+    const lower = v => String(v || '').trim().toLowerCase(), me = lower(social.localName), main = lower(c.mainName);
+    if (c.joinMain && main && me !== main) { this.inviteMessage = 'Off while joining the party leader.'; return; }
+    if (social.leader ? social.self !== social.leader && !(social.options & 4) : social.members.length > 1) { this.inviteMessage = 'Only the party leader can invite.'; return; }
+    const options = social.leader ? social.options : (gp.partyMatching ? this.options(gp.partyMatching, social) : (c.expShare ? 1 : 0) | (c.itemShare ? 2 : 0));
+    if (!Number.isInteger(options)) { this.inviteMessage = 'Waiting for party options.'; return; }
+    if (social.members.length >= ((options & 1) ? 8 : 4)) { this.inviteMessage = 'Party full.'; return; }
+    const t = now(), members = new Set(social.members.map(m => lower(m?.name)).filter(Boolean)), pose = World.pose();
+    for (const n of members) this.invitedAt.delete(n);
+    const wanted = [...World.ents.values()].filter(e => e.kind === 'player' && e.gid !== gp.localGid && lower(e.name) && lower(e.name) !== me && !members.has(lower(e.name)) &&
+      (names.includes(lower(e.name)) || c.inviteAnyone && dist2D(e, pose) <= c.inviteRadius));
+    let waiting = false, sent = '';
+    for (const e of wanted) {
+      const key = lower(e.name), seen = this.invitedAt.get(key);
+      if (seen) seen.seenAt = t;
+      if (seen && t - seen.at < Math.min(600000, 30000 * 2 ** (seen.tries - 1))) { waiting = true; continue; }
+      if (sent || t - this.lastInviteAt < 3000 || !Cmd.spaced('party-invite')) continue;
+      if (Cmd.raw({ kind: 'party-invite', gid: e.gid, options }, 'Auto-invite ' + e.name)) {
+        this.invitedAt.set(key, { at: t, seenAt: t, tries: (seen?.tries || 0) + 1 }); this.lastInviteAt = t; sent = e.name;
+        UI.toast('Party invite sent: ' + e.name, 'info', 2500);
+      }
+    }
+    for (const [key, v] of this.invitedAt) if (t - v.seenAt > 30 * 60000) this.invitedAt.delete(key);
+    this.inviteMessage = sent ? 'Invited ' + sent + '.' : waiting ? 'Waiting before inviting again.' : 'Nobody to invite in view.';
+  },
   tick() {
     this.acceptResurrection();
     if (World.inWorld() && Settings.profile.party.acceptRes) this.helping();
     const c = Settings.profile.party;
     // Optional: party joining, leaving, recruiting and accepting wait until the bot is running (default: they work while stopped).
-    if (c.onlyWhileRunning && !Hunt.running) { this.joinMessage = ''; this.message = 'Waiting for the bot to be started.'; return; }
-    if (World.inWorld()) { this.leaveWrongParty(); this.joinMain(); } else this.joinMessage = '';
+    if (c.onlyWhileRunning && !Hunt.running) { this.joinMessage = this.inviteMessage = ''; this.message = 'Waiting for the bot to be started.'; return; }
+    if (World.inWorld()) { this.leaveWrongParty(); this.joinMain(); this.autoInvite(); } else this.joinMessage = this.inviteMessage = '';
     if (!World.inWorld() || (!c.autoAcceptMatching && !c.autoRecruit)) return;
     const gp = World.gp, matching = gp?.partyMatching, request = matching?.request, social = gp?.social;
     if (!matching || !social || !Array.isArray(social.members)) return;
@@ -19408,8 +19440,13 @@ const UI = {
         this.check("Leave someone else's party when the party leader is back", () => party().leaveIfNotLeader, v => { party().leaveIfNotLeader = v; Party.reset(); }),
         el('p', 'For your other accounts. While you are not in a party, the bot accepts a party invitation from that character, or finds their party listing on the party-matching board and applies to it. The main account needs Auto-recruit and Auto-accept party-matching joins ticked. It also rejoins after a disconnect, once the character is back in the game. Leave this off on the main account.', 'muted'),
         el('p', 'With the leave option on, a party led by someone else is left only once the party leader is in view near your hunting spot. If the party leader disconnects, the party the game hands to another member stays together until they are back.', 'muted'),
+        this.check('Auto-invite players', () => party().autoInvite, v => { party().autoInvite = v; Party.reset(); }),
+        this.text('Invite these players', () => party().inviteNames, v => party().inviteNames = v, 'names, comma separated'),
+        this.check('Also invite anyone nearby', () => party().inviteAnyone, v => party().inviteAnyone = v),
+        this.number('Invite radius (m)', () => party().inviteRadius / 10, v => party().inviteRadius = v * 10, 1, 100),
+        el('p', 'Off by default. Sends a party invite to the listed players whenever they are in view, and to anyone within the radius if the nearby option is on. Only you as party leader (or any member, if the party lets members invite) can invite, and not while the party is full. A player who does not answer is asked again after 30 seconds, then 1, 2, 4 minutes and so on, up to 10 minutes. They still have to accept, or use auto-accept on their side. Inviting anyone nearby can annoy other players. With "Join the party leader" on, only the leader account invites.', 'muted'),
         this.check('Only join and accept parties while the bot is running', () => party().onlyWhileRunning, v => { party().onlyWhileRunning = v; Party.reset(); }),
-        el('p', 'Off by default: Auto-recruit, Auto-accept and joining the party leader also work while hunting is stopped. Turn this on to make all of them wait until you press Start. Resurrection is not affected.', 'muted'),
+        el('p', 'Off by default: Auto-recruit, Auto-accept, Auto-invite and joining the party leader also work while hunting is stopped. Turn this on to make all of them wait until you press Start. Resurrection is not affected.', 'muted'),
         this.check('Accept resurrection from party members', () => party().acceptRes, v => party().acceptRes = v),
         this.number('Wait for a party resurrection (s)', () => party().reviveWaitS, v => party().reviveWaitS = v, 5, 600),
         el('p', 'When you are dead and a party member casts Rebirth on you, the bot answers Yes. Works during hunting and while stopped; resurrection offers from other players are left to you. With a living party member in view it waits this long after dying before reviving itself in town (20 s by default).', 'muted'),
@@ -19678,6 +19715,7 @@ const UI = {
     if (this.is('Party') && this.partyNote) {
       const notes = [Settings.profile.party.autoRecruit ? Party.message : 'Auto-recruit off.'];
       if (Settings.profile.party.joinMain && Party.joinMessage) notes.push(Party.joinMessage);
+      if (Settings.profile.party.autoInvite && Party.inviteMessage) notes.push(Party.inviteMessage);
       if (Settings.profile.party.autoRes) notes.push(Resurrect.message);
       this.partyNote.textContent = notes.join(' ');
     }
