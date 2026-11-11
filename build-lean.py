@@ -28,6 +28,14 @@ hook = hook.replace("        if (name === 'sro-simulation') {\n", "        if (n
 # Wardrobe rewrites only renderer copies; the mirror retains real items.
 hook = hook.replace("          if (!(Hook.probe.passSelect && inner && inner.kind === 'select')) return undefined;", "          return undefined;")
 world = section('const TRANSIENT_PHASES =', '// ---------------------------------------------------------------------------\n// Probe:')
+# Since the 2026-11-11 game update most gameplay events are deltas (delta: true): only the
+# keys that changed, removed keys as undefined. Merge them onto the last full state.
+gp_call_old = "          this.applyGameplay(ev.state);\n"
+assert gp_call_old in world
+world = world.replace(gp_call_old, "          this.applyGameplay(ev.state, !!ev.delta);\n")
+gp_old = "  applyGameplay(state) {\n    const prev = this.gp;\n"
+assert gp_old in world
+world = world.replace(gp_old, gp_old.replace('(state)', '(state, delta = false)') + "    if (delta && prev) state = { ...prev, ...state };\n")
 display = section('const Display =', '// ---------------------------------------------------------------------------\n// World mirror:')
 commands = section('const MIN_GAP =', '// ---------------------------------------------------------------------------\n// Assets.')
 # Remove chat, GM actions, and companion item targeting from the compact command layer.
@@ -238,7 +246,7 @@ skin += '\nconst LEAN_CSS = ' + __import__('json').dumps((base / 'lean-skin.css'
 header = '''// ==UserScript==
 // @name         nixxane bot
 // @namespace    https://opensro.online/
-// @version      1.2.258
+// @version      1.2.259
 // @updateURL    https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.meta.js
 // @downloadURL  https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -259,7 +267,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[NIX] Another SRO assistant is active. Disable it and reload to use NIX.');
   return;
 }
-const VERSION = '1.2.258';
+const VERSION = '1.2.259';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });

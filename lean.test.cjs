@@ -1465,6 +1465,16 @@ test('wardrobe appearance changes never alter real inventory or command metadata
   assert.equal(ev.state.inventory[0].refObjId,11); assert.equal(ev.state.inventory[0].plus,9);
   f.Settings.profile.wardrobe.on = false; f.Wardrobe.applyNow(); assert.equal(ev.state.inventory[0].refObjId,10);
 });
+test('delta gameplay events merge onto the last state and keep the bot in the world', () => {
+  const f = fixture(), gid = f.World.gp.localGid;
+  assert.ok(gid && f.World.inWorld());
+  f.World.applyEvent({kind:'gameplay',state:{target:777},delta:true});
+  assert.equal(f.World.gp.localGid, gid); assert.equal(f.World.gp.target, 777); assert.ok(f.World.inWorld());
+  f.World.applyEvent({kind:'gameplay',state:{target:undefined,shop:undefined},delta:true});
+  assert.equal(f.World.gp.target, undefined); assert.equal(f.World.gp.shop, undefined); assert.ok(f.World.inWorld());
+  f.World.applyEvent({kind:'gameplay',state:{localGid:gid}});
+  assert.equal(f.World.gp.target, undefined, 'a full state still replaces the old one');
+});
 test('all compatible paid avatar skins remain browsable without ownership or equipment filters', () => {
   const f = fixture(), items = [];
   for (let n=0;n<70;n++) items.push([100+n,'ITEM_MALL_AVATAR_M_PREMIUM_'+n,-1,n%4,'CH_M',0,0]);
