@@ -3097,6 +3097,15 @@ test('following walks to a party member who is too far away and keeps the saved 
   assert.equal(JSON.stringify(f.Settings.profile.hunt.center), spot, 'the saved spot is never changed');
   f.Trace.tick(); assert.equal(moves(f).length, 1, 'one move per second at most'); f.advance(1000); f.Trace.tick(); assert.equal(moves(f).length, 2);
 });
+test('following walks to a party member inside a cave without leaving the cave region', () => {
+  const f = traceFixture(-500), region = 0x8005, pose = f.World.gp.pose;
+  pose.regionId = region; pose.x = 50;
+  for (const m of f.World.gp.social.members) m.region = region;
+  f.World.gp.social.members[0].x = 50; f.World.gp.social.members[1].x = -450;
+  assert.equal(f.Trace.tick(), true); assert.equal(f.Trace.code, 'walking');
+  const m = moves(f); assert.equal(m.length, 1);
+  assert.equal(m[0].destination.regionId, region, 'the move stays in the cave region'); assert.ok(m[0].destination.x < 50 && m[0].destination.x > -450);
+});
 test('following hunts around the member once close, and restores the saved spot afterwards', () => {
   const f = traceFixture(60), spot = JSON.stringify(f.Settings.profile.hunt.center), pose = f.World.gp.pose;
   assert.equal(f.Trace.tick(), true); assert.equal(f.huntedAround.length, 1);

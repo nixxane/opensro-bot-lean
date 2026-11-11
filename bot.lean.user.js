@@ -14241,7 +14241,10 @@ const Trace = {
   beside(pos, from, keep) {
     const d = regionDelta(pos, from), length = Math.hypot(...d);
     if (!length || length <= keep) return from;
-    const k = keep / length, x = pos.x + d[0] * k, z = pos.z + d[1] * k, sx = Math.floor(x / SECTOR), sz = Math.floor(z / SECTOR);
+    const k = keep / length, x = pos.x + d[0] * k, z = pos.z + d[1] * k;
+    // Caves have no sector grid: coordinates are local to the one region, which must stay as it is.
+    if ((pos.regionId | from.regionId) & DUNGEON) return { regionId: pos.regionId, x, y: pos.y, z };
+    const sx = Math.floor(x / SECTOR), sz = Math.floor(z / SECTOR);
     return { regionId: ((pos.regionId & 255) + sx) | (((pos.regionId >>> 8) + sz) << 8), x: x - sx * SECTOR, y: pos.y, z: z - sz * SECTOR };
   },
   reset() { this.travel = null; this.walking = false; this.sentAt = -Infinity; this.message = this.cfg().enabled ? 'Waiting for the party.' : 'Following off.'; this.code = this.cfg().enabled ? 'waiting' : 'off'; },
