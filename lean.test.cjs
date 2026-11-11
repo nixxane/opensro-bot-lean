@@ -2853,6 +2853,21 @@ test('SoX pickups are counted and announced once; gold, unknown items and stoppe
   f.Settings.profile.hunt.pickup.soxSound = true; f.Hunt.stop(); pick(901); assert.equal(f.Stats.session.sox, 2);
   f.Hunt.start(); f.Stats.reset(); assert.equal(f.Stats.session.sox, 0);
 });
+test('SoX pickups are counted per seal and the paused-session log line carries the totals', () => {
+  const f = fixture();
+  f.Sound.play = () => true;
+  f.Items.data.set(901, { name: 'Star sword', icon: '', code: 'ITEM_CH_SWORD_01_A_RARE' });
+  f.Items.data.set(902, { name: 'Moon sword', icon: '', code: 'ITEM_CH_SWORD_01_B_RARE' });
+  f.Items.data.set(903, { name: 'Sun sword', icon: '', code: 'ITEM_CH_SWORD_01_C_RARE' });
+  const pick = ref => f.Stats.pickup({ ref, name: 'Sword', gold: false, petGid: 0, before: 0 });
+  f.Hunt.start(); pick(903); pick(903); pick(902); pick(901);
+  const d = f.Stats.display();
+  assert.deepEqual([d.sox, d.sun, d.moon, d.star], ['4', '2', '1', '1']);
+  f.Hunt.stop();
+  const entry = f.Log.lines.filter(e => e.code === 'session-summary').at(-1);
+  assert.match(f.Activity.userMessage(entry), /SoX 4 \(Sun 2, Moon 1, Star 1\)/);
+  f.Stats.reset(); assert.deepEqual([f.Stats.session.sun, f.Stats.session.moon, f.Stats.session.star], [0, 0, 0]);
+});
 test('SoX chime can be kept for Moon and Sun, or Sun only, while every pickup still counts', () => {
   const f = fixture(); let chimes = 0;
   f.Sound.play = kind => { if (kind === 'sox') chimes++; return true; };

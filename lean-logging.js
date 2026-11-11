@@ -242,7 +242,11 @@ bus.on( "hunt", running => {
 		Activity.emit( { category: "session", code: "session-start", text: "Session " + Activity.session + " started; bot " + VERSION + ".", outcome: "confirmed" } );
 	} else {
 		Activity.observePotions(); Activity.flushPotions();
-		Activity.emit( { category: "session", code: "session-summary", text: "Session paused; totals retained.", outcome: "summary", details: Stats.session } );
+		const s = Stats.display();
+		// The totals go in the log line, so a session's loot and seals can be read back after it ends.
+		const totals = "Hunting paused after " + s.time + ": " + s.kills + " kills, " + s.items + " items, SoX " + s.sox +
+			" (Sun " + s.sun + ", Moon " + s.moon + ", Star " + s.star + "), XP " + s.xp + ", gold " + s.gold + ".";
+		Activity.emit( { category: "session", code: "session-summary", text: "Session paused; totals retained.", userText: totals, outcome: "summary", details: Stats.session } );
 	}
 } );
 bus.on( "character", name => {

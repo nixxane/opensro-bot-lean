@@ -10,7 +10,8 @@ session or takes ownership of gameplay.
 const SESSION_FIELDS = [
 	[ "state", "Session" ], [ "time", "Hunting time" ], [ "xp", "XP gained" ],
 	[ "rate", "XP / hour" ], [ "gold", "Net gold" ], [ "kills", "Confirmed kills" ],
-	[ "deaths", "Deaths" ], [ "potions", "Potions used" ], [ "items", "Items picked up" ], [ "sox", "SoX found" ]
+	[ "deaths", "Deaths" ], [ "potions", "Potions used" ], [ "items", "Items picked up" ], [ "sox", "SoX found" ],
+	[ "sun", "Seal of Sun" ], [ "moon", "Seal of Moon" ], [ "star", "Seal of Star" ]
 ];
 const SESSION_LIMIT = { delayMs: 60000, bottomTolerance: 4 };
 

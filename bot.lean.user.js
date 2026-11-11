@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         nixxane bot
 // @namespace    https://opensro.online/
-// @version      1.2.260
+// @version      1.2.261
 // @updateURL    https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.meta.js
 // @downloadURL  https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -22,7 +22,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[NIX] Another SRO assistant is active. Disable it and reload to use NIX.');
   return;
 }
-const VERSION = '1.2.260';
+const VERSION = '1.2.261';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -6574,7 +6574,7 @@ const Loot = {
 // Page-local hunting session. No persistence, uploads or gameplay commands.
 const Stats = {
   values: { loot: 0, casts: 0, potions: 0, deaths: 0 },
-  session: { ms: 0, xp: 0n, gold: 0n, kills: 0, deaths: 0, potions: 0, items: 0, sox: 0 },
+  session: { ms: 0, xp: 0n, gold: 0n, kills: 0, deaths: 0, potions: 0, items: 0, sox: 0, star: 0, moon: 0, sun: 0 },
   active: false, lastAt: null, baseline: null, dead: false, character: null, started: false,
   levels: null, loading: null, retryAt: 0, pendingXP: [], xpPartial: false, xpKnown: false, goldKnown: false,
   killed: new Set(), potions: [], potionTotals: new Map(), fields: {},
@@ -6598,7 +6598,7 @@ const Stats = {
   },
   reset() {
     this.values = { loot: 0, casts: 0, potions: 0, deaths: 0 };
-    this.session = { ms: 0, xp: 0n, gold: 0n, kills: 0, deaths: 0, potions: 0, items: 0, sox: 0 };
+    this.session = { ms: 0, xp: 0n, gold: 0n, kills: 0, deaths: 0, potions: 0, items: 0, sox: 0, star: 0, moon: 0, sun: 0 };
     this.lastAt = now(); this.active = false; this.baseline = null;
     this.dead = World.isDead(); this.pendingXP = []; this.xpPartial = this.xpKnown = this.goldKnown = false;
     this.potions = []; this.potionTotals.clear();
@@ -6617,8 +6617,8 @@ const Stats = {
   },
   // A confirmed bot pickup of Star/Moon/Sun gear. Unknown items (catalogue not loaded) are not announced.
   soxFound(a, tier) {
-    this.session.sox++;
     const name = a.name || Items.name(a.ref), label = ['Star', 'Moon', 'Sun'][tier - 1];
+    this.session.sox++; this.session[label.toLowerCase()]++;
     const P = Hunt.cfg().pickup;
     // The notice and sound can be kept for the rarer tiers only (e.g. Sun only); every pickup still counts.
     if (!P.soxSound || tier < 1 + ['star', 'moon', 'sun'].indexOf(P.soxSoundFrom)) return;
@@ -6721,16 +6721,17 @@ const Stats = {
     return { state: this.active ? 'Tracking' : 'Paused', time,
       xp: this.xpKnown ? this.number(s.xp) + partial : '—', rate: this.xpKnown ? rate + partial : '—',
       gold: this.goldKnown ? (s.gold > 0n ? '+' : '') + this.number(s.gold) : '—',
-      kills: this.number(s.kills), deaths: this.number(s.deaths), potions: this.number(s.potions), items: this.number(s.items), sox: this.number(s.sox) };
+      kills: this.number(s.kills), deaths: this.number(s.deaths), potions: this.number(s.potions), items: this.number(s.items), sox: this.number(s.sox),
+      star: this.number(s.star), moon: this.number(s.moon), sun: this.number(s.sun) };
   },
   draw(parent) {
     const box = UI.group('Session stats'); this.fields = {};
-    for (const [key, label] of [['state','Session'],['time','Hunting time'],['xp','XP gained'],['rate','XP / hour'],['gold','Net gold'],['kills','Confirmed kills'],['deaths','Deaths'],['potions','Potions used'],['items','Items picked up'],['sox','SoX found']]) {
+    for (const [key, label] of [['state','Session'],['time','Hunting time'],['xp','XP gained'],['rate','XP / hour'],['gold','Net gold'],['kills','Confirmed kills'],['deaths','Deaths'],['potions','Potions used'],['items','Items picked up'],['sox','SoX found'],['sun','Seal of Sun'],['moon','Seal of Moon'],['star','Seal of Star']]) {
       const value = el('span'); value.setAttribute('aria-label', label); this.fields[key] = value;
       const row = el('div', null, 'field'); row.append(el('span', label), value); box.append(row);
     }
     box.append(UI.button('Reset session', () => this.reset()),
-      el('p', 'Local to this page; pauses while hunting is stopped or disconnected. Reset or reload clears totals. Town trips count while hunting stays enabled. Gold includes purchases and repairs. Kills require your or your pet’s fatal result; item counts use confirmed bot pickups; SoX found counts confirmed pickups of Star, Moon and Sun gear. HP, MP, vigor and cure uses require inventory confirmation. XP/hour appears after 30 seconds; partial means a level transition or missing data is unresolved.', 'muted'));
+      el('p', 'Local to this page; pauses while hunting is stopped or disconnected. Reset or reload clears totals. Town trips count while hunting stays enabled. Gold includes purchases and repairs. Kills require your or your pet’s fatal result; item counts use confirmed bot pickups; SoX found counts confirmed pickups of Star, Moon and Sun gear, with each seal counted below it. HP, MP, vigor and cure uses require inventory confirmation. XP/hour appears after 30 seconds; partial means a level transition or missing data is unresolved.', 'muted'));
     parent.append(box); this.render();
   },
   render() {
@@ -16985,7 +16986,7 @@ const Alchemy = {
 };
 
 
-const RELEASE_NOTES = [{"version": "1.2.260", "title": "Loot log shows Star/Moon/Sun", "items": ["Picked-up loot in the log now names the item, and SoX gear says which seal it is, e.g. \"Picked up ... (Seal of Sun)\". Before it only said \"Picked up loot.\"", "This works even with the SoX sound turned off."], "note": "Tested in simulation."}, {"version": "1.2.259", "title": "Hotfix: stuck on \"Waiting for game world\"", "items": ["The game update changed how it sends character state (only the parts that changed). The bot lost track of your character and stayed on \"Waiting for game world\". It now follows the new format again."], "note": "Checked against the live game's code; tested in simulation."}, {"version": "1.2.258", "title": "Auto party invite by name or nearby", "items": ["New \"Auto-invite players\" option in Party, off by default. It invites the players you list by name whenever they are in view.", "Optional \"Also invite anyone nearby\" invites everyone within the radius you set (30 m by default).", "Only invites while you are solo, the party leader, or in a party that lets members invite, and never into a full party.", "A player who does not answer is asked again after 30 s, then 1, 2, 4 minutes and so on, up to 10 minutes, so nobody gets spammed."], "note": "Tested in simulation only."}, {"version": "1.2.257", "title": "SoX chime for Sun only (or Moon and Sun)", "items": ["New \"SoX chime for\" choice under the SoX chime in Hunting → Loot: Star, Moon and Sun (as before), Moon and Sun, or Sun only.", "The choice also covers the \"SoX found\" notice and your custom SoX sound. Every SoX pickup is still counted in the session stats."]}, {"version": "1.2.256", "title": "Pick your own sound for SoX drops", "items": ["Hunting → Loot has a new \"Custom SoX sound…\" button under the SoX chime. Choose an audio file (mp3, wav, ogg, up to 1 MB) and the bot plays it instead of the built-in chime when it picks up Star, Moon or Sun gear.", "\"Use built-in chime\" puts the old sound back. Test SoX chime plays whichever sound is set.", "The sound is saved in this browser only, so it is not part of shared or exported settings."]}, {"version": "1.2.255", "title": "Leveling keeps the weapon type your character started with", "items": ["A blade character could end up buying swords. Auto-equip treated every weapon as the same kind, so a dropped sword with better stats replaced the blade, and leveling then bought the next sword at every tier.", "With Level up by itself on, the bot now remembers the weapon type your character had when leveling first saw it (a new character's starting weapon) and keeps buying that type. If it holds another type, the next town trip buys the right one back. Choosing a build in \"Character build\" still decides the weapon instead.", "Auto-equip now only swaps a weapon for one of the same type.", "A character that already switched type is remembered with the weapon it holds now. If that is wrong, pick a build with the right weapon in \"Character build\"."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.254", "title": "Leveling never uses wall skills, and you can pick a character build", "items": ["Zero-setup leveling no longer uses Crystal Wall and Fire Wall (they keep the character from moving). Teleports, dashes, hides, traps, auras and transforms are left out too.", "Wall skills that leveling added to an existing profile are taken out. Skills you added yourself stay.", "New \"Character build\" choice in zero-setup leveling: Auto (as before, minus the blocked skills), or Glaive nuker, Spear fighter, Blade tank, Sword fighter, Bow nuker, Force support, Wizard, Warlock, Warrior, Rogue, Cleric, Bard.", "A build sets the masteries and their order, learns only its own skills, puts them in its order, uses one imbue and buys its weapon type (and a shield) on a town trip. Enhanced or protected gear is never replaced.", "Changing the build starts the setup again for that character. Skills already learned stay learned; skill points are not refunded."], "note": "Only tested in simulation. Not tried on the live server yet. The builds come from community guides and the game data, so check one before you rely on it."}, {"version": "1.2.253", "title": "Leveling makes Donwhang the return point before hunting there", "items": ["A Jangan character could teleport to Donwhang and hunt there with the return point still in Jangan. When Jangan had no hunting spot near the character's level, the bot picked a Donwhang spot and simply travelled to it, skipping the move. Every death and return scroll then went back to Jangan.", "Now a hunting spot near another town always starts the move first: the bot goes to that town's world statue, makes it the return point, and only hunts there once the game confirms it. With \"Move to the next town\" off, it never hunts around another town.", "A move that fails no longer gives up on that town for the whole session. The log says the return point is unchanged, and the bot tries again after 10 minutes."], "note": "Tested in simulation only, not in a live game."}];
+const RELEASE_NOTES = [{"version": "1.2.261", "title": "Session stats count Sun, Moon and Star", "items": ["The Session panel and Session window now show Seal of Sun, Seal of Moon and Seal of Star counts under SoX found.", "When hunting stops, the log line now lists the session totals: time, kills, items, SoX per seal, XP and gold."], "note": "Tested in simulation."}, {"version": "1.2.260", "title": "Loot log shows Star/Moon/Sun", "items": ["Picked-up loot in the log now names the item, and SoX gear says which seal it is, e.g. \"Picked up ... (Seal of Sun)\". Before it only said \"Picked up loot.\"", "This works even with the SoX sound turned off."], "note": "Tested in simulation."}, {"version": "1.2.259", "title": "Hotfix: stuck on \"Waiting for game world\"", "items": ["The game update changed how it sends character state (only the parts that changed). The bot lost track of your character and stayed on \"Waiting for game world\". It now follows the new format again."], "note": "Checked against the live game's code; tested in simulation."}, {"version": "1.2.258", "title": "Auto party invite by name or nearby", "items": ["New \"Auto-invite players\" option in Party, off by default. It invites the players you list by name whenever they are in view.", "Optional \"Also invite anyone nearby\" invites everyone within the radius you set (30 m by default).", "Only invites while you are solo, the party leader, or in a party that lets members invite, and never into a full party.", "A player who does not answer is asked again after 30 s, then 1, 2, 4 minutes and so on, up to 10 minutes, so nobody gets spammed."], "note": "Tested in simulation only."}, {"version": "1.2.257", "title": "SoX chime for Sun only (or Moon and Sun)", "items": ["New \"SoX chime for\" choice under the SoX chime in Hunting → Loot: Star, Moon and Sun (as before), Moon and Sun, or Sun only.", "The choice also covers the \"SoX found\" notice and your custom SoX sound. Every SoX pickup is still counted in the session stats."]}, {"version": "1.2.256", "title": "Pick your own sound for SoX drops", "items": ["Hunting → Loot has a new \"Custom SoX sound…\" button under the SoX chime. Choose an audio file (mp3, wav, ogg, up to 1 MB) and the bot plays it instead of the built-in chime when it picks up Star, Moon or Sun gear.", "\"Use built-in chime\" puts the old sound back. Test SoX chime plays whichever sound is set.", "The sound is saved in this browser only, so it is not part of shared or exported settings."]}, {"version": "1.2.255", "title": "Leveling keeps the weapon type your character started with", "items": ["A blade character could end up buying swords. Auto-equip treated every weapon as the same kind, so a dropped sword with better stats replaced the blade, and leveling then bought the next sword at every tier.", "With Level up by itself on, the bot now remembers the weapon type your character had when leveling first saw it (a new character's starting weapon) and keeps buying that type. If it holds another type, the next town trip buys the right one back. Choosing a build in \"Character build\" still decides the weapon instead.", "Auto-equip now only swaps a weapon for one of the same type.", "A character that already switched type is remembered with the weapon it holds now. If that is wrong, pick a build with the right weapon in \"Character build\"."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.254", "title": "Leveling never uses wall skills, and you can pick a character build", "items": ["Zero-setup leveling no longer uses Crystal Wall and Fire Wall (they keep the character from moving). Teleports, dashes, hides, traps, auras and transforms are left out too.", "Wall skills that leveling added to an existing profile are taken out. Skills you added yourself stay.", "New \"Character build\" choice in zero-setup leveling: Auto (as before, minus the blocked skills), or Glaive nuker, Spear fighter, Blade tank, Sword fighter, Bow nuker, Force support, Wizard, Warlock, Warrior, Rogue, Cleric, Bard.", "A build sets the masteries and their order, learns only its own skills, puts them in its order, uses one imbue and buys its weapon type (and a shield) on a town trip. Enhanced or protected gear is never replaced.", "Changing the build starts the setup again for that character. Skills already learned stay learned; skill points are not refunded."], "note": "Only tested in simulation. Not tried on the live server yet. The builds come from community guides and the game data, so check one before you rely on it."}];
 
 // Check trusted repository metadata; never execute downloaded update code.
 const Updates = {
@@ -18539,7 +18540,7 @@ const UI = {
   makeSide() {
     const side = el('aside', null, 'side wide-only'); this.sideFields = {};
     const session = this.group('Session');
-    for (const [key, label] of [['time', 'Hunting time'], ['rate', 'XP / hour'], ['xp', 'XP gained'], ['gold', 'Net gold'], ['kills', 'Kills'], ['deaths', 'Deaths'], ['sox', 'SoX found'], ['items', 'Items picked up'], ['potions', 'Potions used']])
+    for (const [key, label] of [['time', 'Hunting time'], ['rate', 'XP / hour'], ['xp', 'XP gained'], ['gold', 'Net gold'], ['kills', 'Kills'], ['deaths', 'Deaths'], ['sox', 'SoX found'], ['sun', 'Seal of Sun'], ['moon', 'Seal of Moon'], ['star', 'Seal of Star'], ['items', 'Items picked up'], ['potions', 'Potions used']])
       this.sideFields[key] = this.readout(session, label, 'Session');
     session.append(this.button('Reset session', () => Stats.reset()));
     const supplies = this.group('Supplies');
@@ -18579,7 +18580,7 @@ const UI = {
       this.cstatFields.spot.textContent = Number.isFinite(away) ? Math.round(away / 10) + ' m away' : spot ? 'another region' : 'not saved';
     }
     const s = Stats.display();
-    for (const key of ['time', 'rate', 'xp', 'gold', 'kills', 'deaths', 'sox', 'items', 'potions']) this.sideFields[key].textContent = s[key];
+    for (const key of ['time', 'rate', 'xp', 'gold', 'kills', 'deaths', 'sox', 'sun', 'moon', 'star', 'items', 'potions']) this.sideFields[key].textContent = s[key];
     const pet = live ? Loot.pet() : null, center = Settings.profile.hunt.center, distance = center && live ? dist2D(World.pose(), center) : Infinity;
     this.sideFields.hp.textContent = live ? n(Potion.count('hp')) : '—';
     this.sideFields.mp.textContent = live ? n(Potion.count('mp')) : '—';
@@ -19769,7 +19770,8 @@ session or takes ownership of gameplay.
 const SESSION_FIELDS = [
 	[ "state", "Session" ], [ "time", "Hunting time" ], [ "xp", "XP gained" ],
 	[ "rate", "XP / hour" ], [ "gold", "Net gold" ], [ "kills", "Confirmed kills" ],
-	[ "deaths", "Deaths" ], [ "potions", "Potions used" ], [ "items", "Items picked up" ], [ "sox", "SoX found" ]
+	[ "deaths", "Deaths" ], [ "potions", "Potions used" ], [ "items", "Items picked up" ], [ "sox", "SoX found" ],
+	[ "sun", "Seal of Sun" ], [ "moon", "Seal of Moon" ], [ "star", "Seal of Star" ]
 ];
 const SESSION_LIMIT = { delayMs: 60000, bottomTolerance: 4 };
 
@@ -20173,7 +20175,11 @@ bus.on( "hunt", running => {
 		Activity.emit( { category: "session", code: "session-start", text: "Session " + Activity.session + " started; bot " + VERSION + ".", outcome: "confirmed" } );
 	} else {
 		Activity.observePotions(); Activity.flushPotions();
-		Activity.emit( { category: "session", code: "session-summary", text: "Session paused; totals retained.", outcome: "summary", details: Stats.session } );
+		const s = Stats.display();
+		// The totals go in the log line, so a session's loot and seals can be read back after it ends.
+		const totals = "Hunting paused after " + s.time + ": " + s.kills + " kills, " + s.items + " items, SoX " + s.sox +
+			" (Sun " + s.sun + ", Moon " + s.moon + ", Star " + s.star + "), XP " + s.xp + ", gold " + s.gold + ".";
+		Activity.emit( { category: "session", code: "session-summary", text: "Session paused; totals retained.", userText: totals, outcome: "summary", details: Stats.session } );
 	}
 } );
 bus.on( "character", name => {

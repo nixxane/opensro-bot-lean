@@ -301,7 +301,7 @@ const UI = {
   makeSide() {
     const side = el('aside', null, 'side wide-only'); this.sideFields = {};
     const session = this.group('Session');
-    for (const [key, label] of [['time', 'Hunting time'], ['rate', 'XP / hour'], ['xp', 'XP gained'], ['gold', 'Net gold'], ['kills', 'Kills'], ['deaths', 'Deaths'], ['sox', 'SoX found'], ['items', 'Items picked up'], ['potions', 'Potions used']])
+    for (const [key, label] of [['time', 'Hunting time'], ['rate', 'XP / hour'], ['xp', 'XP gained'], ['gold', 'Net gold'], ['kills', 'Kills'], ['deaths', 'Deaths'], ['sox', 'SoX found'], ['sun', 'Seal of Sun'], ['moon', 'Seal of Moon'], ['star', 'Seal of Star'], ['items', 'Items picked up'], ['potions', 'Potions used']])
       this.sideFields[key] = this.readout(session, label, 'Session');
     session.append(this.button('Reset session', () => Stats.reset()));
     const supplies = this.group('Supplies');
@@ -341,7 +341,7 @@ const UI = {
       this.cstatFields.spot.textContent = Number.isFinite(away) ? Math.round(away / 10) + ' m away' : spot ? 'another region' : 'not saved';
     }
     const s = Stats.display();
-    for (const key of ['time', 'rate', 'xp', 'gold', 'kills', 'deaths', 'sox', 'items', 'potions']) this.sideFields[key].textContent = s[key];
+    for (const key of ['time', 'rate', 'xp', 'gold', 'kills', 'deaths', 'sox', 'sun', 'moon', 'star', 'items', 'potions']) this.sideFields[key].textContent = s[key];
     const pet = live ? Loot.pet() : null, center = Settings.profile.hunt.center, distance = center && live ? dist2D(World.pose(), center) : Infinity;
     this.sideFields.hp.textContent = live ? n(Potion.count('hp')) : '—';
     this.sideFields.mp.textContent = live ? n(Potion.count('mp')) : '—';
