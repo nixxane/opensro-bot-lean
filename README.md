@@ -45,6 +45,7 @@ Settings are saved per character.
 
 - [Full manual](docs/manual.md)
 - [Obstacle recovery](OBSTACLE-RECOVERY.md)
+- [Live dashboard on your phone](live/README.md) (optional companion, runs on your own machine)
 - Help, suggestions, bug reports: [Discord](https://discord.gg/Y5H5ZyfQ7u), or **Settings → Send bug report** in the panel
 
 ## License
