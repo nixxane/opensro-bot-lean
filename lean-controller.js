@@ -42,6 +42,16 @@ Hunt.threat = function (current) {
   return best;
 };
 Hunt.chooseLoot = () => Loot.choose();
+// A party Giant (rarity 4 with the party icon, which is how Jangan Cave spawns its giants) reads as class 'party', so
+// the Party monsters switch (off by default) hid it. It has its own Giant party switch now, like the Berserk one.
+const huntClassAllowed = Hunt.classAllowed;
+Hunt.classAllowed = function (e) {
+  if (monsterClass(e) === 'party' && RARITY[e.rarity ?? 0] === 'giant') {
+    const classes = this.cfg().classes;
+    return !!(classes.giantParty ?? classes.giant);
+  }
+  return huntClassAllowed.call(this, e);
+};
 // Quest monsters first: while a quest's kills are still counting, its learned monster types are
 // taken before distance, as long as they pass the hunt's own filters - class, area, level range,
 // name lists and anti-KS. Something already hitting the player is never displaced by a preference.

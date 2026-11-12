@@ -56,7 +56,7 @@ const DEFAULT_PROFILE = {
   hunt: {
     levelSpots: { on: false, list: [] },
     center: null, radius: 400, chase: 700, returnToCenter: true, travel: true, attack: true,
-    classes: { normal: true, champion: true, giant: true, party: false, elite: false, unique: false, titan: false },
+    classes: { normal: true, champion: true, giant: true, giantParty: true, party: false, elite: false, unique: false, titan: false },
     levelMin: 0, levelMax: 0, include: '', exclude: '', priority: 'attackers', avoidKs: true, avoidKsScope: 'all', avoidKsBelow: 50,
     targetTimeoutS: 25,
     pickup: { enabled: true, soxOnly: false, skipStar: false, gold: true, potions: true, equipment: true, elixirs: true, powders: true, magicStones: true, attrStones: true, alchemy: true, others: true,
@@ -120,6 +120,9 @@ function botProfile(input) {
   if (!input.macro?.berserkClasses && (mode === 'off' || mode === 'always')) {
     for (const key of Object.keys(result.macro.berserkClasses)) result.macro.berserkClasses[key] = mode === 'always';
   }
+  // Hunting a party Giant used to follow the Party monsters switch, which hid them; they now follow Giants.
+  const savedClasses = input.hunt?.classes;
+  if (savedClasses && typeof savedClasses === 'object' && !('giantParty' in savedClasses)) result.hunt.classes.giantParty = result.hunt.classes.giant !== false;
   // Party Giants used to follow the Party monsters switch.
   const savedBerserk = input.macro?.berserkClasses;
   if (savedBerserk && typeof savedBerserk === 'object' && !('giantParty' in savedBerserk)) result.macro.berserkClasses.giantParty = savedBerserk.party === true;

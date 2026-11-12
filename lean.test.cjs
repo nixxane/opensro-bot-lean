@@ -10620,3 +10620,20 @@ test('the gear plan says why a piece is not bought', () => {
   assert.ok(notes.some(n => /^weapon: kept/.test(n)), notes.join(' | '));
   assert.ok(notes.some(n => /^(helmet|shoulders|chest|legs|gloves|boots): the town sells none/.test(n)), 'a part the town has nothing for at this level');
 });
+// Jangan Cave giants arrive as party giants (rarity 4 plus the party icon) and read as class 'party'.
+test('a party giant is hunted with the default settings, and its own switch turns it off', () => {
+  const f = fixture();
+  const mob = (gid, rarity, aux) => f.World.ents.set(gid, { gid, kind: 'monster', name: 'Mob' + gid, rarity, rarityAuxIcon: aux, regionId: 1, x: 100 + gid, y: 0, z: 100, level: 5, attackFlags: 16, appearanceState: [0] }).get(gid);
+  const giant = mob(60, 4, 1), party = mob(61, 0, 1);
+  f.Hunt.running = true; f.Hunt.state = 'search';
+  assert.equal(f.Hunt.classAllowed(giant), true, 'party giant on by default');
+  assert.equal(f.Hunt.classAllowed(party), false, 'ordinary party monster still off');
+  assert.equal(f.Hunt.chooseTarget()?.gid, 60);
+  f.Settings.profile.hunt.classes.giantParty = false;
+  assert.equal(f.Hunt.classAllowed(giant), false, 'the Giant party switch skips it');
+  f.Settings.profile.hunt.classes.party = true;
+  assert.equal(f.Hunt.classAllowed(giant), false, 'Party monsters no longer decides for giants');
+  assert.equal(f.Hunt.classAllowed(party), true);
+  assert.equal(f.botProfile({ hunt: { classes: { giant: true, party: false } } }).hunt.classes.giantParty, true, 'old saves follow Giants');
+  assert.equal(f.botProfile({ hunt: { classes: { giant: false } } }).hunt.classes.giantParty, false);
+});
