@@ -1,57 +1,77 @@
 # NIX live
 
-Watch your bots from your phone: status, HP/MP/XP, XP per hour, gold, kills, drops and the activity log, one card per character, refreshed every few seconds.
+Watch your bots from your phone: status, HP/MP/XP, XP per hour, gold, kills, drops and the activity log, one card per character, refreshed every 10 seconds.
 
-This is an optional companion, separate from the bot: the bot itself is unchanged and sends nothing. Everything runs on your own machine. There is no account and no quota, and nothing is stored. With the phone link on, traffic passes through Cloudflare's tunnel. For a summary every few minutes instead, see Discord session reports in the bot's Settings.
+The bot has a built-in **Live dashboard** in Settings. It is off by default. When you turn it on, the bot sends a small snapshot of itself to a hub that you run yourself, every 10 seconds by default (3 to 60). Nothing goes through nixxane bot servers, there is no account, and the address and code stay in your browser. For a summary every few minutes instead, see Discord session reports in the same Settings.
 
-## What you need
+You need one hub, reachable over HTTPS. Pick one:
 
-- The bot running in a browser with Tampermonkey (or Violentmonkey)
-- This `live` folder on the machine the bots run on
-- [Node.js](https://nodejs.org/) 18 or newer
-- `cloudflared`, for the phone link
-  - macOS: `brew install cloudflared`
-  - Windows: `winget install Cloudflare.cloudflared`
-  - Linux: see [Cloudflare's downloads](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/)
+| | Needs | Phone link stays the same | PC must be on |
+| --- | --- | --- | --- |
+| 1. Cloudflare Worker (recommended) | free Cloudflare account, Node.js 22+ | yes | no |
+| 2. Your PC with a named Cloudflare tunnel | a domain on Cloudflare, `cloudflared` | yes | yes |
+| 3. Local only | Node.js 18+, the separate reporter script | n/a (this machine only) | yes |
 
-Without `cloudflared` the dashboard still works, but only on the machine itself.
+## 1. Cloudflare Worker (recommended)
 
-## Start
+The Worker and one Durable Object run on your own Cloudflare account and serve the dashboard at a stable `https://nix-live.<your-name>.workers.dev` address. No PC has to stay on and no tunnel is needed.
 
-1. Start the hub and leave its window open.
-   - macOS / Linux: `node hub.js` in this folder
-   - Windows: double-click `start.bat`
-2. It prints three links:
-   - **Install reporter**: open it in the browser where the game runs, accept it in Tampermonkey, then reload the game tab. If Tampermonkey asks whether the script may connect to `127.0.0.1`, choose "Always allow". You do this once.
-   - **Phone link**: open it on your phone. Your characters appear a few seconds after they enter the game.
-   - **Dashboard**: the same page, for this machine only.
+1. In this folder: `cd worker`, then `npm install`.
+2. `npx wrangler login` (once; opens a browser to sign in to your Cloudflare account).
+3. `npm run setup`. It makes a private code, deploys the Worker, stores the code as the Worker secret `LIVE_CODE` and prints two links. Run `npm run setup -- --keep-code` later to redeploy with the same code.
+4. Open the **pair link** in the browser where the game runs. NIX shows "Pair with a live hub?" in its window; press **Pair**. That saves the hub and turns the dashboard on. Nothing is saved until you press Pair.
+5. Open the **dashboard link** on your phone. Your characters appear within about 10 seconds of entering the game.
+
+Cost: the free plan is enough. One character reporting every 10 seconds plus one open dashboard polling every 10 seconds is about 17,000 requests a day against the 100,000 daily limit. Reporting every 3 seconds, or several characters or open dashboards, uses more; when the daily limit is hit Cloudflare refuses requests until it resets, and the bot just waits and retries.
+
+## 2. Your PC with a named Cloudflare tunnel
+
+1. Start the hub and leave its window open, with `PUBLIC_URL` set to the tunnel's HTTPS address.
+   - macOS / Linux: `PUBLIC_URL=https://live.example.com node hub.js` in this folder
+   - Windows: set `PUBLIC_URL` first, then double-click `start.bat`
+2. Point a named tunnel at `http://127.0.0.1:4173` ([Cloudflare's guide](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/)).
+3. The hub prints a **Pair link** (`<PUBLIC_URL>/pair/<code>`). Open it in the game browser and press **Pair** in NIX, as above. Open `<PUBLIC_URL>/#<code>` on your phone.
+
+A quick tunnel (`cloudflared tunnel --url`, which the hub starts for you when `cloudflared` is installed) needs no account but gets a new address on every start, so it is for testing only: you would have to pair again each time.
+
+## 3. Local only
+
+The separate **NIX live reporter** userscript sends from the browser to a hub on the same machine, with no Cloudflare involved.
+
+1. Start the hub: `node hub.js` here, or double-click `start.bat` on Windows (set `TUNNEL=off` to skip the phone link).
+2. It prints an **Install reporter** link. Open it in the browser where the game runs, accept it in Tampermonkey, reload the game tab. If Tampermonkey asks whether the script may connect to `127.0.0.1`, choose "Always allow".
+3. Open the **Dashboard** link on this machine.
+
+Do not also turn on the bot's Live dashboard for the same hub; the two would report twice.
 
 ## Good to know
 
-- **The phone link is private.** Anyone who has the full link can watch your stats. The part after `#` is your code; it is created on first start and kept in the `.code` file. Never share that file or the link. The install link carries the same code, so treat it the same way. On Windows the `.code` file is not locked to your user the way it is on macOS and Linux, so keep the folder private. To get a new code, delete `.code`, restart the hub and install the reporter again.
-- **The phone link changes on every start.** Only the address changes; your code stays the same. The link is printed once its address resolves, which the hub checks with the public resolver `1.1.1.1`; on a network that blocks it, the link appears after 30 seconds instead.
-- **Local only.** Set `TUNNEL=off` to skip the phone link (macOS / Linux: `TUNNEL=off node hub.js`).
-- **"Offline" appears after 90 seconds without a report.** A background game tab can report as rarely as once a minute, so a late report first shows its age ("Hunting · fight · 40s ago"). A character that has not reported for a day is dropped.
-- **The hub must be running** on the machine with the bots. If that machine sleeps, the dashboard shows the bots as offline.
-- **Several bots** on the same machine all report to the same hub. Nothing extra to set up.
-- **Nothing is stored.** The hub keeps only each character's latest report in memory.
-- **It is read-only.** The reporter reads what the bot shows and never sends anything to the game.
+- **The code is private.** Anyone who has a dashboard or pair link can watch your stats. The part after `#` (or after `/pair/`) is the code. For the Node hub it is created on first start and kept in the `.code` file; for the Worker it is in `worker/.code` and in the Worker secret. Never share those files or links. To get a new code, delete `.code` and restart the hub (or run `npm run setup` without `--keep-code`), then pair again.
+- **Pairing never applies by itself.** A pair link only asks; a crafted link cannot point your bot at someone else's hub unless you press Pair. Only pair with a hub you set up yourself.
+- **What is sent**: character name, level, HP/MP/XP, state, position, session totals and the last 12 activity lines. It never includes game commands, account details or inventory contents.
+- **What stays in your browser**: the hub address and code. They are not part of share codes, backups, bug reports or the log.
+- **"Offline" appears after 90 seconds without a report.** A background game tab can report as rarely as once a minute, so a late report first shows its age. A character that has not reported for a day is dropped.
+- **Several bots** report to the same hub; the Worker keeps up to 50 characters.
+- **The Worker stores** each character's latest report (updated about once a minute) so it survives a restart. The Node hub keeps it in memory only.
+- **It is read-only.** The bot sends its own stats and never takes anything from the hub.
 
 ## If something is wrong
 
 | You see | What to do |
 | --- | --- |
-| "Waiting for a bot to report…" | Check the reporter is enabled in Tampermonkey and reload the game tab. |
-| "wrong code" | Open the phone link exactly as the hub printed it. |
-| "hub unreachable, retrying…" | The hub or tunnel stopped. Start it again and use the new phone link. |
-| "Port 4173 is in use" | The hub is already running in another window. To use another port, set the `PORT` environment variable (macOS / Linux: `PORT=4180 node hub.js`), then install the reporter again. |
-| Stats stop after a NIX update | NIX changed what the reporter reads. The browser console shows `[NIX live] bot layout changed`. |
+| "Waiting for a bot to report…" | Turn on Live dashboard in the bot's Settings (or pair), and check the status line there. |
+| "wrong code" on the dashboard | Open the dashboard link exactly as it was printed. |
+| "Off: Hub refused the code." in NIX | The code changed. Pair again with the new pair link. |
+| "No answer from the hub" in NIX | The hub address is wrong or unreachable, or it is not HTTPS. Test the address in a browser. |
+| "hub unreachable, retrying…" on the dashboard | The hub or tunnel stopped. |
+| "Port 4173 is in use" | The hub is already running in another window. To use another port, set `PORT` (macOS / Linux: `PORT=4180 node hub.js`). |
+| Stats stop after a NIX update (reporter script only) | NIX changed what the reporter reads. The console shows `[NIX live] bot layout changed`. The built-in dashboard does not have this problem. |
 
 ## Files
 
-- `hub.js`: the hub, with no dependencies
-- `reporter.user.js`: the Tampermonkey script; install it from the hub's link, which fills in your code
-- `dashboard/index.html`: the dashboard page
-- `reporter.test.cjs`, `hub.test.cjs`: self-checks, run with `node reporter.test.cjs` and `node hub.test.cjs`
+- `hub.js`: the Node hub, no dependencies. `hub.test.cjs`: its self-check (`node hub.test.cjs`).
+- `worker/`: the Cloudflare Worker and Durable Object (`worker.mjs`), `wrangler.jsonc`, `setup.mjs`, and tests. After `npm install` there, `npm test` runs them locally with Miniflare; they are not part of the release checks.
+- `dashboard/index.html`: the dashboard page, served by both hubs.
+- `reporter.user.js`: the separate Tampermonkey script for the local-only option; install it from the hub's link, which fills in your code. `reporter.test.cjs`: its self-check.
 
-The reporter reads the bot's diagnostics on `window.SROLean` (`stats`, `world`, `hunt`, `log`, `activity.userMessage`). If those change, update `snapshot()` in `reporter.user.js` and its test.
+Both hubs speak the same small protocol: `POST /report` with an `X-Code` header, `GET /state`, `GET /pair/<code>`, and `OPTIONS` answered without a code. The built-in client is `lean-live.js`; the reporter script reads the bot's diagnostics on `window.SROLean` (`stats`, `world`, `hunt`, `log`, `activity.userMessage`), so if those change, update `snapshot()` in `reporter.user.js` and its test.

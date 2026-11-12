@@ -1,0 +1,16 @@
+{
+  "name": "nix-live-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node worker.test.mjs && node worker.runtime.test.mjs",
+    "check": "node --check worker.mjs && node --check setup.mjs",
+    "setup": "node setup.mjs",
+    "deploy": "wrangler deploy",
+    "login": "wrangler login"
+  },
+  "devDependencies": {
+    "wrangler": "4.149.0",
+    "miniflare": "5.20261006.1-alpha"
+  }
+}

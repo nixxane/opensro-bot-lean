@@ -85,7 +85,11 @@ function boot() {
     }
   }, true);
   Ticker.start(() => Controller.tick(), 100);
-  setInterval(() => { Wardrobe.tick(); Reporter.tick(); UI.update(); }, 500);
+  setInterval(() => { Wardrobe.tick(); Reporter.tick(); Live.tick(); UI.update(); }, 500);
+  // Not on W.SROLean: the hub address and code must not be reachable from page scripts.
+  Live.startTimer();
+  Live.begin();
+  W.addEventListener('hashchange', () => Live.begin());
   W.SROLean = { version: VERSION, stats: Stats, updates: Updates, diagnostics: Diagnostics, reports: Reports, alchemy: Alchemy, buffGear: BuffGear, world: World, settings: Settings, hunt: Hunt, loot: Loot, speedScroll: SpeedScroll, repairHammer: RepairHammer, resurrect: Resurrect, stall: Stall, quest: Quest,
     restock: Restock, town: Town, walkBack: WalkBack, travel: Travel, antiStuck: AntiStuck, chase: Chase, trap: Trap, autoMastery: AutoMastery, statPoints: StatPoints, share: ProfileShare, trace: Trace, setup: Setup, reconnect: Reconnect, petPotion: PetPotion, petAttack: PetAttack, mall: MallProbe, mallBuyer: MallBuyer, scrolls: ScrollBuff, navigation: Navigation, route: Route, wardrobe: Wardrobe, wardrobeData: WdData, learned: Learned, controller: Controller, ui: UI, activity: Activity, map: LeanMap, render: RenderControl, support: Support, items: ItemRules, stop: stopAll, log: Log };
   Log.info('NIX ready. F8 starts/stops; F7 folds; F6 or the × minimises and restores; Shift+F7 hides/shows the window.');

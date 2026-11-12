@@ -1,0 +1,28 @@
+{
+  // NIX live hub on your own Cloudflare account. "npm run setup" deploys it and sets the LIVE_CODE secret.
+  // No account id is committed: wrangler uses the account you logged in with.
+  "name": "nix-live",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-10-11",
+  "workers_dev": true,
+  "keep_vars": true,
+  // The dashboard is served from the same folder the Node hub uses, so there is one copy.
+  "assets": {
+    "directory": "../dashboard",
+    "binding": "ASSETS"
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "LIVE", "class_name": "LiveRoom" }]
+  },
+  // The free plan only allows SQLite-backed Durable Objects.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["LiveRoom"] }],
+  "ratelimits": [
+    {
+      "name": "LIVE_IP_LIMIT",
+      "namespace_id": "2026111201",
+      "simple": { "limit": 120, "period": 60 }
+    }
+  ],
+  "observability": { "enabled": false },
+  "send_metrics": false
+}

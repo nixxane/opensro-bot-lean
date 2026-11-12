@@ -9,3 +9,6 @@ lean-*.png
 .env.*
 PLAN-auto-walk-to-hunting-spot.md
 live/.code
+live/worker/node_modules/
+live/worker/.code
+live/worker/.wrangler/

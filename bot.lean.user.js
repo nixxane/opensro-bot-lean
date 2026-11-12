@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         nixxane bot
 // @namespace    https://opensro.online/
-// @version      1.2.263
+// @version      1.2.264
 // @updateURL    https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.meta.js
 // @downloadURL  https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -22,7 +22,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[NIX] Another SRO assistant is active. Disable it and reload to use NIX.');
   return;
 }
-const VERSION = '1.2.263';
+const VERSION = '1.2.264';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -254,12 +254,14 @@ const DEFAULT_PROFILE = {
   },
   // Discord session reports (lean-reporter.js). The webhook URL is a secret and lives in Store, never here.
   sessionReport: { on: false, minutes: 3 },
+  // Live dashboard (lean-live.js). The hub address and code are a secret and live in Store, never here.
+  live: { on: false, seconds: 10 },
 };
 // Preserve only bot settings. The original assistant's settings are never changed.
 function botProfile(input) {
   const result = deepMerge(DEFAULT_PROFILE, {});
   if (!input || typeof input !== 'object') return result;
-  for (const key of ['macro', 'potion', 'hunt', 'lure', 'pet', 'scroll', 'mall', 'wardrobe', 'party', 'alchemy', 'mastery', 'statPoints', 'leveling', 'trace', 'items', 'trade', 'stall', 'quest', 'sounds', 'sessionReport']) {
+  for (const key of ['macro', 'potion', 'hunt', 'lure', 'pet', 'scroll', 'mall', 'wardrobe', 'party', 'alchemy', 'mastery', 'statPoints', 'leveling', 'trace', 'items', 'trade', 'stall', 'quest', 'sounds', 'sessionReport', 'live']) {
     if (!input[key] || typeof input[key] !== 'object') continue;
     for (const field of Object.keys(DEFAULT_PROFILE[key])) {
       if (field in input[key]) result[key][field] = deepMerge(DEFAULT_PROFILE[key][field], input[key][field]);
@@ -277,6 +279,10 @@ function botProfile(input) {
   delete result.potion.restock.town.stacks;
   if (!Number.isInteger(result.potion.delayMs) || result.potion.delayMs < 0 || result.potion.delayMs > 60000) result.potion.delayMs = DEFAULT_PROFILE.potion.delayMs;
   if (!Number.isInteger(result.sessionReport.minutes) || result.sessionReport.minutes < 1 || result.sessionReport.minutes > 60) result.sessionReport.minutes = DEFAULT_PROFILE.sessionReport.minutes;
+  // Whole seconds only; a number outside 3 to 60 is pulled in, anything else is the default.
+  const liveSeconds = result.live.seconds;
+  result.live.seconds = Number.isInteger(liveSeconds) ? Math.min(60, Math.max(3, liveSeconds)) : DEFAULT_PROFILE.live.seconds;
+  result.live.on = result.live.on === true;
   if (!['death', 'recall'].includes(result.potion.restock.town.deathReturn)) result.potion.restock.town.deathReturn = 'recall';
   if (!['reverse', 'walk'].includes(result.potion.restock.town.returnBy)) result.potion.restock.town.returnBy = 'reverse';
   // Reverse Return Scrolls used to have two switches: a gold-merchant one (no merchant sells them) and the Item mall
@@ -16989,7 +16995,7 @@ const Alchemy = {
 };
 
 
-const RELEASE_NOTES = [{"version": "1.2.263", "title": "Live dashboard on your phone", "items": ["New optional companion in the `live` folder: a page for your phone with each character's status, HP and MP, XP and XP per hour, gold, kills and the recent activity log.", "It runs on your own machine with Node.js and needs its own small userscript; setup, the phone link and troubleshooting are in `live/README.md`. Nothing in the bot itself changes in this version.", "The phone link is private: keep the link and its `.code` file to yourself, and close the hub window to stop it."], "note": "Optional companion only. Tested on macOS with one character; not tested on Windows, Firefox or Safari."}, {"version": "1.2.262", "title": "Discord session reports", "items": ["Post the current hunting-session totals to your own Discord webhook every 1 to 60 minutes.", "Off by default, and it needs your own Discord webhook address saved; a shared settings code never carries the address.", "The report keeps coming while the bot is stopped, dead or out of the game, and says which state it is in.", "Send a test report from Settings, and see when the next one is due or why the last one failed.", "A webhook Discord refuses switches reports off instead of retrying forever.", "The webhook address is kept in this browser only; it is not part of shared settings or backups and is never logged."], "note": "Only tested in simulation: no live Discord message was sent by the tests."}, {"version": "1.2.261", "title": "Session stats count Sun, Moon and Star", "items": ["The Session panel and Session window now show Seal of Sun, Seal of Moon and Seal of Star counts under SoX found.", "When hunting stops, the log line now lists the session totals: time, kills, items, SoX per seal, XP and gold."], "note": "Tested in simulation."}, {"version": "1.2.260", "title": "Loot log shows Star/Moon/Sun", "items": ["Picked-up loot in the log now names the item, and SoX gear says which seal it is, e.g. \"Picked up ... (Seal of Sun)\". Before it only said \"Picked up loot.\"", "This works even with the SoX sound turned off."], "note": "Tested in simulation."}, {"version": "1.2.259", "title": "Hotfix: stuck on \"Waiting for game world\"", "items": ["The game update changed how it sends character state (only the parts that changed). The bot lost track of your character and stayed on \"Waiting for game world\". It now follows the new format again."], "note": "Checked against the live game's code; tested in simulation."}, {"version": "1.2.258", "title": "Auto party invite by name or nearby", "items": ["New \"Auto-invite players\" option in Party, off by default. It invites the players you list by name whenever they are in view.", "Optional \"Also invite anyone nearby\" invites everyone within the radius you set (30 m by default).", "Only invites while you are solo, the party leader, or in a party that lets members invite, and never into a full party.", "A player who does not answer is asked again after 30 s, then 1, 2, 4 minutes and so on, up to 10 minutes, so nobody gets spammed."], "note": "Tested in simulation only."}, {"version": "1.2.257", "title": "SoX chime for Sun only (or Moon and Sun)", "items": ["New \"SoX chime for\" choice under the SoX chime in Hunting → Loot: Star, Moon and Sun (as before), Moon and Sun, or Sun only.", "The choice also covers the \"SoX found\" notice and your custom SoX sound. Every SoX pickup is still counted in the session stats."]}, {"version": "1.2.256", "title": "Pick your own sound for SoX drops", "items": ["Hunting → Loot has a new \"Custom SoX sound…\" button under the SoX chime. Choose an audio file (mp3, wav, ogg, up to 1 MB) and the bot plays it instead of the built-in chime when it picks up Star, Moon or Sun gear.", "\"Use built-in chime\" puts the old sound back. Test SoX chime plays whichever sound is set.", "The sound is saved in this browser only, so it is not part of shared or exported settings."]}];
+const RELEASE_NOTES = [{"version": "1.2.264", "title": "Live dashboard inside the bot", "items": ["New in Settings: Live dashboard. The bot sends a small snapshot of itself (level, HP/MP/XP, state, position, session totals, recent activity) to your own hub every 3 to 60 seconds, default 10, so a phone can watch it.", "Your hub can be a Cloudflare Worker on your own Cloudflare account (free plan is enough; setup is one command in live/worker) or the live/hub.js program behind an HTTPS tunnel. Nothing goes through nixxane bot servers.", "Pairing: the hub gives you a pair link. Opening it in the game browser asks you to confirm in the NIX window; nothing is saved or sent until you press Pair.", "Off by default. A hub that refuses the code switches it off instead of retrying forever, and a rate limit is waited out.", "The hub address and code are kept in this browser only; they are not part of shared settings, backups, bug reports or the log.", "The separate NIX live reporter script still works for a hub on the same PC."], "note": "Only tested in simulation: the bot's sending and pairing were tested against a stub and the local hub, and the Cloudflare Worker only in a local Miniflare run. It has not been deployed to a real Cloudflare account, and not tried from a phone or from the real game page."}, {"version": "1.2.263", "title": "Live dashboard on your phone", "items": ["New optional companion in the `live` folder: a page for your phone with each character's status, HP and MP, XP and XP per hour, gold, kills and the recent activity log.", "It runs on your own machine with Node.js and needs its own small userscript; setup, the phone link and troubleshooting are in `live/README.md`. Nothing in the bot itself changes in this version.", "The phone link is private: keep the link and its `.code` file to yourself, and close the hub window to stop it."], "note": "Optional companion only. Tested on macOS with one character; not tested on Windows, Firefox or Safari."}, {"version": "1.2.262", "title": "Discord session reports", "items": ["Post the current hunting-session totals to your own Discord webhook every 1 to 60 minutes.", "Off by default, and it needs your own Discord webhook address saved; a shared settings code never carries the address.", "The report keeps coming while the bot is stopped, dead or out of the game, and says which state it is in.", "Send a test report from Settings, and see when the next one is due or why the last one failed.", "A webhook Discord refuses switches reports off instead of retrying forever.", "The webhook address is kept in this browser only; it is not part of shared settings or backups and is never logged."], "note": "Only tested in simulation: no live Discord message was sent by the tests."}, {"version": "1.2.261", "title": "Session stats count Sun, Moon and Star", "items": ["The Session panel and Session window now show Seal of Sun, Seal of Moon and Seal of Star counts under SoX found.", "When hunting stops, the log line now lists the session totals: time, kills, items, SoX per seal, XP and gold."], "note": "Tested in simulation."}, {"version": "1.2.260", "title": "Loot log shows Star/Moon/Sun", "items": ["Picked-up loot in the log now names the item, and SoX gear says which seal it is, e.g. \"Picked up ... (Seal of Sun)\". Before it only said \"Picked up loot.\"", "This works even with the SoX sound turned off."], "note": "Tested in simulation."}, {"version": "1.2.259", "title": "Hotfix: stuck on \"Waiting for game world\"", "items": ["The game update changed how it sends character state (only the parts that changed). The bot lost track of your character and stayed on \"Waiting for game world\". It now follows the new format again."], "note": "Checked against the live game's code; tested in simulation."}, {"version": "1.2.258", "title": "Auto party invite by name or nearby", "items": ["New \"Auto-invite players\" option in Party, off by default. It invites the players you list by name whenever they are in view.", "Optional \"Also invite anyone nearby\" invites everyone within the radius you set (30 m by default).", "Only invites while you are solo, the party leader, or in a party that lets members invite, and never into a full party.", "A player who does not answer is asked again after 30 s, then 1, 2, 4 minutes and so on, up to 10 minutes, so nobody gets spammed."], "note": "Tested in simulation only."}, {"version": "1.2.257", "title": "SoX chime for Sun only (or Moon and Sun)", "items": ["New \"SoX chime for\" choice under the SoX chime in Hunting → Loot: Star, Moon and Sun (as before), Moon and Sun, or Sun only.", "The choice also covers the \"SoX found\" notice and your custom SoX sound. Every SoX pickup is still counted in the session stats."]}];
 
 // Check trusted repository metadata; never execute downloaded update code.
 const Updates = {
@@ -17620,6 +17626,232 @@ const Reporter = {
   reset() { this.nextAt = 0; this.lastError = ''; },
 };
 bus.on('reset', () => Reporter.reset());
+
+
+// Live dashboard: the bot posts a small snapshot of itself to the user's own hub every few seconds, so a phone can watch it.
+// The hub is live/worker (a Cloudflare Worker on the user's own account) or live/hub.js behind an HTTPS tunnel. The data
+// goes nowhere else. The address and code are a secret: they live in this browser's storage (Store key liveChannel), not in
+// the profile, and never reach shares, backups, diagnostics, the log or window.SROLean. It is built like lean-reporter.js:
+// one request at a time, a failure waits for the next interval, a refusal switches the feature off.
+const LIVE_ORIGIN = /^https:\/\/[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::(\d{1,5}))?$/;
+const LIVE_CODE = /^[A-Za-z0-9_-]{16,64}$/;
+const LIVE_PAIR_PATH = /^\/pair\/([A-Za-z0-9_-]{16,64})\/?$/;
+const LIVE_FRAGMENT = /^#nixlive=([A-Za-z0-9_-]+):([A-Za-z0-9_-]+)$/;
+const LIVE_LOG_LINES = 12;
+// Every new target is logged by the bot; on a phone that buries the events worth seeing, and kills are counted in the stats anyway.
+const LIVE_QUIET_CODES = ['target-selected', 'target-search'];
+const Live = {
+  sending: false, nextAt: 0, lastAt: 0, lastError: '', holdUntil: 0, pending: null, worker: null,
+  // ---- the secret: validated when it is written and again when it is read ----
+  // A hand-edited or corrupted storage value must never become a POST target.
+  validUrl(value) {
+    const match = LIVE_ORIGIN.exec(String(value ?? ''));
+    return !!match && (match[1] === undefined || Number(match[1]) <= 65535);
+  },
+  validCode(value) { return LIVE_CODE.test(String(value ?? '')); },
+  channel() {
+    const saved = Store.get('liveChannel', null);
+    if (!saved || typeof saved !== 'object' || !this.validUrl(saved.url) || !this.validCode(saved.code)) return null;
+    return { url: saved.url, code: saved.code };
+  },
+  setChannel(url, code) {
+    url = String(url ?? '').trim().replace(/\/+$/, ''); code = String(code ?? '').trim();
+    if (!this.validUrl(url) || !this.validCode(code)) return false;
+    return Store.set('liveChannel', { url, code });
+  },
+  clearChannel() { Store.remove('liveChannel'); this.holdUntil = 0; this.nextAt = 0; },
+  // What the panel's address field accepts: the hub's pair link (address and code), or just its address.
+  parseInput(text) {
+    const value = String(text ?? '').trim();
+    if (!value) return null;
+    if (this.validUrl(value.replace(/\/+$/, ''))) return { url: value.replace(/\/+$/, ''), code: '' };
+    try {
+      const url = new URL(value), pair = LIVE_PAIR_PATH.exec(url.pathname);
+      if (url.protocol !== 'https:' || url.username || url.password || !pair || !this.validUrl(url.origin)) return null;
+      return { url: url.origin, code: pair[1] };
+    } catch { return null; }
+  },
+  enabled() { return Settings.profile.live.on === true && !!this.channel() && typeof W.fetch === 'function'; },
+  // Clamped again here: an edited profile must never post more often than every 3 seconds.
+  intervalMs() {
+    const seconds = Number(Settings.profile.live.seconds);
+    return clamp(Number.isFinite(seconds) ? Math.round(seconds) : 10, 3, 60) * 1000;
+  },
+  // ---- what is sent: the same JSON as live/reporter.user.js, read straight from the bot's own modules ----
+  say(entry) {
+    try { return String(Activity.userMessage(entry)); } catch { return String(entry.text); }
+  },
+  snapshot() {
+    const name = World.charName;
+    if (!name) return null;
+    const progress = World.gp?.progression || {}, me = World.me(), pose = World.pose();
+    const need = Number(Stats.levels?.[progress.level]?.expRequired);
+    return {
+      name, bot: VERSION,
+      level: progress.level ?? null,
+      xpPct: need > 0 && progress.experience != null ? Math.floor(Number(progress.experience) / need * 1000) / 10 : null,
+      hp: Math.round(me.hpPct), mp: Math.round(me.mpPct),
+      inWorld: World.inWorld(), dead: World.isDead(), running: !!Hunt.running, state: String(Hunt.state || ''),
+      note: String(Reconnect.message || '').slice(0, 120),
+      pos: pose ? { region: pose.regionId, x: Math.round(pose.x), z: Math.round(pose.z) } : null,
+      stats: Stats.display(),
+      log: Log.lines.filter(e => e.level !== 'cmd' && !(e.level === 'info' && LIVE_QUIET_CODES.includes(e.code))).slice(-LIVE_LOG_LINES)
+        .map(e => ({ at: e.lastAt || e.at, level: e.level, text: this.say(e).slice(0, 200) + (e.repeatCount > 1 ? ' ×' + e.repeatCount : '') })),
+    };
+  },
+  // ---- status line for the panel ----
+  clock(ms) {
+    const seconds = Math.max(0, Math.ceil(ms / 1000));
+    return Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0');
+  },
+  ago(ms) {
+    const seconds = Math.max(0, Math.round(ms / 1000));
+    if (seconds < 60) return seconds + ' s ago';
+    return seconds < 3600 ? Math.floor(seconds / 60) + ' min ago' : Math.floor(seconds / 3600) + ' h ago';
+  },
+  // Cheap enough for the panel: called by update() every 500 ms.
+  status() {
+    if (Settings.profile.live.on !== true) return this.lastError ? 'Off: ' + this.lastError + '.' : 'Off.';
+    if (typeof W.fetch !== 'function') return 'This browser cannot send reports.';
+    if (!this.channel()) return 'No hub saved.';
+    if (this.sending) return 'Sending…';
+    const next = !this.nextAt ? 'Waiting to send.' : this.nextAt > now() ? 'Next in ' + this.clock(this.nextAt - now()) + '.' : 'Next report due.';
+    if (this.lastError) return 'Last report failed: ' + this.lastError + '. ' + (this.nextAt > now() ? 'Next try in ' + this.clock(this.nextAt - now()) + '.' : 'Retrying shortly.');
+    if (!this.lastAt) return 'No report sent yet. ' + next;
+    return 'Last report ' + this.ago(now() - this.lastAt) + '. ' + next;
+  },
+  // ---- the timer ----
+  // Enabling arms one full interval; lowering the interval takes effect on the next tick. A rate-limit hold always wins
+  // over the interval, and a disable does not throw it away.
+  tick() {
+    if (this.sending) return;
+    if (!this.enabled()) { this.nextAt = 0; return; }
+    if (!this.nextAt) { this.nextAt = Math.max(now() + this.intervalMs(), this.holdUntil); return; }
+    if (this.nextAt - now() > this.intervalMs()) this.nextAt = Math.max(now() + this.intervalMs(), this.holdUntil);
+    if (now() < this.nextAt) return;
+    // Move the next slot before sending, so a failure or a rate limit can never retry early.
+    this.nextAt = now() + this.intervalMs();
+    void this.send(false).catch(() => {});
+  },
+  // A background tab slows page timers to about once a minute, which would make the dashboard show the bot as offline.
+  // A worker's timer is not slowed. The plain interval in the boot loop still calls tick() if the worker cannot start
+  // (a Blob worker blocked by the page, or no Worker at all), and tick() is safe to call from both.
+  startTimer() {
+    if (this.worker || typeof W.Worker !== 'function') return;
+    try {
+      const url = URL.createObjectURL(new Blob(['setInterval(()=>postMessage(0),1000)'], { type: 'text/javascript' }));
+      this.worker = new (Hook.NativeWorker || W.Worker)(url, { name: 'nix-live-timer' });
+      this.worker.onmessage = () => this.tick();
+      this.worker.onerror = () => { try { this.worker?.terminate(); } catch {} this.worker = null; };
+    } catch { this.worker = null; }
+  },
+  async send(manual) {
+    const channel = this.channel();
+    if (!channel) { if (manual) UI.toast('Save a hub address and code first.', 'warn'); return false; }
+    if (this.sending) { if (manual) UI.toast('A live report is already being sent.', 'info', 3000); return false; }
+    if (typeof W.fetch !== 'function') { if (manual) UI.toast('This browser cannot send live reports.', 'warn'); return false; }
+    let snapshot;
+    try { snapshot = this.snapshot(); } catch { return this.failed('The bot could not read its state', manual); }
+    if (!snapshot) { if (manual) UI.toast('No character is in the game yet.', 'info', 4000); return false; }
+    this.sending = true;
+    let timer;
+    try {
+      const controller = new (W.AbortController || AbortController)();
+      timer = setTimeout(() => controller.abort(), 20000);
+      const response = await W.fetch(channel.url + '/report', { method: 'POST', mode: 'cors', credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer',
+        headers: { 'Content-Type': 'application/json', 'X-Code': channel.code }, body: JSON.stringify(snapshot), signal: controller.signal });
+      if (response.ok) {
+        this.lastAt = now(); this.lastError = ''; this.holdUntil = 0; this.nextAt = now() + this.intervalMs();
+        if (manual) UI.toast('Test report sent to your hub.');
+        return true;
+      }
+      if (response.status === 429) {
+        let seconds = Number(response.headers?.get?.('Retry-After'));
+        if (!Number.isFinite(seconds) || seconds <= 0) { try { seconds = Number((await response.json())?.retry_after); } catch {} }
+        const wait = clamp(Number.isFinite(seconds) && seconds > 0 ? seconds : 60, 1, 900);
+        this.lastError = 'Hub asked to wait ' + Math.ceil(wait) + ' s';
+        this.holdUntil = now() + wait * 1000;
+        this.nextAt = this.holdUntil;
+        if (manual) UI.toast('The hub asked the bot to wait before the next report.', 'info', 4000);
+        return false;
+      }
+      if (response.status >= 400 && response.status < 500) {
+        // 401/403/404 mean the code or the address is wrong; the rest mean the hub refused this report.
+        // Retrying any of them on the interval would repeat the refusal forever.
+        const reason = [401, 403, 404].includes(response.status) ? 'Hub refused the code' : 'Hub refused the report';
+        Settings.profile.live.on = false;
+        Settings.saveProfile();
+        this.lastError = reason;
+        this.nextAt = 0;
+        UI.toast('Live dashboard stopped: ' + reason + '. Check the address and code.', 'warn');
+        Activity.emit({ category: 'session', code: 'live-rejected', level: 'warn', text: 'Live dashboard stopped: ' + reason + '.' });
+        return false;
+      }
+      return this.failed('Hub answered ' + response.status, manual);
+    } catch {
+      // A blocked cross-origin call and an unreachable hub look the same to the page.
+      return this.failed('No answer from the hub', manual);
+    } finally {
+      clearTimeout(timer);
+      this.sending = false;
+    }
+  },
+  // Short reasons only: never the address, the code or a response body.
+  failed(reason, manual) {
+    this.lastError = reason;
+    this.nextAt = Math.max(now() + this.intervalMs(), this.holdUntil);
+    Activity.emit({ category: 'session', code: 'live-failed', level: 'warn', text: 'Live dashboard report failed: ' + reason + '.' });
+    if (manual) UI.toast('Live report failed: ' + reason + '.', 'warn');
+    return false;
+  },
+  // A world reset clears the schedule and the error; a rate-limit hold expires on its own.
+  reset() { this.nextAt = 0; this.lastError = ''; },
+  // ---- pairing: #nixlive=<base64url(origin)>:<code>, from the hub's pair page ----
+  // A link can come from anyone, and a crafted one would point this bot at someone else's hub, so nothing is stored until
+  // the player presses Pair. The fragment is removed from the address bar either way.
+  begin() {
+    let hash = '';
+    try { hash = String(W.location?.hash || ''); } catch {}
+    if (!hash.startsWith('#nixlive=')) return false;
+    this.clearFragment();
+    const match = LIVE_FRAGMENT.exec(hash);
+    let url = '';
+    try {
+      const encoded = match ? match[1].replace(/-/g, '+').replace(/_/g, '/') : '';
+      url = encoded ? (W.atob || atob)(encoded + '='.repeat((4 - encoded.length % 4) % 4)) : '';
+    } catch {}
+    if (!match || !this.validUrl(url) || !this.validCode(match[2])) {
+      this.pending = null;
+      UI.toast('That pairing link is not valid.', 'warn');
+      UI.showPairing?.();
+      return false;
+    }
+    this.pending = { url, code: match[2] };
+    // The toast reaches the log, which must not carry the hub's address: the confirm row in the panel shows it instead.
+    UI.toast('Pair request received: confirm it in the NIX window.', 'info', 8000);
+    UI.showPairing?.();
+    return true;
+  },
+  clearFragment() {
+    try { W.history?.replaceState?.(null, '', W.location.pathname + W.location.search); } catch {}
+  },
+  // Pair: save the hub and switch the dashboard on. Cancel: forget the request.
+  confirmPairing() {
+    const request = this.pending;
+    if (!request) return false;
+    this.pending = null;
+    if (!this.setChannel(request.url, request.code)) { UI.toast('Could not save the hub. Check that this browser allows storage.', 'warn'); UI.showPairing?.(); return false; }
+    Settings.profile.live.on = true;
+    Settings.saveProfile();
+    this.lastError = ''; this.holdUntil = 0; this.nextAt = 0;
+    this.tick();
+    UI.toast('Paired. Live dashboard is on.');
+    UI.showPairing?.();
+    return true;
+  },
+  cancelPairing() { this.pending = null; UI.showPairing?.(); },
+};
+bus.on('reset', () => Live.reset());
 
 
 // Item rules: what to do with each item of the game's catalogue, like sBot's item list.
@@ -18978,7 +19210,7 @@ const UI = {
     } else if (this.current === 'Wardrobe') {
       LeanWardrobe.draw(this.pane);
     } else {
-      this.sections('settingsStats', 'settingsBehaviour', 'settingsObstacles', 'settingsAntiStuck', 'settingsMastery', 'settingsStatPoints', 'settingsProfiles', 'settingsShare', 'settingsReports', 'settingsSessionReport', 'settingsActivity');
+      this.sections('settingsStats', 'settingsBehaviour', 'settingsObstacles', 'settingsAntiStuck', 'settingsMastery', 'settingsStatPoints', 'settingsProfiles', 'settingsShare', 'settingsReports', 'settingsSessionReport', 'settingsLive', 'settingsActivity');
     }
     this.balance();
     this.update();
@@ -19005,7 +19237,7 @@ const UI = {
       { name: 'Auto alchemy', icon: 'action\\icon_cha_alchemy', pages: ['Alchemy'], draw() { Alchemy.draw(); } },
       { name: 'Stall', icon: 'action\\icon_cha_shop', pages: ['Stall'], draw() { Stall.draw(); } },
       { name: 'Extra', icon: 'action\\icon_cha_helper', pages: ['Settings'], sections: [
-        ['settingsStats'], ['settingsMastery'], ['settingsStatPoints'], ['settingsProfiles'], ['settingsShare'], ['settingsReports'], ['settingsSessionReport', 'Discord reports'], ['settingsActivity']] },
+        ['settingsStats'], ['settingsMastery'], ['settingsStatPoints'], ['settingsProfiles'], ['settingsShare'], ['settingsReports'], ['settingsSessionReport', 'Discord reports'], ['settingsLive', 'Live dashboard'], ['settingsActivity']] },
       { name: 'Map', pages: ['Map'], draw() { LeanMap.draw(this.pane); } },
       { name: 'Auto trade', icon: 'action\\icon_cha_shop', pages: ['Trade'], draw() { Trade.draw(); } },
       { name: 'Wardrobe', icon: 'action\\icon_cha_shop', pages: ['Wardrobe'], draw() { LeanWardrobe.draw(this.pane); } },
@@ -19707,6 +19939,48 @@ const UI = {
         this.reportNote,
         el('p', 'One message per interval with the current session totals. It keeps reporting while the bot is stopped and says when you are dead or out of the game. The address is kept in this browser only and is not part of shared settings or backups.', 'muted')));
   },
+  section_settingsLive(host) {
+    const channel = Live.channel();
+    const address = el('input'), code = el('input');
+    for (const input of [address, code]) { input.type = 'text'; input.spellcheck = false; input.autocomplete = 'off'; }
+    code.type = 'password';
+    address.placeholder = 'https://…/pair/… or https://…'; address.value = channel?.url || '';
+    code.placeholder = 'Code'; code.value = channel?.code || '';
+    // The pair link carries both values; a bare address keeps the code typed beside it.
+    const save = () => {
+      const parsed = Live.parseInput(address.value);
+      if (!address.value.trim() && !code.value.trim()) { Live.clearChannel(); return; }
+      if (!parsed) { UI.toast('That is not an HTTPS hub address or pair link.', 'warn'); return; }
+      const wanted = parsed.code || code.value.trim();
+      if (!Live.validCode(wanted)) { code.value = wanted; UI.toast('Add the hub code too.', 'info'); return; }
+      if (Live.setChannel(parsed.url, wanted)) { Live.holdUntil = 0; Live.nextAt = 0; Live.lastError = ''; Live.tick(); }
+      else UI.toast('That hub could not be saved. Check it, and that this browser allows storage.', 'warn');
+      const saved = Live.channel();
+      address.value = saved?.url || ''; code.value = saved?.code || '';
+    };
+    address.addEventListener('change', save); code.addEventListener('change', save);
+    this.liveNote = el('p', Live.status(), 'muted');
+    host.append(this.group('Live dashboard',
+      this.check('Send live stats to my hub', () => Settings.profile.live.on, v => { Settings.profile.live.on = v; Live.tick(); }),
+      this.number('Send every (seconds)', () => Settings.profile.live.seconds, v => Settings.profile.live.seconds = v, 3, 60),
+      this.field('Pair link or hub address', address),
+      this.field('Hub code', code),
+      this.button('Send a test report', () => { void Live.send(true).catch(() => {}); }),
+      this.liveNote,
+      el('p', 'Shows this character on a phone dashboard served by your own hub (a Cloudflare Worker on your account, or live/hub.js behind an HTTPS tunnel). The data goes only to that hub. The address and code stay in this browser and are never part of share codes, backups or bug reports. The hub must be reachable over HTTPS.', 'muted')));
+  },
+  // The pairing request from a #nixlive link. Nothing is saved until Pair is pressed.
+  showPairing() {
+    if (!this.body) return;
+    if (!this.pairBox) {
+      this.pairText = el('p');
+      this.pairBox = this.group('Pair with a live hub?', this.pairText,
+        this.row(this.button('Pair', () => { Live.confirmPairing(); }), this.button('Cancel', () => { Live.cancelPairing(); })));
+      this.body.insertBefore(this.pairBox, this.waitNote.nextSibling);
+    }
+    this.pairBox.hidden = !Live.pending;
+    this.pairText.textContent = Live.pending ? 'A link asks this bot to send its live stats to ' + Live.pending.url + '. Only pair with a hub you set up yourself.' : '';
+  },
   section_settingsActivity(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
       this.logs = this.activityLog('Settings activity');
@@ -19880,6 +20154,7 @@ const UI = {
     if (this.autoStartNote) this.autoStartNote.textContent = AutoStart.status();
     if (this.retryNote) this.retryNote.textContent = Retry.status();
     if (this.reportNote?.isConnected) this.reportNote.textContent = Reporter.status();
+    if (this.liveNote?.isConnected) this.liveNote.textContent = Live.status();
     if (this.is('Party') && Trace.note) Trace.note.textContent = Trace.status();
     if (Lure.note) Lure.note.textContent = Lure.status();
     if (this.is('Party') && this.partyNote) {
@@ -20833,7 +21108,11 @@ function boot() {
     }
   }, true);
   Ticker.start(() => Controller.tick(), 100);
-  setInterval(() => { Wardrobe.tick(); Reporter.tick(); UI.update(); }, 500);
+  setInterval(() => { Wardrobe.tick(); Reporter.tick(); Live.tick(); UI.update(); }, 500);
+  // Not on W.SROLean: the hub address and code must not be reachable from page scripts.
+  Live.startTimer();
+  Live.begin();
+  W.addEventListener('hashchange', () => Live.begin());
   W.SROLean = { version: VERSION, stats: Stats, updates: Updates, diagnostics: Diagnostics, reports: Reports, alchemy: Alchemy, buffGear: BuffGear, world: World, settings: Settings, hunt: Hunt, loot: Loot, speedScroll: SpeedScroll, repairHammer: RepairHammer, resurrect: Resurrect, stall: Stall, quest: Quest,
     restock: Restock, town: Town, walkBack: WalkBack, travel: Travel, antiStuck: AntiStuck, chase: Chase, trap: Trap, autoMastery: AutoMastery, statPoints: StatPoints, share: ProfileShare, trace: Trace, setup: Setup, reconnect: Reconnect, petPotion: PetPotion, petAttack: PetAttack, mall: MallProbe, mallBuyer: MallBuyer, scrolls: ScrollBuff, navigation: Navigation, route: Route, wardrobe: Wardrobe, wardrobeData: WdData, learned: Learned, controller: Controller, ui: UI, activity: Activity, map: LeanMap, render: RenderControl, support: Support, items: ItemRules, stop: stopAll, log: Log };
   Log.info('NIX ready. F8 starts/stops; F7 folds; F6 or the × minimises and restores; Shift+F7 hides/shows the window.');

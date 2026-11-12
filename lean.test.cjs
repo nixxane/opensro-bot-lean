@@ -3,7 +3,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(__dirname + '/bot.lean.user.js', 'utf8');
 const isolated = source.slice(0, source.lastIndexOf('installWorkerHook();')) +
-  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Reporter, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, Leveling, ScrollBuff, boot, Ticker, Sound, LeanMap};\n})();';
+  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Reporter, Live, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, Leveling, ScrollBuff, boot, Ticker, Sound, LeanMap};\n})();';
 function fixture(document, sharedStorage) {
   let time = 100000;
   const storage = sharedStorage || new Map(), commands = [], notices = [], intervals = [], timers = [];
@@ -9209,6 +9209,385 @@ async function updateTests() {
     f.Settings.profile.sessionReport.on = true; f.Reporter.tick();
     f.advance(4 * 60000); f.Reporter.tick(); assert.equal(calls, 1, 'no post while the hold is active');
     f.advance(60000); f.Reporter.tick(); assert.equal(calls, 2, 'the hold still ends when Discord said');
+  });
+
+  // ---- Live dashboard (lean-live.js) ----
+  const LIVE_URL = 'https://nix-live.example.workers.dev';
+  const LIVE_CODE = 'LiveCode0123456789abcdef';
+  function liveFixture() {
+    const f = fixture();
+    f.Settings.profile.live.on = true;
+    f.World.charName = 'Tester'; f.World.gp.progression.level = 40;
+    assert.equal(f.Live.setChannel(LIVE_URL, LIVE_CODE), true);
+    return f;
+  }
+  async function flushLive(f) { for (let n = 0; n < 50 && f.Live.sending; n++) await Promise.resolve(); }
+  const liveReply = (status, extra = {}) => ({ ok: status >= 200 && status < 300, status, json: async () => ({}), headers: { get: () => null }, ...extra });
+  const livePair = (url, code) => '#nixlive=' + Buffer.from(url).toString('base64url') + ':' + code;
+  // A window with a fragment and a history that records how the address bar was rewritten.
+  function livePage(f, hash) {
+    const rewrites = [];
+    f.win.location = { hash, pathname: '/play', search: '?x=1' };
+    f.win.history = { replaceState: (...args) => { rewrites.push(args); f.win.location.hash = ''; } };
+    f.win.atob = atob;
+    return rewrites;
+  }
+
+  test('the live dashboard is off by default, every 10 seconds, and its settings survive a profile reload', () => {
+    const f = fixture();
+    assert.deepEqual(plain(f.Settings.profile.live), { on: false, seconds: 10 });
+    const saved = plain(f.Settings.profile); saved.live = { on: true, seconds: 7 };
+    assert.deepEqual(plain(f.botProfile(JSON.parse(JSON.stringify(saved))).live), { on: true, seconds: 7 });
+  });
+
+  test('live seconds are pulled into 3 to 60 and anything that is not a whole number is the default', () => {
+    const f = fixture();
+    for (const [given, wanted] of [[2, 3], [0, 3], [-5, 3], [61, 60], [9999, 60], [3, 3], [60, 60], [2.5, 10], ['x', 10], [null, 10], [undefined, 10], ['20', 10]]) {
+      assert.equal(f.botProfile({ live: { on: true, seconds: given } }).live.seconds, wanted, String(given));
+    }
+    assert.equal(f.botProfile({ live: { on: 'yes', seconds: 5 } }).live.on, false, 'only true switches it on');
+    f.Settings.profile.live.seconds = 0.5;
+    assert.equal(f.Live.intervalMs(), 3000, 'an edited profile still never posts faster than every 3 seconds');
+    f.Settings.profile.live.seconds = 'x';
+    assert.equal(f.Live.intervalMs(), 10000);
+  });
+
+  test('the hub address and code are validated before they replace the saved ones', () => {
+    const f = fixture();
+    assert.equal(f.Live.channel(), null);
+    assert.equal(f.Live.setChannel(LIVE_URL, LIVE_CODE), true);
+    assert.deepEqual(plain(f.Live.channel()), { url: LIVE_URL, code: LIVE_CODE });
+    for (const bad of ['http://nix-live.example.workers.dev', 'https://nix-live.example.workers.dev/pair/x', 'https://nix-live.example.workers.dev/?a=1',
+      'https://user:pw@nix-live.example.workers.dev', 'https://nix-live.example.workers.dev:99999', 'https://', 'https://.', 'https://-bad', 'ftp://x.example',
+      'https://exa mple.com', 'javascript:alert(1)', '', 'nix-live.example.workers.dev']) assert.equal(f.Live.setChannel(bad, LIVE_CODE), false, bad);
+    for (const bad of ['', 'short', 'has space 0123456789abcdef', 'x'.repeat(65), 'bad/char/0123456789abcd']) assert.equal(f.Live.setChannel(LIVE_URL, bad), false, bad);
+    assert.deepEqual(plain(f.Live.channel()), { url: LIVE_URL, code: LIVE_CODE }, 'a rejected value keeps the old one');
+    assert.equal(f.Live.setChannel('  https://hub.example.com:8443/  ', ' ' + LIVE_CODE + ' '), true);
+    assert.deepEqual(plain(f.Live.channel()), { url: 'https://hub.example.com:8443', code: LIVE_CODE }, 'trimmed, slash dropped, port kept');
+    f.Live.clearChannel(); assert.equal(f.Live.channel(), null);
+  });
+
+  test('the panel field takes a pair link or a bare address', () => {
+    const f = fixture();
+    assert.deepEqual(plain(f.Live.parseInput(LIVE_URL + '/pair/' + LIVE_CODE)), { url: LIVE_URL, code: LIVE_CODE });
+    assert.deepEqual(plain(f.Live.parseInput(' ' + LIVE_URL + '/pair/' + LIVE_CODE + '/ ')), { url: LIVE_URL, code: LIVE_CODE });
+    assert.deepEqual(plain(f.Live.parseInput('https://hub.example.com:8443/pair/' + LIVE_CODE)), { url: 'https://hub.example.com:8443', code: LIVE_CODE });
+    assert.deepEqual(plain(f.Live.parseInput(LIVE_URL)), { url: LIVE_URL, code: '' });
+    assert.deepEqual(plain(f.Live.parseInput(LIVE_URL + '/')), { url: LIVE_URL, code: '' });
+    for (const bad of ['', '  ', 'http://hub.example.com/pair/' + LIVE_CODE, LIVE_URL + '/pair/short', LIVE_URL + '/other/' + LIVE_CODE,
+      'https://u:p@hub.example.com/pair/' + LIVE_CODE, 'not a url', LIVE_URL + '/pair/' + LIVE_CODE + '/more']) assert.equal(f.Live.parseInput(bad), null, bad);
+  });
+
+  test('a corrupted or hand-edited stored hub is never used and nothing is fetched', () => {
+    let calls = 0;
+    for (const stored of [{ url: 'http://evil.example', code: LIVE_CODE }, { url: 'https://evil.example/steal', code: LIVE_CODE }, { url: LIVE_URL, code: 'x' },
+      { url: LIVE_URL }, 'https://evil.example', 42, null, [LIVE_URL, LIVE_CODE]]) {
+      const f = fixture();
+      f.win.fetch = () => { calls++; return Promise.resolve(liveReply(204)); };
+      f.storage.set('sroBotLean:v1:liveChannel', JSON.stringify(stored));
+      f.World.charName = 'Tester';
+      f.Settings.profile.live.on = true;
+      assert.equal(f.Live.channel(), null, JSON.stringify(stored));
+      f.Live.tick(); f.advance(6 * 3600000); f.Live.tick();
+      assert.equal(f.Live.status(), 'No hub saved.');
+    }
+    assert.equal(calls, 0);
+  });
+
+  test('a disabled live dashboard never fetches, even long after an interval', () => {
+    const f = liveFixture(); let calls = 0;
+    f.win.fetch = () => { calls++; return Promise.resolve(liveReply(204)); };
+    f.Settings.profile.live.on = false;
+    f.Live.tick(); f.advance(6 * 3600000); f.Live.tick();
+    f.Settings.profile.live.on = true; delete f.win.fetch;
+    f.Live.tick(); f.advance(6 * 3600000); f.Live.tick();
+    assert.equal(calls, 0);
+    assert.equal(f.Live.status(), 'This browser cannot send reports.');
+  });
+
+  test('an enabled live dashboard posts one snapshot after one interval, in the shape the hub reads', async () => {
+    const f = liveFixture(); const calls = [];
+    f.Stats.levels = { 40: { expRequired: '1000' } }; f.World.gp.progression.experience = '250';
+    f.win.fetch = (url, options) => { calls.push({ url, options }); return Promise.resolve(liveReply(204)); };
+    f.Live.tick(); assert.equal(calls.length, 0, 'the first tick only arms one interval');
+    f.advance(9000); f.Live.tick(); assert.equal(calls.length, 0);
+    f.advance(1000); f.Live.tick(); await flushLive(f);
+    assert.equal(calls.length, 1);
+    const { url, options } = calls[0];
+    assert.equal(url, LIVE_URL + '/report');
+    assert.equal(options.method, 'POST'); assert.equal(options.mode, 'cors'); assert.equal(options.credentials, 'omit');
+    assert.equal(options.referrerPolicy, 'no-referrer'); assert.equal(options.cache, 'no-store');
+    assert.equal(options.headers['X-Code'], LIVE_CODE); assert.equal(options.headers['Content-Type'], 'application/json');
+    assert.ok(options.signal, 'a request that never answers is cut off');
+    const body = JSON.parse(options.body);
+    assert.equal(body.name, 'Tester'); assert.equal(body.level, 40); assert.equal(body.xpPct, 25); assert.equal(body.bot, f.Live.snapshot().bot);
+    for (const key of ['hp', 'mp', 'inWorld', 'dead', 'running', 'state', 'note', 'pos', 'stats', 'log']) assert.ok(key in body, key);
+    assert.equal(f.Live.sending, false); assert.ok(f.Live.lastAt > 0); assert.equal(f.Live.lastError, '');
+    assert.match(f.Live.status(), /^Last report 0 s ago\. Next in 0:10\.$/);
+  });
+
+  test('a live snapshot uses the bot wording, drops routine targeting, marks repeats and keeps twelve lines', () => {
+    const f = liveFixture();
+    f.Log.lines.length = 0;
+    f.Log.lines.push({ at: 1, level: 'cmd', text: 'hidden command' },
+      { at: 2, level: 'info', code: 'target-selected', text: 'Selected target 1.' },
+      { at: 3, level: 'warn', code: 'target-selected', text: 'Targeting Yeti, it is attacking you.' },
+      { at: 4, lastAt: 9, level: 'info', code: 'pickup-confirmed', text: 'Inventory gain observed for pickup 366883.', repeatCount: 3 });
+    for (let i = 0; i < 20; i++) f.Log.lines.push({ at: 10 + i, level: 'info', text: 'line ' + i });
+    const lines = f.Live.snapshot().log;
+    assert.equal(lines.length, 12); assert.equal(lines.at(-1).text, 'line 19');
+    assert.ok(lines.every(e => e.level !== 'cmd'));
+    f.Log.lines.length = 0;
+    f.Log.lines.push({ at: 2, level: 'info', code: 'target-selected', text: 'Selected target 1.' }, { at: 3, level: 'warn', code: 'target-selected', text: 'Targeting Yeti.' },
+      { at: 4, lastAt: 9, level: 'info', code: 'pickup-confirmed', text: 'Inventory gain observed for pickup 366883.', repeatCount: 3 });
+    f.Activity.userMessage = e => e.code === 'pickup-confirmed' ? 'Picked up Dagger.' : e.text;
+    assert.deepEqual(plain(f.Live.snapshot().log), [{ at: 3, level: 'warn', text: 'Targeting Yeti.' }, { at: 9, level: 'info', text: 'Picked up Dagger. ×3' }]);
+    f.Activity.userMessage = () => { throw Error('renamed'); };
+    assert.equal(f.Live.snapshot().log[1].text, 'Inventory gain observed for pickup 366883. ×3', 'a broken wording helper does not take the stats down');
+    f.World.gp.progression.experience = 250n;
+    JSON.stringify(f.Live.snapshot()); // sendable: no BigInt
+    f.World.charName = '';
+    assert.equal(f.Live.snapshot(), null, 'no character yet');
+  });
+
+  test('a live report keeps its interval and never overlaps itself', async () => {
+    const f = liveFixture(); let calls = 0, release;
+    f.win.fetch = () => { calls++; return new Promise(done => { release = done; }); };
+    f.Live.tick(); f.advance(10000); f.Live.tick(); assert.equal(calls, 1);
+    f.advance(10000); f.Live.tick(); assert.equal(calls, 1, 'a send is already in flight');
+    release(liveReply(204)); await flushLive(f);
+    f.Live.tick(); assert.equal(calls, 1, 'the next interval has not passed yet');
+    f.advance(10000); f.Live.tick(); assert.equal(calls, 2);
+    f.Settings.profile.live.seconds = 3; f.Live.tick();
+    f.advance(3000); f.Live.tick(); assert.equal(calls, 2, 'the second send is still in flight');
+  });
+
+  test('lowering the live interval takes effect on the next tick', async () => {
+    const f = liveFixture(); let calls = 0;
+    f.win.fetch = () => { calls++; return Promise.resolve(liveReply(204)); };
+    f.Settings.profile.live.seconds = 60;
+    f.Live.tick(); f.Settings.profile.live.seconds = 5;
+    f.Live.tick(); f.advance(5000); f.Live.tick(); await flushLive(f);
+    assert.equal(calls, 1);
+  });
+
+  test('a live 429 waits for the hub, survives a world reset and a switch off and on, and keeps the dashboard on', async () => {
+    const f = liveFixture(); let calls = 0;
+    f.win.fetch = async () => { calls++; return liveReply(429, { headers: { get: name => name === 'Retry-After' ? '300' : null } }); };
+    f.Live.tick(); f.advance(10000); f.Live.tick(); await flushLive(f);
+    assert.equal(calls, 1); const hold = f.Live.holdUntil;
+    assert.ok(hold > 0); assert.equal(f.Settings.profile.live.on, true);
+    assert.match(f.Live.status(), /Hub asked to wait 300 s/);
+    assert.equal(f.Live.holdUntil, f.Live.nextAt, 'the hold owns the next slot');
+    f.bus.emit('reset');
+    assert.equal(f.Live.nextAt, 0); assert.equal(f.Live.holdUntil, hold, 'a reset keeps the hold');
+    f.Live.tick(); f.advance(100000); f.Live.tick(); assert.equal(calls, 1);
+    f.Settings.profile.live.on = false; f.Live.tick();
+    assert.equal(f.Live.nextAt, 0); assert.equal(f.Live.holdUntil, hold, 'a switch off keeps the hold');
+    f.Settings.profile.live.on = true; f.Live.tick();
+    f.advance(150000); f.Live.tick(); assert.equal(calls, 1, 'still held after switching back on');
+    f.advance(60000); f.Live.tick(); assert.equal(calls, 2, 'exactly one retry once the wait is over');
+  });
+
+  test('a live 429 without a Retry-After header falls back to retry_after in the body, then to a minute, within 1 to 900 s', async () => {
+    for (const [body, header, seconds] of [[{ retry_after: 120 }, null, 120], [{}, null, 60], [{ retry_after: 5000 }, null, 900], [{}, '0', 60], [{ retry_after: 0.1 }, null, 1]]) {
+      const f = liveFixture();
+      f.win.fetch = async () => liveReply(429, { json: async () => body, headers: { get: () => header } });
+      f.Live.tick(); f.advance(10000); f.Live.tick(); await flushLive(f);
+      assert.match(f.Live.status(), new RegExp('Hub asked to wait ' + seconds + ' s'), JSON.stringify([body, header]));
+    }
+  });
+
+  test('a hub that refuses the code switches the dashboard off but keeps the values for correction', async () => {
+    for (const status of [401, 403, 404]) {
+      const f = liveFixture(); let calls = 0;
+      f.win.fetch = async () => { calls++; return liveReply(status); };
+      f.Live.tick(); f.advance(10000); f.Live.tick(); await flushLive(f);
+      assert.equal(calls, 1);
+      assert.equal(f.Settings.profile.live.on, false, String(status));
+      assert.deepEqual(plain(f.Live.channel()), { url: LIVE_URL, code: LIVE_CODE }, 'kept so it can be corrected');
+      assert.ok(f.notices.some(n => /Hub refused the code/.test(n)));
+      assert.ok(f.Log.lines.some(l => l.code === 'live-rejected'));
+      assert.equal(f.Live.status(), 'Off: Hub refused the code.');
+      f.advance(6 * 3600000); f.Live.tick(); assert.equal(calls, 1, 'no more attempts');
+    }
+    const f = liveFixture();
+    f.win.fetch = async () => liveReply(413);
+    f.Live.tick(); f.advance(10000); f.Live.tick(); await flushLive(f);
+    assert.equal(f.Settings.profile.live.on, false); assert.equal(f.Live.status(), 'Off: Hub refused the report.');
+  });
+
+  test('a live server error or no answer keeps the dashboard on and retries only on the next interval', async () => {
+    for (const fetcher of [async () => liveReply(500), () => Promise.reject(new TypeError('Failed to fetch')), async () => liveReply(503)]) {
+      const f = liveFixture(); let calls = 0;
+      f.win.fetch = (...args) => { calls++; return fetcher(...args); };
+      f.Live.tick(); f.advance(10000); f.Live.tick(); await flushLive(f);
+      assert.equal(calls, 1); assert.equal(f.Settings.profile.live.on, true);
+      assert.ok(f.Log.lines.some(l => l.code === 'live-failed'));
+      f.advance(5000); f.Live.tick(); assert.equal(calls, 1, 'not retried early');
+      f.advance(5000); f.Live.tick(); await flushLive(f); assert.equal(calls, 2, 'retried on the next interval');
+      const status = f.Live.status();
+      assert.match(status, /Last report failed: (Hub answered 5\d\d|No answer from the hub)/);
+      assert.equal(status.includes('Failed to fetch'), false, 'the raw error is not shown');
+    }
+  });
+
+  test('a manual live report needs a hub and a character, and never overlaps a send', async () => {
+    const f = liveFixture(); let calls = 0, release;
+    f.win.fetch = () => { calls++; return new Promise(done => { release = done; }); };
+    f.Live.clearChannel();
+    assert.equal(await f.Live.send(true), false); assert.equal(calls, 0); assert.ok(f.notices.some(n => /hub address and code/.test(n)));
+    f.Live.setChannel(LIVE_URL, LIVE_CODE); f.World.charName = '';
+    assert.equal(await f.Live.send(true), false); assert.equal(calls, 0); assert.ok(f.notices.some(n => /No character/.test(n)));
+    f.World.charName = 'Tester';
+    const first = f.Live.send(true); assert.equal(calls, 1);
+    assert.equal(await f.Live.send(true), false); assert.equal(calls, 1, 'a second test while one is in flight');
+    release(liveReply(204)); assert.equal(await first, true);
+    assert.ok(f.notices.some(n => /Test report sent/.test(n)));
+  });
+
+  test('live reports keep coming while the bot is stopped, dead or out of the game', async () => {
+    const f = liveFixture(); const bodies = [];
+    f.win.fetch = async (url, options) => { bodies.push(JSON.parse(options.body)); return liveReply(204); };
+    f.Live.tick();
+    f.advance(10000); f.Live.tick(); await flushLive(f);
+    f.Hunt.running = true; f.advance(10000); f.Live.tick(); await flushLive(f);
+    f.World.ents.get(1).appearanceState = [2, 0, 0]; f.advance(10000); f.Live.tick(); await flushLive(f);
+    assert.deepEqual(bodies.map(b => [b.running, b.dead]), [[false, false], [true, false], [true, true]]);
+  });
+
+  test('the hub address and code never appear in shares, backups, diagnostics, the log, toasts or activity', async () => {
+    const doc = { documentElement: { append() {} }, createElement: () => ({ style: {}, setAttribute() {}, addEventListener() {}, click() {} }) };
+    const f = fixture(doc);
+    f.World.charName = 'Tester'; f.Settings.profile.live.on = true;
+    assert.equal(f.Live.setChannel(LIVE_URL, LIVE_CODE), true);
+    // Go through every path that writes a line or a toast: failure, refusal, rate limit, pairing.
+    const replies = [liveReply(500), liveReply(429), liveReply(404)];
+    f.win.fetch = async () => replies.shift() || liveReply(204);
+    for (let n = 0; n < 3; n++) { f.advance(1000000); f.Live.holdUntil = 0; f.Live.nextAt = 0; f.Settings.profile.live.on = true; await f.Live.send(true); }
+    livePage(f, livePair('https://other.example.com', 'OtherCode0123456789abcdef')); f.Live.begin(); f.Live.cancelPairing();
+    const backupJson = JSON.stringify({ app: 'sro-bot-lean', version: 'test', profile: f.Settings.profile }, null, 2);
+    let exported = '';
+    const realCreate = URL.createObjectURL;
+    URL.createObjectURL = blob => { exported = blob; return 'blob:test'; };
+    try { f.UI.exportBackup(); } finally { URL.createObjectURL = realCreate; }
+    assert.ok(exported && typeof exported.text === 'function', 'the export produced a blob');
+    const surfaces = {
+      'share code': f.ProfileShare.text(true), 'full backup text': f.ProfileShare.text(false), profile: JSON.stringify(f.Settings.profile),
+      diagnostics: f.Diagnostics.report(), backup: backupJson, 'exported backup': await exported.text(),
+      log: JSON.stringify(f.Log.lines), activity: JSON.stringify(f.Activity.visible(false)), toasts: JSON.stringify(f.notices),
+      status: f.Live.status(),
+    };
+    const secrets = [LIVE_URL, 'nix-live.example', LIVE_CODE, 'other.example.com', 'OtherCode0123456789abcdef', Buffer.from(LIVE_URL).toString('base64url')];
+    for (const [name, text] of Object.entries(surfaces)) for (const secret of secrets) assert.equal(String(text).includes(secret), false, name + ' must not carry ' + secret);
+    assert.ok(f.Log.lines.some(l => l.code === 'live-failed'), 'the failure paths did write log lines');
+  });
+
+  test('the live module is not exposed on window.SROLean', () => {
+    // boot() cannot run in this harness, so the exported object literal is read from the built script.
+    const exposed = source.match(/W\.SROLean = \{([^\n]*)/)[1];
+    assert.equal(/\bLive\b/.test(exposed), false);
+  });
+
+  test('a pairing link asks first: nothing is stored until Pair, and the fragment is cleared', () => {
+    const f = fixture(); const hub = 'https://my-hub.example.workers.dev:8443';
+    const rewrites = livePage(f, livePair(hub, LIVE_CODE));
+    assert.equal(f.Live.begin(), true);
+    assert.deepEqual(plain(f.Live.pending), { url: hub, code: LIVE_CODE });
+    assert.deepEqual(plain(rewrites), [[null, '', '/play?x=1']], 'the fragment is gone, the rest of the address is kept');
+    assert.equal(f.Live.channel(), null); assert.equal(f.Settings.profile.live.on, false);
+    assert.equal([...f.storage.keys()].some(k => /liveChannel/.test(k)), false, 'nothing in storage before the click');
+    assert.ok(f.notices.some(n => /Pair request/.test(n)));
+    f.advance(6 * 3600000); f.Live.tick();
+    assert.equal(f.Live.confirmPairing(), true);
+    assert.equal(f.Live.pending, null);
+    assert.deepEqual(plain(f.Live.channel()), { url: hub, code: LIVE_CODE });
+    assert.equal(f.Settings.profile.live.on, true, 'pairing is the player agreeing to send');
+    assert.equal(f.Live.confirmPairing(), false, 'a second click has nothing to confirm');
+  });
+
+  test('cancelling a pairing link stores nothing', () => {
+    const f = fixture();
+    const rewrites = livePage(f, livePair('https://my-hub.example.workers.dev', LIVE_CODE));
+    f.Live.begin(); f.Live.cancelPairing();
+    assert.equal(f.Live.pending, null); assert.equal(f.Live.channel(), null); assert.equal(rewrites.length, 1);
+    assert.equal(f.Live.confirmPairing(), false);
+    assert.equal(f.Live.channel(), null); assert.equal(f.Settings.profile.live.on, false);
+  });
+
+  test('a pairing link for another hub does not change an existing one until Pair', () => {
+    const f = liveFixture();
+    livePage(f, livePair('https://attacker.example.com', 'AttackerCode0123456789abc'));
+    f.Live.begin();
+    assert.deepEqual(plain(f.Live.channel()), { url: LIVE_URL, code: LIVE_CODE });
+    f.advance(10000); f.Live.tick();
+    assert.deepEqual(plain(f.Live.channel()), { url: LIVE_URL, code: LIVE_CODE });
+  });
+
+  test('invalid pairing fragments are ignored and still cleared; other fragments are left alone', () => {
+    const b64 = text => Buffer.from(text).toString('base64url');
+    for (const hash of ['#nixlive=', '#nixlive=!!!:' + LIVE_CODE, '#nixlive=' + b64('http://hub.example.com') + ':' + LIVE_CODE, '#nixlive=' + b64('https://hub.example.com/path') + ':' + LIVE_CODE,
+      '#nixlive=' + b64('https://hub.example.com') + ':short', '#nixlive=' + b64('https://hub.example.com'), '#nixlive=' + b64('https://u:p@hub.example.com') + ':' + LIVE_CODE,
+      '#nixlive=' + b64('https://hub.example.com') + ':' + LIVE_CODE + ':extra', '#nixlive=' + b64('javascript:alert(1)') + ':' + LIVE_CODE, '#nixlive=A:' + LIVE_CODE]) {
+      const f = fixture(); const rewrites = livePage(f, hash);
+      assert.equal(f.Live.begin(), false, hash);
+      assert.equal(f.Live.pending, null); assert.equal(f.Live.channel(), null);
+      assert.equal(rewrites.length, 1, 'cleared: ' + hash);
+      assert.equal(f.Live.confirmPairing(), false);
+    }
+    for (const hash of ['', '#', '#section', '#nixlive', '#other=' + LIVE_CODE]) {
+      const f = fixture(); const rewrites = livePage(f, hash);
+      assert.equal(f.Live.begin(), false); assert.equal(rewrites.length, 0, 'untouched: ' + hash);
+    }
+    const f = fixture(); assert.equal(f.Live.begin(), false, 'no location at all');
+  });
+
+  test('a world reset does not drop a pending pairing', () => {
+    const f = fixture();
+    livePage(f, livePair('https://my-hub.example.workers.dev', LIVE_CODE));
+    f.Live.begin(); f.bus.emit('reset');
+    assert.ok(f.Live.pending);
+  });
+
+  test('the background timer ticks the dashboard and falls back to the page interval when its worker fails', () => {
+    const f = liveFixture(); let made = null;
+    f.win.fetch = async () => liveReply(204);
+    f.win.Worker = class { constructor(url, options) { made = this; this.options = options; } terminate() { this.stopped = true; } };
+    f.Live.startTimer();
+    assert.ok(made, 'a worker was started'); assert.equal(f.Live.worker, made);
+    f.Live.startTimer(); assert.equal(f.Live.worker, made, 'only one timer');
+    assert.equal(f.Live.nextAt, 0);
+    made.onmessage(); assert.ok(f.Live.nextAt > 0, 'a worker tick arms the schedule');
+    made.onerror(); assert.equal(made.stopped, true); assert.equal(f.Live.worker, null, 'the page interval carries on alone');
+    const none = fixture(); none.Live.startTimer(); assert.equal(none.Live.worker, null, 'no Worker in this browser');
+    const broken = fixture(); broken.win.Worker = class { constructor() { throw Error('blocked'); } };
+    broken.Live.startTimer(); assert.equal(broken.Live.worker, null);
+  });
+
+  test('the bot posts a real snapshot to the real hub and reads it back through /state', async () => {
+    const { spawn } = require('node:child_process'), path = require('node:path'), PORT = 41731;
+    const hub = spawn(process.execPath, [path.join(__dirname, 'live', 'hub.js')], { env: { ...process.env, PORT: String(PORT), TUNNEL: 'off' }, stdio: ['ignore', 'pipe', 'inherit'] });
+    try {
+      await new Promise((ready, fail) => { hub.stdout.once('data', ready); hub.once('error', fail); hub.once('exit', () => fail(Error('the hub exited'))); });
+      const code = fs.readFileSync(path.join(__dirname, 'live', '.code'), 'utf8').trim();
+      const f = fixture(); f.Settings.profile.live.on = true;
+      f.World.charName = 'Hubbed'; f.World.gp.progression.level = 40;
+      f.Stats.levels = { 40: { expRequired: '1000' } }; f.World.gp.progression.experience = '250';
+      assert.equal(f.Live.setChannel('https://hub.example.test', code), true);
+      let forwarded = null;
+      // The hub speaks plain HTTP on this machine; the bot insists on HTTPS, so only the scheme and host are swapped.
+      f.win.fetch = (url, options) => { forwarded = options; return fetch(url.replace('https://hub.example.test', 'http://127.0.0.1:' + PORT), options); };
+      assert.equal(await f.Live.send(true), true);
+      assert.ok(forwarded.headers['X-Code']);
+      const state = await (await fetch('http://127.0.0.1:' + PORT + '/state', { headers: { 'X-Code': code } })).json();
+      assert.equal(state.reports.length, 1);
+      assert.equal(state.reports[0].name, 'Hubbed'); assert.equal(state.reports[0].level, 40); assert.equal(state.reports[0].xpPct, 25);
+      assert.ok(Number.isFinite(state.reports[0].at) && Math.abs(state.now - state.reports[0].at) < 5000, 'the shape the dashboard reads');
+      f.Live.setChannel('https://hub.example.test', 'WrongCode0123456789abcd');
+      assert.equal(await f.Live.send(false), false);
+      assert.equal(f.Settings.profile.live.on, false, 'the real hub answered 401, which switches the dashboard off');
+      assert.equal(f.Live.status(), 'Off: Hub refused the code.');
+    } finally { hub.kill(); }
   });
 
   await Promise.all(asyncTests);

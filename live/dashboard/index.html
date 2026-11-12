@@ -59,9 +59,10 @@
 </template>
 
 <script>
-// Reports come every 5 s, but a browser slows a background game tab's timers to about once a minute,
+// Reports come every 10 s by default (3 to 60), but a browser slows a background game tab's timers to about once a minute,
 // so a report is only "late" after 20 s and the character "offline" after 90 s.
 const LATE_MS = 20000, STALE_MS = 90000;
+const POLL_MS = 10000; // the Cloudflare free plan counts every request, and one open dashboard at 10 s stays far below it
 let skew = 0; // this device's clock minus the hub's, measured on every poll, so a wrong phone clock cannot fake "offline"
 const $ = id => document.getElementById(id);
 const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
@@ -127,7 +128,7 @@ else {
   (async function poll() {
     try {
       const r = await fetch('/state', { headers: { 'X-Code': code }, cache: 'no-store' });
-      if (r.status === 403) { $('conn').textContent = 'wrong code'; return; }
+      if (r.status === 401 || r.status === 403) { $('conn').textContent = 'wrong code'; return; }
       const { now, reports } = await r.json();
       skew = Date.now() - now;
       reports.forEach(onSnap);
@@ -136,7 +137,7 @@ else {
       $('empty').hidden = bots.size > 0;
       $('conn').textContent = 'live'; store.set('nixChannel', code); // remembered only once the hub accepts it
     } catch { $('conn').textContent = 'hub unreachable, retrying…'; }
-    setTimeout(poll, 3000);
+    setTimeout(poll, POLL_MS);
   })();
   setInterval(() => bots.forEach(b => { const [t, k] = status(b.snap), p = b.el.querySelector('[data-k="status"]'); p.textContent = t; p.className = 'pill ' + k; }), 1000);
 }

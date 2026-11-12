@@ -589,7 +589,7 @@ const UI = {
     } else if (this.current === 'Wardrobe') {
       LeanWardrobe.draw(this.pane);
     } else {
-      this.sections('settingsStats', 'settingsBehaviour', 'settingsObstacles', 'settingsAntiStuck', 'settingsMastery', 'settingsStatPoints', 'settingsProfiles', 'settingsShare', 'settingsReports', 'settingsSessionReport', 'settingsActivity');
+      this.sections('settingsStats', 'settingsBehaviour', 'settingsObstacles', 'settingsAntiStuck', 'settingsMastery', 'settingsStatPoints', 'settingsProfiles', 'settingsShare', 'settingsReports', 'settingsSessionReport', 'settingsLive', 'settingsActivity');
     }
     this.balance();
     this.update();
@@ -616,7 +616,7 @@ const UI = {
       { name: 'Auto alchemy', icon: 'action\\icon_cha_alchemy', pages: ['Alchemy'], draw() { Alchemy.draw(); } },
       { name: 'Stall', icon: 'action\\icon_cha_shop', pages: ['Stall'], draw() { Stall.draw(); } },
       { name: 'Extra', icon: 'action\\icon_cha_helper', pages: ['Settings'], sections: [
-        ['settingsStats'], ['settingsMastery'], ['settingsStatPoints'], ['settingsProfiles'], ['settingsShare'], ['settingsReports'], ['settingsSessionReport', 'Discord reports'], ['settingsActivity']] },
+        ['settingsStats'], ['settingsMastery'], ['settingsStatPoints'], ['settingsProfiles'], ['settingsShare'], ['settingsReports'], ['settingsSessionReport', 'Discord reports'], ['settingsLive', 'Live dashboard'], ['settingsActivity']] },
       { name: 'Map', pages: ['Map'], draw() { LeanMap.draw(this.pane); } },
       { name: 'Auto trade', icon: 'action\\icon_cha_shop', pages: ['Trade'], draw() { Trade.draw(); } },
       { name: 'Wardrobe', icon: 'action\\icon_cha_shop', pages: ['Wardrobe'], draw() { LeanWardrobe.draw(this.pane); } },
@@ -1318,6 +1318,48 @@ const UI = {
         this.reportNote,
         el('p', 'One message per interval with the current session totals. It keeps reporting while the bot is stopped and says when you are dead or out of the game. The address is kept in this browser only and is not part of shared settings or backups.', 'muted')));
   },
+  section_settingsLive(host) {
+    const channel = Live.channel();
+    const address = el('input'), code = el('input');
+    for (const input of [address, code]) { input.type = 'text'; input.spellcheck = false; input.autocomplete = 'off'; }
+    code.type = 'password';
+    address.placeholder = 'https://…/pair/… or https://…'; address.value = channel?.url || '';
+    code.placeholder = 'Code'; code.value = channel?.code || '';
+    // The pair link carries both values; a bare address keeps the code typed beside it.
+    const save = () => {
+      const parsed = Live.parseInput(address.value);
+      if (!address.value.trim() && !code.value.trim()) { Live.clearChannel(); return; }
+      if (!parsed) { UI.toast('That is not an HTTPS hub address or pair link.', 'warn'); return; }
+      const wanted = parsed.code || code.value.trim();
+      if (!Live.validCode(wanted)) { code.value = wanted; UI.toast('Add the hub code too.', 'info'); return; }
+      if (Live.setChannel(parsed.url, wanted)) { Live.holdUntil = 0; Live.nextAt = 0; Live.lastError = ''; Live.tick(); }
+      else UI.toast('That hub could not be saved. Check it, and that this browser allows storage.', 'warn');
+      const saved = Live.channel();
+      address.value = saved?.url || ''; code.value = saved?.code || '';
+    };
+    address.addEventListener('change', save); code.addEventListener('change', save);
+    this.liveNote = el('p', Live.status(), 'muted');
+    host.append(this.group('Live dashboard',
+      this.check('Send live stats to my hub', () => Settings.profile.live.on, v => { Settings.profile.live.on = v; Live.tick(); }),
+      this.number('Send every (seconds)', () => Settings.profile.live.seconds, v => Settings.profile.live.seconds = v, 3, 60),
+      this.field('Pair link or hub address', address),
+      this.field('Hub code', code),
+      this.button('Send a test report', () => { void Live.send(true).catch(() => {}); }),
+      this.liveNote,
+      el('p', 'Shows this character on a phone dashboard served by your own hub (a Cloudflare Worker on your account, or live/hub.js behind an HTTPS tunnel). The data goes only to that hub. The address and code stay in this browser and are never part of share codes, backups or bug reports. The hub must be reachable over HTTPS.', 'muted')));
+  },
+  // The pairing request from a #nixlive link. Nothing is saved until Pair is pressed.
+  showPairing() {
+    if (!this.body) return;
+    if (!this.pairBox) {
+      this.pairText = el('p');
+      this.pairBox = this.group('Pair with a live hub?', this.pairText,
+        this.row(this.button('Pair', () => { Live.confirmPairing(); }), this.button('Cancel', () => { Live.cancelPairing(); })));
+      this.body.insertBefore(this.pairBox, this.waitNote.nextSibling);
+    }
+    this.pairBox.hidden = !Live.pending;
+    this.pairText.textContent = Live.pending ? 'A link asks this bot to send its live stats to ' + Live.pending.url + '. Only pair with a hub you set up yourself.' : '';
+  },
   section_settingsActivity(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
       this.logs = this.activityLog('Settings activity');
@@ -1491,6 +1533,7 @@ const UI = {
     if (this.autoStartNote) this.autoStartNote.textContent = AutoStart.status();
     if (this.retryNote) this.retryNote.textContent = Retry.status();
     if (this.reportNote?.isConnected) this.reportNote.textContent = Reporter.status();
+    if (this.liveNote?.isConnected) this.liveNote.textContent = Live.status();
     if (this.is('Party') && Trace.note) Trace.note.textContent = Trace.status();
     if (Lure.note) Lure.note.textContent = Lure.status();
     if (this.is('Party') && this.partyNote) {

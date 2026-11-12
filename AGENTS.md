@@ -13,7 +13,7 @@ Deeper background lives in `context.md` (handoff doc, snapshot — verify agains
 - `lean-loot.js` drops/pickup/pet collector; `lean-town.js` scroll town trips; `restock.js` merchant routes; `lean-walkback.js` return to hunt spot.
 - `lean-navigation.js`, `lean-pursuit-navigation.js`, `lean-chase.js`, `lean-trap.js`, `lean-antistuck.js` movement/obstacle logic.
 - `lean-settings.js` defaults + per-character persistence; `lean-ui.js` panel (open shadow root `#sro-bot-lean`); `lean-stats.js` session stats.
-- `lean-reconnect.js`, `lean-session.js` reconnect/login recovery; `lean-autostart.js` optional start on entering the game; `lean-party.js`, `lean-resurrect.js`, `lean-alchemy.js`, `lean-speed-scroll.js`, `lean-support.js`/`lean-reports.js` reports.
+- `lean-reconnect.js`, `lean-session.js` reconnect/login recovery; `lean-live.js` live dashboard client (posts snapshots to the user's own hub, `live/`); `lean-autostart.js` optional start on entering the game; `lean-party.js`, `lean-resurrect.js`, `lean-alchemy.js`, `lean-speed-scroll.js`, `lean-support.js`/`lean-reports.js` reports.
 - Tests: `lean.test.cjs` (main integration suite, loads the generated script into a `vm` context), `lean.obstacle.test.cjs`, `lean.logging.test.cjs`, `lean.session.test.cjs`, `lean.browser.test.cjs` (Playwright + Edge), `lean.navigation.native.test.mjs` (needs an OpenSRO checkout).
 
 ## Commands (run from repo root)
