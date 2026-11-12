@@ -8,3 +8,4 @@ lean-*.png
 .env
 .env.*
 PLAN-auto-walk-to-hunting-spot.md
+live/.code

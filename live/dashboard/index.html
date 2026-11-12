@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#0f1216">
+<title>NIX live</title>
+<style>
+  :root { color-scheme:dark; --bg:#0f1216; --card:#181d24; --line:#27303b; --text:#e8ecf1; --dim:#8a96a6; --ok:#3fb97a; --warn:#e0a93b; --bad:#e5534b; --hp:#d9534f; --mp:#4a8fe0; --xp:#c9a23a; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  header { display:flex; justify-content:space-between; align-items:baseline; padding:14px 16px 6px; }
+  h1 { margin:0; font-size:18px; letter-spacing:.04em; }
+  #conn, .dim { color:var(--dim); font-size:13px; }
+  main { display:grid; gap:12px; padding:10px 16px 24px; grid-template-columns:repeat(auto-fill,minmax(min(100%,330px),1fr)); }
+  article { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; }
+  .top { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  h2 { margin:0; font-size:17px; overflow-wrap:anywhere; }
+  .pill { padding:3px 10px; border-radius:999px; font-size:12px; font-weight:600; white-space:nowrap; background:var(--line); }
+  .pill.ok { background:var(--ok); color:#04130b; } .pill.warn { background:var(--warn); color:#1a1200; } .pill.bad { background:var(--bad); color:#fff; }
+  .bar { position:relative; height:16px; margin-top:8px; border-radius:5px; background:#0c0f13; overflow:hidden; }
+  .bar i { position:absolute; inset:0 auto 0 0; width:0; transition:width .4s; }
+  .bar span { position:relative; display:block; text-align:center; font-size:11px; line-height:16px; text-shadow:0 1px 2px #000; }
+  dl { display:grid; grid-template-columns:repeat(3,1fr); gap:10px 8px; margin:14px 0 10px; }
+  dt { color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.05em; }
+  dd { margin:0; font-size:16px; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+  ol { list-style:none; margin:0; padding:8px 0 0; border-top:1px solid var(--line); max-height:170px; overflow-y:auto; font-size:12px; }
+  li { padding:1px 0; color:var(--dim); overflow-wrap:anywhere; } li.warn { color:var(--warn); } li.error { color:var(--bad); }
+  li time { margin-right:6px; opacity:.7; }
+  #empty { padding:30px 16px; text-align:center; color:var(--dim); }
+</style>
+</head>
+<body>
+<header><h1>NIX live</h1><span id="conn" role="status">connecting…</span></header>
+<main id="bots"></main>
+<p id="empty">Waiting for a bot to report…</p>
+
+<template id="card">
+  <article>
+    <div class="top"><h2 data-k="title"></h2><span class="pill" data-k="status"></span></div>
+    <div class="dim" data-k="sub"></div>
+    <div class="bar"><i data-k="hpBar" style="background:var(--hp)"></i><span data-k="hp"></span></div>
+    <div class="bar"><i data-k="mpBar" style="background:var(--mp)"></i><span data-k="mp"></span></div>
+    <div class="bar"><i data-k="xpBar" style="background:var(--xp)"></i><span data-k="xp"></span></div>
+    <dl>
+      <div><dt>XP / hour</dt><dd data-k="rate"></dd></div>
+      <div><dt>XP gained</dt><dd data-k="xpGain"></dd></div>
+      <div><dt>Net gold</dt><dd data-k="gold"></dd></div>
+      <div><dt>Hunting</dt><dd data-k="time"></dd></div>
+      <div><dt>Kills</dt><dd data-k="kills"></dd></div>
+      <div><dt>Deaths</dt><dd data-k="deaths"></dd></div>
+      <div><dt>Potions</dt><dd data-k="potions"></dd></div>
+      <div><dt>Items</dt><dd data-k="items"></dd></div>
+      <div><dt>Sun / Moon / Star</dt><dd data-k="sox"></dd></div>
+    </dl>
+    <ol data-k="log" aria-label="Recent activity"></ol>
+  </article>
+</template>
+
+<script>
+const STALE_MS = 20000; // four missed reports
+const $ = id => document.getElementById(id);
+const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
+const bots = new Map(); // name -> { snap, el }
+
+function ago(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return s < 60 ? s + 's' : s < 3600 ? Math.floor(s / 60) + 'm' : Math.floor(s / 3600) + 'h ' + Math.floor(s / 60) % 60 + 'm';
+}
+function status(s) {
+  const age = Date.now() - s.at;
+  if (age > STALE_MS) return ['Offline · ' + ago(age) + ' ago', 'bad'];
+  if (!s.inWorld) return [s.note || 'Not in game', 'warn'];
+  if (s.dead) return ['Dead', 'bad'];
+  return s.running ? ['Hunting · ' + s.state, 'ok'] : ['Stopped', 'warn'];
+}
+// All bot text goes in through textContent: log lines can carry other players' names.
+function render(bot) {
+  const s = bot.snap, st = s.stats || {}, q = k => bot.el.querySelector('[data-k="' + k + '"]');
+  const put = (k, v) => { q(k).textContent = v ?? '—'; };
+  const bar = (k, pct, label) => { q(k + 'Bar').style.width = Math.min(100, Math.max(0, pct || 0)) + '%'; put(k, label); };
+  const [text, kind] = status(s);
+  put('title', s.name + (s.level != null ? ' · Lv ' + s.level : ''));
+  put('status', text); q('status').className = 'pill ' + kind;
+  put('sub', s.pos ? 'Region ' + s.pos.region + ' (' + s.pos.x + ', ' + s.pos.z + ')' : '');
+  bar('hp', s.hp, 'HP ' + s.hp + '%'); bar('mp', s.mp, 'MP ' + s.mp + '%');
+  bar('xp', s.xpPct, s.xpPct == null ? 'XP —' : 'XP ' + s.xpPct + '%');
+  put('rate', st.rate); put('xpGain', st.xp); put('gold', st.gold); put('time', st.time); put('kills', st.kills);
+  put('deaths', st.deaths); put('potions', st.potions); put('items', st.items);
+  put('sox', [st.sun, st.moon, st.star].map(v => v ?? '—').join(' / '));
+  const log = q('log'), atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
+  log.replaceChildren(...(s.log || []).map(e => {
+    const li = document.createElement('li'), t = document.createElement('time');
+    if (e.level === 'warn' || e.level === 'error') li.className = e.level;
+    t.textContent = new Date(e.at).toLocaleTimeString('en-GB');
+    li.append(t, e.text);
+    return li;
+  }));
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
+function onSnap(s) {
+  if (!s || typeof s.name !== 'string' || !Number.isFinite(s.at)) return;
+  let bot = bots.get(s.name);
+  if (!bot) {
+    bot = { el: $('card').content.firstElementChild.cloneNode(true) };
+    bots.set(s.name, bot); $('bots').append(bot.el); $('empty').hidden = true;
+  }
+  bot.snap = s; render(bot);
+}
+
+// The dashboard code rides in the link (#code) and is remembered, so a home-screen shortcut keeps working.
+const code = decodeURIComponent(location.hash.slice(1)) || store.get('nixChannel');
+onhashchange = () => location.reload(); // a code pasted into an already-open tab
+if (!code) $('empty').textContent = 'Open this page with your dashboard code at the end of the link: …/#your-code';
+else {
+  // The hub keeps each character's last report, so a bot that died hours ago still shows as offline.
+  (async function poll() {
+    try {
+      const r = await fetch('/state', { headers: { 'X-Code': code }, cache: 'no-store' });
+      if (r.status === 403) { $('conn').textContent = 'wrong code'; return; }
+      (await r.json()).forEach(onSnap);
+      $('conn').textContent = 'live'; store.set('nixChannel', code); // remembered only once the hub accepts it
+    } catch { $('conn').textContent = 'hub unreachable, retrying…'; }
+    setTimeout(poll, 3000);
+  })();
+  setInterval(() => bots.forEach(b => { const [t, k] = status(b.snap), p = b.el.querySelector('[data-k="status"]'); p.textContent = t; p.className = 'pill ' + k; }), 1000);
+}
+</script>
+</body>
+</html>
