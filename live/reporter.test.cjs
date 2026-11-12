@@ -50,3 +50,18 @@ assert.deepEqual(snapshot(bot({ log: lines })).log, [
 const broken = snapshot(bot({ log: lines, top: { activity: { userMessage() { throw Error('renamed'); } } } }));
 assert.equal(broken.log[0].text, 'Inventory gain observed for pickup 366883. ×3');
 console.log('ok');
+
+// A stale vitals maximum must not push the percentage over 100; noise categories and panel toasts stay out of the feed.
+{
+  const stale = snapshot(bot({ world: { vitalsOf: () => ({ maxHp: 1000, maxMp: 400 }), localGid: () => 1,
+    me: () => ({ hp: 1150, mp: 470, hpPct: 115, mpPct: 117.5 }), gp: { progression: { stats: { maxHp: 1300, maxMp: 600 } } } } }));
+  assert.equal(stale.hp, 88); assert.equal(stale.mp, 78);
+  const full = snapshot(bot({ world: { vitalsOf: () => ({ maxHp: 1000, maxMp: 400 }), localGid: () => 1, me: () => ({ hp: 1150, mp: 470, hpPct: 115, mpPct: 117.5 }) } }));
+  assert.equal(full.hp, 100); assert.equal(full.mp, 100);
+  const feed = snapshot(bot({ log: { lines: [
+    { at: 1, level: 'warn', category: 'assets', text: 'Skill icon unavailable' }, { at: 2, level: 'warn', category: 'engine', source: 'toast', text: 'Not an HTTPS hub' },
+    { at: 3, level: 'info', category: 'engine', text: 'toast tagged only', source: 'toast' }, { at: 4, level: 'info', category: 'loot', code: 'pickup-confirmed', text: 'Picked up.' },
+    { at: 5, level: 'warn', category: 'session', code: 'live-failed', text: 'Live failed' } ] } }));
+  assert.deepEqual(feed.log.map(e => e.text), ['Picked up.']);
+}
+console.log('reporter feed and gauge tests passed');

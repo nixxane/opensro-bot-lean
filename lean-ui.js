@@ -8,7 +8,8 @@ const UI = {
   root: null, body: null, pane: null, status: null, feedback: null,
   current: 'Combat', combatTab: 'Skills', refreshers: [], lastSkillKey: '',
   toast(message, level = 'info', ms = 5000) {
-    Log.add(level, message);
+    // Tagged so the live feed can tell the bot's own panel messages from what the bot did.
+    Log.add(level, message, 'toast');
     if (level === 'warn' || level === 'error' || /^SoX found/.test(message)) this.alertOrb(message);
     if (!this.feedback) return;
     this.feedback.textContent = message;

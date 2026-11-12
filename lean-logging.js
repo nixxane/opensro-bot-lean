@@ -60,6 +60,8 @@ const Activity = {
 				text, outcome: [ "requested", "confirmed", "refused", "unconfirmed", "cancelled", "waiting", "summary" ].includes( event.outcome ) ? event.outcome : null,
 				sessionId: this.session, epoch: Number.isSafeInteger( World.epoch ) ? World.epoch : null,
 				operationId: Number.isSafeInteger( event.operationId ) ? event.operationId : null, details, repeatCount: 1 };
+			// "toast" marks a message the panel showed the player (settings, validation); it is not something the bot did.
+			if ( event.source === "toast" ) entry.source = "toast";
 			entry.userText = event.userText ? String( event.userText ).slice( 0, ACTIVITY_LIMIT.text ) : null;
 			if ( event.failure && this.safeFailure ) entry.failure = this.safeFailure( event.failure );
 			if ( entry.code === "target-selected" ) {
@@ -73,7 +75,7 @@ const Activity = {
 			const rows = event.diagnosticOnly ? this.refusals : level === "cmd" ? this.commands : Log.lines;
 			const previous = rows[rows.length - 1];
 			if ( previous && previous.code === entry.code && previous.text === text && previous.level === level &&
-				previous.category === category && previous.userText === entry.userText && previous.operationId === entry.operationId && previous.sessionId === entry.sessionId &&
+				previous.category === category && previous.source === entry.source && previous.userText === entry.userText && previous.operationId === entry.operationId && previous.sessionId === entry.sessionId &&
 				previous.epoch === entry.epoch && previous.outcome === entry.outcome &&
 				JSON.stringify( previous.failure ) === JSON.stringify( entry.failure ) &&
 				JSON.stringify( previous.details ) === JSON.stringify( details ) && entry.mono - previous.lastMono < ACTIVITY_LIMIT.repeatMs ) {
@@ -230,8 +232,8 @@ Log.command = function( command, text ) {
 	return Activity.emit( { level: "cmd", category: owner, code: "command-" + command.kind, text,
 		outcome: "requested", operationId: Activity.contexts[owner]?.id } );
 };
-Log.add = function( level, text ) {
-	return Activity.emit( { level, text, outcome: level === "cmd" ? "requested" : null } );
+Log.add = function( level, text, source ) {
+	return Activity.emit( { level, text, source, outcome: level === "cmd" ? "requested" : null } );
 };
 bus.on( "game-error", text => {
 	Activity.refusal( text );

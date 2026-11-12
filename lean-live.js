@@ -12,6 +12,8 @@ const LIVE_LOG_LINES = 12;
 const LIVE_DEPLOY_URL = 'https://deploy.workers.cloudflare.com/?url=https://github.com/nixxane/opensro-bot-lean/tree/main/live/worker';
 // Every new target is logged by the bot; on a phone that buries the events worth seeing, and kills are counted in the stats anyway.
 const LIVE_QUIET_CODES = ['target-selected', 'target-search'];
+// Activity categories that describe what the bot did. Left out: settings, engine, assets (UI validation, game and asset noise).
+const LIVE_FEED_CATEGORIES = ['session', 'combat', 'movement', 'town', 'stall', 'potion', 'loot', 'party', 'buff', 'alchemy', 'reconnect'];
 const Live = {
   DEPLOY_URL: LIVE_DEPLOY_URL,
   sending: false, nextAt: 0, lastAt: 0, lastError: '', holdUntil: 0, pending: null, worker: null,
@@ -54,21 +56,68 @@ const Live = {
   say(entry) {
     try { return String(Activity.userMessage(entry)); } catch { return String(entry.text); }
   },
+  // World.me() divides the current gauge by vitals.maxHp first. The game keeps the last maximum when a later packet carries
+  // only the gauge, so after a max-HP/MP buff (or a level-up) that maximum is stale and the gauge passes it (115 %).
+  // Take the first maximum that can hold the gauge: the vitals row, then the stats packet; if neither can, the gauge is the maximum.
+  gauge(current, ...maxima) {
+    const max = maxima.map(Number).find(m => Number.isFinite(m) && m > 0 && m >= current);
+    return max ?? (current > 0 ? current : Math.max(0, ...maxima.map(Number).filter(Number.isFinite)));
+  },
+  vitals() {
+    const me = World.me(), v = World.vitalsOf(World.localGid()) || {}, stats = World.gp?.progression?.stats || {};
+    const hpMax = this.gauge(me.hp, v.maxHp, stats.maxHp), mpMax = this.gauge(me.mp, v.maxMp, stats.maxMp);
+    const pct = (cur, max) => max > 0 ? clamp(cur / max * 100, 0, 100) : 100;
+    return { hp: me.hp, mp: me.mp, maxHp: hpMax, maxMp: mpMax, hpPct: pct(me.hp, hpMax), mpPct: pct(me.mp, mpMax) };
+  },
+  // The feed shows what the bot DID. Allowlist by the category the Activity log gives each entry; a log line without one
+  // (an old-style Log.add) is kept. Dropped: command traces, asset/engine/settings noise, the panel's own toasts, and the
+  // live dashboard's own failure notes.
+  feedEntry(e) {
+    if (e.level === 'cmd' || e.source === 'toast') return false;
+    if (e.category !== undefined && !LIVE_FEED_CATEGORIES.includes(e.category)) return false;
+    if (/^(live-|session-report-)/.test(String(e.code || ''))) return false;
+    return !(e.level === 'info' && LIVE_QUIET_CODES.includes(e.code));
+  },
+  // Session totals as numbers. Before the first hunt nothing has been tracked, so the totals are a known 0; once tracking has
+  // run, an unreadable value stays null. XP/hour needs 30 s of hunting, as in the panel.
+  session() {
+    const s = Stats.session, fresh = s.ms === 0 && !Stats.startedAt;
+    return {
+      xp: Stats.xpKnown || fresh ? Number(s.xp) : null,
+      xpPerHour: s.ms >= 30000 ? (Stats.xpKnown ? Number(s.xp * 3600000n / BigInt(Math.floor(s.ms))) : null) : (fresh ? 0 : null),
+      gold: Stats.goldKnown || fresh ? Number(s.gold) : null,
+      kills: s.kills, deaths: s.deaths, potions: s.potions, items: s.items,
+      seconds: Math.floor(s.ms / 1000),
+      startedAt: Stats.startedAt || null,
+    };
+  },
+  // Fields: name, bot, level, xpPct (old, unchanged); hp, mp = percent 0-100 (old); hpNow, hpMax, mpNow, mpMax = gauge values;
+  // session = { xp, xpPerHour, gold, kills, deaths, potions, items, seconds (hunting time), startedAt (ms epoch of the first
+  // hunt start, null if none) }; target = name of the monster being fought (null if none); hunt = { region, x, z, radius }
+  // of the saved hunting spot (null if none). stats (formatted strings) and log keep their old shape.
   snapshot() {
     const name = World.charName;
     if (!name) return null;
-    const progress = World.gp?.progression || {}, me = World.me(), pose = World.pose();
+    const progress = World.gp?.progression || {}, pose = World.pose(), vitals = this.vitals();
     const need = Number(Stats.levels?.[progress.level]?.expRequired);
+    const session = this.session(), stats = Stats.display();
+    // Nothing tracked yet: a known zero, not a dash.
+    if (session.xp === 0 && !Stats.xpKnown) { stats.xp = '0'; stats.rate = '0'; }
+    if (session.gold === 0 && !Stats.goldKnown) stats.gold = '0';
+    const target = World.target?.(), spot = Settings.profile.hunt?.center;
     return {
       name, bot: VERSION,
       level: progress.level ?? null,
       xpPct: need > 0 && progress.experience != null ? Math.floor(Number(progress.experience) / need * 1000) / 10 : null,
-      hp: Math.round(me.hpPct), mp: Math.round(me.mpPct),
+      hp: Math.round(vitals.hpPct), mp: Math.round(vitals.mpPct),
+      hpNow: Math.round(vitals.hp), hpMax: Math.round(vitals.maxHp), mpNow: Math.round(vitals.mp), mpMax: Math.round(vitals.maxMp),
       inWorld: World.inWorld(), dead: World.isDead(), running: !!Hunt.running, state: String(Hunt.state || ''),
       note: String(Reconnect.message || '').slice(0, 120),
       pos: pose ? { region: pose.regionId, x: Math.round(pose.x), z: Math.round(pose.z) } : null,
-      stats: Stats.display(),
-      log: Log.lines.filter(e => e.level !== 'cmd' && !(e.level === 'info' && LIVE_QUIET_CODES.includes(e.code))).slice(-LIVE_LOG_LINES)
+      stats, session,
+      target: target?.name ? String(target.name).slice(0, 60) : null,
+      hunt: spot ? { region: spot.regionId ?? null, x: Math.round(spot.x), z: Math.round(spot.z), radius: Number(Settings.profile.hunt.radius) || null } : null,
+      log: Log.lines.filter(e => this.feedEntry(e)).slice(-LIVE_LOG_LINES)
         .map(e => ({ at: e.lastAt || e.at, level: e.level, text: this.say(e).slice(0, 200) + (e.repeatCount > 1 ? ' ×' + e.repeatCount : '') })),
     };
   },

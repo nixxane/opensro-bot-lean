@@ -26,12 +26,12 @@ const Stats = {
   reset() {
     this.values = { loot: 0, casts: 0, potions: 0, deaths: 0 };
     this.session = { ms: 0, xp: 0n, gold: 0n, kills: 0, deaths: 0, potions: 0, items: 0, sox: 0, star: 0, moon: 0, sun: 0 };
-    this.lastAt = now(); this.active = false; this.baseline = null;
+    this.lastAt = now(); this.active = false; this.baseline = null; this.startedAt = null;
     this.dead = World.isDead(); this.pendingXP = []; this.xpPartial = this.xpKnown = this.goldKnown = false;
     this.potions = []; this.potionTotals.clear();
     this.sample(); this.render();
   },
-  huntStart() { this.sample(); this.loadLevels(); Loot.ensureCatalogue(); },
+  huntStart() { this.startedAt ??= Date.now(); this.sample(); this.loadLevels(); Loot.ensureCatalogue(); },
   huntStop() { this.sample(); },
   count(kind) {
     if (kind in this.values) this.values[kind]++;

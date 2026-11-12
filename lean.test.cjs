@@ -12,6 +12,7 @@ function fixture(document, sharedStorage) {
     setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimeout() {}, clearInterval() {}, setInterval(fn, ms) { intervals.push({ fn, ms }); }, AbortController, Blob, FormData, URL, Map, Set, Date, ArrayBuffer, DataView, atob };
   vm.createContext(context); vm.runInContext(isolated, context);
   const b = context.bot;
+  b.UI.panelToast = b.UI.toast; // the real one, for the tests that need the tagged log line
   b.UI.toast = message => notices.push(message);
   b.Hook.post = msg => commands.push(msg.command.command);
   b.World.phase = 'world'; b.World.simOffset = 0;
@@ -9324,6 +9325,70 @@ async function updateTests() {
     for (const key of ['hp', 'mp', 'inWorld', 'dead', 'running', 'state', 'note', 'pos', 'stats', 'log']) assert.ok(key in body, key);
     assert.equal(f.Live.sending, false); assert.ok(f.Live.lastAt > 0); assert.equal(f.Live.lastError, '');
     assert.match(f.Live.status(), /^Last report 0 s ago\. Next in 0:10\.$/);
+  });
+
+  test('a live snapshot never reports more than 100 % when the vitals maximum is stale', () => {
+    const f = liveFixture();
+    // The game keeps the last maximum: the gauge (1150) passed the stale vitals maximum (1000) after a buff; the stats packet is current.
+    f.World.gp.vitals = [{ gid: 1, hp: 1150, mp: 470, maxHp: 1000, maxMp: 400 }];
+    f.World.gp.progression.stats = { maxHp: 1300, maxMp: 600 };
+    assert.ok(f.World.me().hpPct > 100, 'the bot helper itself reads the stale maximum');
+    let snap = f.Live.snapshot();
+    assert.equal(snap.hp, 88); assert.equal(snap.mp, 78);
+    assert.deepEqual([snap.hpNow, snap.hpMax, snap.mpNow, snap.mpMax], [1150, 1300, 470, 600]);
+    // Neither maximum can hold the gauge: it is full, never above.
+    f.World.gp.progression.stats = { maxHp: 900, maxMp: 300 };
+    snap = f.Live.snapshot();
+    assert.equal(snap.hp, 100); assert.equal(snap.mp, 100); assert.equal(snap.hpMax, 1150);
+    // A normal row is untouched.
+    f.World.gp.vitals = [{ gid: 1, hp: 500, mp: 100, maxHp: 1000, maxMp: 400 }];
+    snap = f.Live.snapshot(); assert.equal(snap.hp, 50); assert.equal(snap.mp, 25);
+  });
+
+  test('a live feed keeps what the bot did and drops asset noise, panel toasts and its own dashboard notes', () => {
+    const f = liveFixture();
+    f.Log.lines.length = 0;
+    f.Activity.emit({ category: 'assets', code: 'legacy-message', level: 'warn', text: 'Skill icon unavailable: /assets/x.png (not found in the game packs)' });
+    f.UI.panelToast('That is not an HTTPS hub address or pair link.', 'warn');
+    f.Activity.emit({ category: 'settings', code: 'capture-changed', text: 'Detailed command capture stopped.' });
+    f.Activity.emit({ category: 'session', code: 'live-failed', level: 'warn', text: 'Live dashboard report failed: No answer from the hub.' });
+    f.Activity.emit({ category: 'engine', code: 'legacy-message', text: 'Something internal.' });
+    f.Activity.emit({ category: 'loot', code: 'pickup-confirmed', text: 'Inventory gain observed for pickup 1.' });
+    f.Activity.emit({ category: 'session', code: 'session-start', text: 'Session 1 started; bot.' });
+    f.Activity.emit({ category: 'reconnect', code: 'legacy-message', text: 'Reconnecting.' });
+    f.Activity.emit({ category: 'town', code: 'town-arrival', text: 'Town arrival verified; beginning services.' });
+    f.Activity.emit({ category: 'potion', code: 'potion-summary', text: '3 potion consumptions observed.' });
+    // A toast that happens to read like a kill must still be dropped: the tag decides, not the wording.
+    f.UI.panelToast('Attack target selected.', 'info');
+    assert.deepEqual(plain(f.Log.lines.filter(e => e.source === 'toast').map(e => e.text)), ['That is not an HTTPS hub address or pair link.', 'Attack target selected.']);
+    f.Activity.userMessage = e => e.code;
+    assert.deepEqual(plain(f.Live.snapshot().log.map(e => e.text)), ['pickup-confirmed', 'session-start', 'legacy-message', 'town-arrival', 'potion-summary']);
+  });
+
+  test('live session totals are numbers (0) before any hunt and null only when unreadable', () => {
+    const f = liveFixture();
+    let snap = f.Live.snapshot();
+    assert.deepEqual(plain(snap.session), { xp: 0, xpPerHour: 0, gold: 0, kills: 0, deaths: 0, potions: 0, items: 0, seconds: 0, startedAt: null });
+    assert.equal(snap.stats.xp, '0'); assert.equal(snap.stats.rate, '0'); assert.equal(snap.stats.gold, '0');
+    // Tracked but the game never gave an XP/gold reading: unknown, not zero.
+    f.Stats.startedAt = 1700000000000; f.Stats.session.ms = 60000;
+    snap = f.Live.snapshot();
+    assert.equal(snap.session.xp, null); assert.equal(snap.session.gold, null); assert.equal(snap.session.xpPerHour, null);
+    assert.equal(snap.session.startedAt, 1700000000000); assert.equal(snap.stats.xp, '—');
+    f.Stats.xpKnown = f.Stats.goldKnown = true; f.Stats.session.xp = 500n; f.Stats.session.gold = -20n;
+    snap = f.Live.snapshot();
+    assert.equal(snap.session.xp, 500); assert.equal(snap.session.xpPerHour, 30000); assert.equal(snap.session.gold, -20); assert.equal(snap.session.seconds, 60);
+    JSON.stringify(snap);
+  });
+
+  test('a live snapshot carries the current target and the saved hunting spot when they exist', () => {
+    const f = liveFixture();
+    let snap = f.Live.snapshot();
+    assert.equal(snap.target, null);
+    f.Settings.profile.hunt.center = { regionId: 25000, x: 10.4, y: 0, z: -3.6 };
+    assert.deepEqual(plain(f.Live.snapshot().hunt), { region: 25000, x: 10, z: -4, radius: f.Settings.profile.hunt.radius });
+    f.World.target = () => ({ name: 'Yeti' });
+    assert.equal(f.Live.snapshot().target, 'Yeti');
   });
 
   test('a live snapshot uses the bot wording, drops routine targeting, marks repeats and keeps twelve lines', () => {
