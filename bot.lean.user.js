@@ -14250,7 +14250,11 @@ const Trace = {
   beside(pos, from, keep) {
     const d = regionDelta(pos, from), length = Math.hypot(...d);
     if (!length || length <= keep) return from;
-    const k = keep / length, x = pos.x + d[0] * k, z = pos.z + d[1] * k, sx = Math.floor(x / SECTOR), sz = Math.floor(z / SECTOR);
+    const k = keep / length, x = pos.x + d[0] * k, z = pos.z + d[1] * k;
+    // A cave region is its own flat coordinate space (the game never carries x/z across regions there), so the point
+    // keeps the member's region id and raw coordinates; sector arithmetic would corrupt the id and send the move nowhere.
+    if ((pos.regionId | from.regionId) & DUNGEON) return { regionId: pos.regionId, x, y: pos.y, z };
+    const sx = Math.floor(x / SECTOR), sz = Math.floor(z / SECTOR);
     return { regionId: ((pos.regionId & 255) + sx) | (((pos.regionId >>> 8) + sz) << 8), x: x - sx * SECTOR, y: pos.y, z: z - sz * SECTOR };
   },
   reset() { this.travel = null; this.walking = false; this.sentAt = -Infinity; this.message = this.cfg().enabled ? 'Waiting for the party.' : 'Following off.'; this.code = this.cfg().enabled ? 'waiting' : 'off'; },
@@ -14308,7 +14312,7 @@ const Trace = {
       UI.number('Stay within (m)', () => this.cfg().distance, v => this.cfg().distance = v, 3, 60),
       UI.check('Fight monsters that attack on the way', () => this.cfg().fight, v => this.cfg().fight = v));
     this.note = el('p', this.message, 'muted');
-    box.append(this.note, el('p', 'While hunting the bot stays within this distance of the member and hunts around them, not around your saved hunting spot (that stays saved and is used again when following is off or the member is unavailable). The game tells the party where its members are, so it also follows them across the map, up to 300 m. It does not follow into another area, a dungeon or a teleport. Town trips, resurrection and walk-back still work as before and bring you back to your saved spot.', 'muted'));
+    box.append(this.note, el('p', 'While hunting the bot stays within this distance of the member and hunts around them, not around your saved hunting spot (that stays saved and is used again when following is off or the member is unavailable). The game tells the party where its members are, so it also follows them across the map, up to 300 m. It follows inside a cave once you are both in it, but it does not follow into another area, through a cave entrance or a teleport. Town trips, resurrection and walk-back still work as before and bring you back to your saved spot.', 'muted'));
     parent.append(box);
   },
 };

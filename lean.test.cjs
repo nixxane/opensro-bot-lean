@@ -3090,6 +3090,22 @@ function traceFixture(offset = 500, member = {}) {
   return f;
 }
 const moves = f => f.commands.filter(c => c.kind === 'move');
+function caveTrace(offset, region = 0x8005) {
+  const f = traceFixture(offset), pose = f.World.gp.pose;
+  Object.assign(pose, { regionId: region, x: 3000, y: 0, z: 9000 });
+  for (const m of f.World.gp.social.members) Object.assign(m, { region, x: m.name === 'Leader' ? 3000 + offset : 3000, z: m.name === 'Archer' ? 9200 : 9000 });
+  f.Settings.profile.hunt.center = { regionId: region, x: -2000, y: 0, z: 9000 };
+  return f;
+}
+test('following works inside a cave: the move keeps the cave region and its own coordinates', () => {
+  const f = caveTrace(500), region = 0x8005;
+  assert.equal(f.Trace.tick(), true); assert.equal(f.Trace.code, 'walking');
+  const m = moves(f); assert.equal(m.length, 1);
+  assert.equal(m[0].destination.regionId, region, 'a cave region id is never rebuilt from sector arithmetic');
+  assert.ok(m[0].destination.x > 3100 && m[0].destination.x < 3500 && m[0].destination.z === 9000, 'the point stays on the line to the leader in cave coordinates');
+  const near = caveTrace(100); near.Trace.tick(); assert.equal(near.huntedAround.length, 1, 'close enough: hunts around the member');
+  const other = caveTrace(500); other.World.gp.social.members[1].region = 0x8006; assert.equal(other.Trace.tick(), false); assert.equal(other.Trace.code, 'other-area');
+});
 test('following walks to a party member who is too far away and keeps the saved hunting spot', () => {
   const f = traceFixture(500), spot = JSON.stringify(f.Settings.profile.hunt.center), pose = f.World.gp.pose;
   assert.equal(f.Trace.tick(), true); assert.equal(f.huntedAround.length, 0, 'it walks, it does not hunt yet');
