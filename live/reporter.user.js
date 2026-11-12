@@ -20,20 +20,41 @@ const EVERY_MS = 5000;
 function snapshot(B) {
   const w = B.world, name = w.charName;
   if (!name) return null;
-  const p = w.gp?.progression || {}, me = w.me(), pose = w.pose();
+  const p = w.gp?.progression || {}, me = w.me(), pose = w.pose(), pct = gaugePct(w, me);
   const need = B.stats.levels?.[p.level]?.expRequired;
   return {
     name, bot: B.version,
     level: p.level ?? null,
     xpPct: need && p.experience != null ? Math.floor(Number(p.experience) / Number(need) * 1000) / 10 : null,
-    hp: Math.round(me.hpPct), mp: Math.round(me.mpPct),
+    hp: Math.round(pct.hp), mp: Math.round(pct.mp),
     inWorld: w.inWorld(), dead: w.isDead(), running: !!B.hunt.running, state: String(B.hunt.state || ''),
     note: String(B.reconnect?.message || '').slice(0, 120),
     pos: pose ? { region: pose.regionId, x: Math.round(pose.x), z: Math.round(pose.z) } : null,
     stats: B.stats.display(),
-    log: B.log.lines.filter(e => e.level !== 'cmd' && !(e.level === 'info' && QUIET.includes(e.code))).slice(-12)
+    log: B.log.lines.filter(feedEntry).slice(-12)
       .map(e => ({ at: e.lastAt || e.at, level: e.level, text: say(B, e).slice(0, 200) + (e.repeatCount > 1 ? ' ×' + e.repeatCount : '') })),
   };
+}
+
+// me().hpPct divides by the vitals maximum, which the game leaves stale after a max-HP buff (115 %). Use the first maximum
+// that can hold the gauge: vitals row, then the stats packet. Same rule as lean-live.js.
+function gaugePct(w, me) {
+  const v = w.vitalsOf?.(w.localGid?.()) || {}, stats = w.gp?.progression?.stats || {};
+  const one = (cur, pct, ...maxima) => {
+    if (!Number.isFinite(cur)) return Math.min(100, Math.max(0, pct));
+    const max = maxima.map(Number).find(m => Number.isFinite(m) && m > 0 && m >= cur);
+    return max ? Math.min(100, Math.max(0, cur / max * 100)) : (cur > 0 || !maxima.some(Number.isFinite) ? 100 : Math.min(100, Math.max(0, pct)));
+  };
+  return { hp: one(me.hp, me.hpPct, v.maxHp, stats.maxHp), mp: one(me.mp, me.mpPct, v.maxMp, stats.maxMp) };
+}
+
+// The feed shows what the bot did: only these Activity categories, no command traces, panel toasts or the dashboard's own notes.
+const FEED = ['session', 'combat', 'movement', 'town', 'stall', 'potion', 'loot', 'party', 'buff', 'alchemy', 'reconnect'];
+function feedEntry(e) {
+  if (e.level === 'cmd' || e.source === 'toast') return false;
+  if (e.category !== undefined && !FEED.includes(e.category)) return false;
+  if (/^(live-|session-report-)/.test(String(e.code || ''))) return false;
+  return !(e.level === 'info' && QUIET.includes(e.code));
 }
 
 // Every new target is logged by the bot; on a phone that buries the events worth seeing, and kills are counted in the stats anyway.

@@ -107,6 +107,8 @@ jobs:
           node lean.logging.test.cjs | tail -1
           node lean.session.test.cjs | tail -1
           node lean.obstacle.test.cjs | tail -1
+          node live/hub.test.cjs
+          node live/reporter.test.cjs
           git diff --check
           grep -q "// @version      $V" bot.lean.meta.js && grep -q "const VERSION = '$V';" bot.lean.user.js
 

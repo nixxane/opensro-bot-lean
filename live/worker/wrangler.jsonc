@@ -1,0 +1,25 @@
+{
+  // NIX live hub on your own Cloudflare account. Deploy it with the "Deploy to Cloudflare" button in live/README.md
+  // (or "npm run setup" for the command line). This folder is self-contained: the button copies only it.
+  // No account id is committed: wrangler uses the account you deploy to.
+  "name": "nix-live",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-10-13",
+  "workers_dev": true,
+  "keep_vars": true,
+  // The dashboard is a static asset. The Worker runs first for "/" only, so it can show the setup page before a code exists.
+  "assets": {
+    "directory": "./dashboard",
+    "binding": "ASSETS",
+    "run_worker_first": ["/"]
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "LIVE", "class_name": "LiveRoom" }]
+  },
+  // The free plan only allows SQLite-backed Durable Objects.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["LiveRoom"] }],
+  // No "ratelimits" block: the button deploy may not support it. The Worker works without the LIVE_IP_LIMIT binding.
+  // To add a per-IP limit by hand: "ratelimits": [{ "name": "LIVE_IP_LIMIT", "namespace_id": "<any number>", "simple": { "limit": 120, "period": 60 } }]
+  "observability": { "enabled": false },
+  "send_metrics": false
+}

@@ -70,12 +70,14 @@ const DEFAULT_PROFILE = {
   },
   // Discord session reports (lean-reporter.js). The webhook URL is a secret and lives in Store, never here.
   sessionReport: { on: false, minutes: 3 },
+  // Live dashboard (lean-live.js). The hub address and code are a secret and live in Store, never here.
+  live: { on: false, seconds: 10 },
 };
 // Preserve only bot settings. The original assistant's settings are never changed.
 function botProfile(input) {
   const result = deepMerge(DEFAULT_PROFILE, {});
   if (!input || typeof input !== 'object') return result;
-  for (const key of ['macro', 'potion', 'hunt', 'lure', 'pet', 'scroll', 'mall', 'wardrobe', 'party', 'alchemy', 'mastery', 'statPoints', 'leveling', 'trace', 'items', 'trade', 'stall', 'quest', 'sounds', 'sessionReport']) {
+  for (const key of ['macro', 'potion', 'hunt', 'lure', 'pet', 'scroll', 'mall', 'wardrobe', 'party', 'alchemy', 'mastery', 'statPoints', 'leveling', 'trace', 'items', 'trade', 'stall', 'quest', 'sounds', 'sessionReport', 'live']) {
     if (!input[key] || typeof input[key] !== 'object') continue;
     for (const field of Object.keys(DEFAULT_PROFILE[key])) {
       if (field in input[key]) result[key][field] = deepMerge(DEFAULT_PROFILE[key][field], input[key][field]);
@@ -93,6 +95,10 @@ function botProfile(input) {
   delete result.potion.restock.town.stacks;
   if (!Number.isInteger(result.potion.delayMs) || result.potion.delayMs < 0 || result.potion.delayMs > 60000) result.potion.delayMs = DEFAULT_PROFILE.potion.delayMs;
   if (!Number.isInteger(result.sessionReport.minutes) || result.sessionReport.minutes < 1 || result.sessionReport.minutes > 60) result.sessionReport.minutes = DEFAULT_PROFILE.sessionReport.minutes;
+  // Whole seconds only; a number outside 3 to 60 is pulled in, anything else is the default.
+  const liveSeconds = result.live.seconds;
+  result.live.seconds = Number.isInteger(liveSeconds) ? Math.min(60, Math.max(3, liveSeconds)) : DEFAULT_PROFILE.live.seconds;
+  result.live.on = result.live.on === true;
   if (!['death', 'recall'].includes(result.potion.restock.town.deathReturn)) result.potion.restock.town.deathReturn = 'recall';
   if (!['reverse', 'walk'].includes(result.potion.restock.town.returnBy)) result.potion.restock.town.returnBy = 'reverse';
   // Reverse Return Scrolls used to have two switches: a gold-merchant one (no merchant sells them) and the Item mall

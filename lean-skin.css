@@ -54,6 +54,7 @@ input[type=checkbox]{appearance:none;width:16px;height:16px;flex:0 0 16px;margin
 .controls button:first-child{position:relative}.run-led{position:absolute;left:6px;top:50%;width:7px;height:7px;margin-top:-4px;box-sizing:border-box;border:1px solid #000;background:#3b3b3b;box-shadow:inset 0 0 0 1px #5c5c5c;pointer-events:none}.run-led[data-state=ok]{background:#7bd155;box-shadow:0 0 5px #7bd155}.run-led[data-state=busy]{background:#ffd65a;box-shadow:0 0 5px #ffd65a}
 .feedback{padding:6px 4px 0;overflow-wrap:anywhere;font-size:11px;min-height:8px}
 .muted{color:#a09b8c;font-size:11px;margin:6px 0}
+.live-setup a{display:inline-block;margin:2px 0;color:#9ad0ff;font-size:12px}
 /* Pet status text changes length; keep a fixed three-line box so nothing below it moves. */
 .pet-note{height:4.2em;line-height:1.4;overflow-y:auto;overflow-wrap:anywhere}
 .grid{display:flex;flex-wrap:wrap;gap:5px;align-content:flex-start;margin:8px 0}

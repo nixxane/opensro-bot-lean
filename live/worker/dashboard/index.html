@@ -1,0 +1,620 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<meta name="color-scheme" content="light dark">
+<title>NIX live</title>
+<style>
+  :root { color-scheme:light dark;
+    --bg:#f3f4f7; --card:#fff; --hover:#f2f5f9; --line:#d9dde4; --text:#14181f; --dim:#4b5563; --track:#e2e6ec; --hp:#d23b34; --mp:#2a67d1; --xp:#a8730a; --focus:#0b5cd5; --shadow:0 1px 2px #0001;
+    --ok-bg:#d9f4e5; --ok-fg:#0a5a31; --ok:#17915a;
+    --town-bg:#dce9fc; --town-fg:#173f8c; --town:#2a67d1;
+    --warn-bg:#fcecc4; --warn-fg:#74460a; --warn:#c88a0c;
+    --bad-bg:#fcdedb; --bad-fg:#93231b; --bad:#d23b34;
+    --run-bg:#e3e8f2; --run-fg:#33415c; --run:#5b6b8c;
+    --off-bg:#e4e7ec; --off-fg:#4b5563; --off:#8a94a3; --rare:#8a4fd0; }
+  @media (prefers-color-scheme:dark) { :root:not([data-theme=light]) {
+    --bg:#0e1116; --card:#171c23; --hover:#1d242d; --line:#2a313b; --text:#e9edf2; --dim:#a5afbd; --track:#2a313b; --hp:#ee6a62; --mp:#6aa3ff; --xp:#e4b34a; --focus:#8db8ff; --shadow:none;
+    --ok-bg:#12372a; --ok-fg:#8be3b3; --ok:#3fbf86; --town-bg:#15294d; --town-fg:#9bc2ff; --town:#6aa3ff;
+    --warn-bg:#3b2e0c; --warn-fg:#f2c764; --warn:#e0a93b; --bad-bg:#4b1b19; --bad-fg:#ffa49c; --bad:#ee6a62;
+    --run-bg:#232b3a; --run-fg:#b4c3e0; --run:#8497bb;
+    --off-bg:#262c35; --off-fg:#a5afbd; --off:#6b7686; --rare:#c39bff; } }
+  * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; padding-bottom:56px; overflow-wrap:anywhere; }
+  :focus-visible { outline:3px solid var(--focus); outline-offset:2px; border-radius:4px; }
+  .sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+  .wrap { max-width:1500px; margin:0 auto; padding:0 16px; }
+
+  /* kind colours, shared by the card and the list row: --kst accent, --kbg/--kfg badge */
+  .s-hunting { --kst:var(--ok); --kbg:var(--ok-bg); --kfg:var(--ok-fg); }
+  .s-town, .s-back { --kst:var(--town); --kbg:var(--town-bg); --kfg:var(--town-fg); }
+  .s-stopped, .s-away { --kst:var(--warn); --kbg:var(--warn-bg); --kfg:var(--warn-fg); }
+  .s-dead { --kst:var(--bad); --kbg:var(--bad-bg); --kfg:var(--bad-fg); }
+  .s-running { --kst:var(--run); --kbg:var(--run-bg); --kfg:var(--run-fg); }
+  .s-offline { --kst:var(--off); --kbg:var(--off-bg); --kfg:var(--off-fg); }
+
+  /* header, view switch, summary */
+  header { background:var(--card); border-bottom:1px solid var(--line); }
+  .head { display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; padding:12px 0 8px; }
+  h1 { margin:0; font-size:19px; letter-spacing:.06em; margin-right:auto; }
+  h1 b { color:var(--xp); }
+  .seg { display:inline-flex; border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  .seg button { font:inherit; font-size:14px; font-weight:600; min-height:44px; min-width:64px; padding:0 14px; border:0; background:var(--bg); color:var(--dim); cursor:pointer; }
+  .seg button + button { border-left:1px solid var(--line); }
+  .seg button[aria-pressed=true] { background:var(--text); color:var(--card); }
+  .chip { display:inline-flex; align-items:center; gap:6px; font-size:13px; font-weight:600; padding:3px 10px; border-radius:999px; background:var(--off-bg); color:var(--off-fg); }
+  .chip::before { content:""; width:8px; height:8px; border-radius:50%; background:currentColor; flex:none; }
+  .chip.live { background:var(--ok-bg); color:var(--ok-fg); } .chip.lost, .chip.wrong, .chip.noset, .chip.nolink { background:var(--bad-bg); color:var(--bad-fg); }
+  .sum { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; padding:0 0 12px; margin:0; }
+  .sum div { padding:8px 12px; border-radius:10px; background:var(--bg); border:1px solid var(--line); min-width:0; }
+  .sum dt { font-size:12px; color:var(--dim); margin:0; }
+  .sum dd { margin:0; font-size:21px; font-weight:700; font-variant-numeric:tabular-nums; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #banner { margin:12px 0 0; padding:10px 14px; border-radius:10px; background:var(--bad-bg); color:var(--bad-fg); font-weight:600; border:1px solid var(--bad); }
+
+  /* shared pieces */
+  .badge { display:inline-flex; align-items:center; gap:6px; font-size:13px; font-weight:700; padding:4px 11px; border-radius:999px; white-space:nowrap; max-width:100%; background:var(--kbg,var(--off-bg)); color:var(--kfg,var(--off-fg)); }
+  .badge .stt { overflow:hidden; text-overflow:ellipsis; }
+  .bar { height:10px; border-radius:6px; background:var(--track); overflow:hidden; }
+  .bar i { display:block; height:100%; width:0; border-radius:6px; transition:width .6s; }
+  .hp i { background:var(--hp); } .mp i { background:var(--mp); } .xp i { background:var(--xp); }
+  .seen { font-size:13px; color:var(--dim); }
+  .seen.old { color:var(--bad-fg); font-weight:600; }
+  .log { list-style:none; margin:0; padding:0; font-size:13px; }
+  .log.scroll { max-height:260px; overflow-y:auto; overscroll-behavior:contain; }
+  .log li { display:grid; grid-template-columns:1.4em 1fr auto; gap:6px; padding:3px 0; align-items:baseline; }
+  .log .ic { text-align:center; color:var(--dim); } .log time { color:var(--dim); font-variant-numeric:tabular-nums; font-size:12px; }
+  .log .tx { overflow-wrap:anywhere; }
+  .k-kill .ic { color:var(--hp); } .k-rare .ic, .k-rare .tx { color:var(--rare); font-weight:700; } .k-loot .ic { color:var(--xp); } .k-potion .ic { color:var(--mp); }
+  .k-warn .ic, .k-warn .tx { color:var(--warn-fg); } .k-error .ic, .k-error .tx { color:var(--bad-fg); font-weight:600; }
+  .log-empty { margin:0; font-size:13px; color:var(--dim); }
+  .more { margin-top:2px; font:inherit; font-size:14px; font-weight:600; color:var(--focus); background:none; border:0; padding:0; min-height:44px; cursor:pointer; }
+  .more:hover { text-decoration:underline; }
+
+  /* cards view */
+  #cards { display:grid; gap:14px; padding:16px 0; grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr)); align-items:start; }
+  #cards[data-n="1"], #cards[data-n="2"] { grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),460px)); }
+  article { background:var(--card); border:1px solid var(--line); border-top:4px solid var(--kst,var(--off)); border-radius:14px; padding:14px; box-shadow:var(--shadow); display:grid; gap:12px; min-width:0; }
+  article.s-dead { background:linear-gradient(var(--bad-bg),var(--bad-bg) 0,var(--card) 90px); }
+  article.s-offline { border-style:dashed; border-top-style:solid; }
+  article.s-offline .meters, article.s-offline .nums { opacity:.55; }
+  .top { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .top .badge { flex:0 1 auto; min-width:0; }
+  h2 { margin:0; font-size:18px; line-height:1.2; overflow-wrap:anywhere; min-width:0; }
+  h2 .lv { font-size:13px; font-weight:700; color:var(--dim); margin-left:6px; white-space:nowrap; }
+  .sub { color:var(--dim); font-size:13px; margin-top:-6px; overflow-wrap:anywhere; }
+  .meters { display:grid; gap:7px; }
+  .m { display:grid; grid-template-columns:2.2em 1fr auto; align-items:center; gap:8px; font-size:13px; }
+  .m span:first-child { color:var(--dim); font-weight:700; letter-spacing:.04em; }
+  .m span:last-child { text-align:right; font-variant-numeric:tabular-nums; font-weight:700; }
+  .nums { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; margin:0; }
+  .nums > div { background:var(--bg); border-radius:10px; padding:8px 10px; min-width:0; }
+  .nums dt { font-size:12px; color:var(--dim); } .nums dd { margin:0; font-size:20px; font-weight:700; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+  .minis { display:flex; flex-wrap:wrap; gap:6px; font-size:12px; }
+  .minis span { padding:2px 9px; border-radius:999px; border:1px solid var(--line); color:var(--dim); font-variant-numeric:tabular-nums; }
+  .minis b { color:var(--text); }
+  .minis .rare { border-color:var(--rare); } .minis .rare b { color:var(--rare); }
+  .logbox { border-top:1px solid var(--line); padding-top:8px; }
+
+  /* list view: divs, so a character's row and its detail share one keyed group */
+  .tools { display:grid; gap:8px; padding:12px 0 0; }
+  .sorter { display:none; gap:8px; align-items:center; font-size:13px; color:var(--dim); }
+  .sorter select, .sorter button { font:inherit; font-size:16px; min-height:44px; border:1px solid var(--line); border-radius:10px; background:var(--card); color:var(--text); }
+  .sorter select { flex:1; padding:0 10px; min-width:0; } .sorter button { width:44px; cursor:pointer; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; }
+  .chips button { font:inherit; font-size:13px; font-weight:600; padding:0 12px; min-height:36px; border-radius:999px; border:1px solid var(--line); background:var(--card); color:var(--dim); cursor:pointer; white-space:nowrap; }
+  .chips button[aria-pressed=true] { color:var(--card); border-color:var(--text); background:var(--text); }
+  .chips button i { font-style:normal; margin-right:5px; }
+  .tbl { margin:12px 0; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--card); }
+  .grid { display:grid; align-items:center; gap:0 10px; padding:0 12px;
+    grid-template-columns:150px minmax(120px,1.5fr) 44px 86px 86px 92px 78px 78px 88px 62px; }
+  .hdr { background:var(--bg); border-bottom:1px solid var(--line); font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--dim); }
+  .hdr button { font:inherit; text-transform:inherit; letter-spacing:inherit; color:inherit; background:none; border:0; padding:10px 0; cursor:pointer; width:100%; text-align:inherit; }
+  .hdr [aria-sort] button { color:var(--text); font-weight:700; }
+  .hdr [aria-sort=ascending] button::after { content:" \25B2"; } .hdr [aria-sort=descending] button::after { content:" \25BC"; }
+  .hdr .static { padding:10px 0; }
+  .num { font-variant-numeric:tabular-nums; text-align:right; }
+  .bot { border-bottom:1px solid var(--line); } .bot:last-child { border-bottom:0; }
+  .row { min-height:48px; cursor:pointer; border-left:4px solid var(--kst,var(--off)); padding-left:8px; }
+  .row:hover { background:var(--hover); }
+  .bot.s-dead .row { background:linear-gradient(90deg,var(--bad-bg),var(--card) 40%); }
+  .bot.s-offline .row > :not(.c-st):not(.c-name):not(.c-seen):not(.c-m2) { opacity:.5; }
+  .c-st { min-width:0; }
+  .c-name { min-width:0; }
+  .rowbtn { all:unset; display:block; cursor:pointer; font-weight:700; font-size:15px; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:8px 0; box-sizing:border-box; }
+  .rowbtn::before { content:"\25B8"; display:inline-block; width:1.1em; color:var(--dim); transition:transform .15s; } .open .rowbtn::before { transform:rotate(90deg); }
+  .rowbtn:focus-visible { outline:3px solid var(--focus); outline-offset:2px; }
+  .lvsub { display:none; font-weight:400; font-size:12px; color:var(--dim); margin-left:6px; }
+  .c-m2 { display:none; font-size:13px; color:var(--dim); font-variant-numeric:tabular-nums; }
+  .pbar { display:grid; grid-template-columns:1fr 34px; gap:6px; align-items:center; font-size:12px; font-variant-numeric:tabular-nums; }
+  .pbar .bar { height:7px; border-radius:4px; }
+  .c-seen { color:var(--dim); font-size:12px; } .c-seen.old { color:var(--bad-fg); font-weight:700; }
+  .detail { display:none; padding:10px 12px 14px 24px; background:var(--bg); border-top:1px dashed var(--line); gap:14px 24px; grid-template-columns:minmax(220px,300px) 1fr; }
+  .open .detail { display:grid; }
+  .facts { display:grid; grid-template-columns:repeat(2,1fr); gap:6px 12px; margin:0; align-content:start; }
+  .facts > div { min-width:0; }
+  .facts dt { font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.05em; } .facts dd { margin:0; font-weight:700; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+  .facts .wide { grid-column:1/-1; }
+  .detail .log { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
+
+  /* empty */
+  #empty { max-width:480px; margin:60px auto; padding:0 16px; text-align:center; }
+  #empty .glyph { width:64px; height:64px; margin:0 auto 14px; border-radius:50%; border:3px dashed var(--off); display:grid; place-items:center; color:var(--dim); font-size:26px; animation:pulse 2.4s ease-in-out infinite; }
+  #empty h2 { font-size:20px; } #empty p { color:var(--dim); margin:8px 0 0; }
+  @keyframes pulse { 50% { opacity:.45; } }
+  @media (prefers-reduced-motion:reduce) { * { animation:none !important; transition:none !important; } }
+
+  /* medium: the list drops its bar columns */
+  @media (max-width:900px) {
+    .grid { grid-template-columns:150px minmax(90px,1fr) 84px 56px; }
+    .hs { display:none; } .lvsub { display:inline; }
+    .detail { grid-template-columns:1fr; padding-left:12px; }
+  }
+  /* phone: each character in the list is a two-line row; sort is a select; the chips scroll sideways inside their own strip */
+  @media (max-width:700px) {
+    .wrap { padding:0 12px; }
+    .head { padding-top:10px; }
+    .sum dd { font-size:18px; } .sum div { padding:6px 10px; }
+    #cards { gap:10px; padding:12px 0; } article { padding:12px; gap:10px; } .nums dd { font-size:18px; }
+    .sorter { display:flex; }
+    .chips { flex-wrap:nowrap; overflow-x:auto; padding-bottom:2px; scroll-snap-type:x proximity; -webkit-overflow-scrolling:touch; }
+    .chips button { min-height:44px; flex:none; scroll-snap-align:start; }
+    .hdr { display:none; }
+    .tbl { margin:10px 0; }
+    .grid { grid-template-columns:minmax(0,1fr) auto; grid-template-areas:"n s" "m m"; gap:0 8px; padding:6px 10px 8px 8px; }
+    .row > * { display:none; }
+    .row > .c-name { display:block; grid-area:n; } .row > .c-st { display:block; grid-area:s; } .row > .c-m2 { display:block; grid-area:m; padding-left:1.1em; margin-top:-4px; }
+    .row { min-height:58px; align-content:center; }
+    .rowbtn { padding:6px 0; }
+    .lvsub { display:none; }
+    .badge { font-size:12px; padding:3px 9px; max-width:46vw; }
+    .detail { padding:10px 10px 12px; }
+  }
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <div class="head">
+    <h1>NIX <b>live</b></h1>
+    <div class="seg" id="seg" role="group" aria-label="View">
+      <button type="button" data-view="cards" aria-pressed="true">Cards</button><button type="button" data-view="list" aria-pressed="false">List</button>
+    </div>
+    <span id="conn" class="chip" role="status">Connecting…</span>
+  </div>
+  <dl class="sum" id="sum">
+    <div><dt>Bots online</dt><dd data-k="online"></dd></div>
+    <div><dt>Total XP / hour</dt><dd data-k="xpph"></dd></div>
+    <div><dt>Total gold / hour</dt><dd data-k="goldph"></dd></div>
+  </dl>
+</div></header>
+<div class="wrap"><div id="banner" role="alert" hidden></div></div>
+
+<div class="wrap" id="cardsView"><main id="cards"></main></div>
+
+<div class="wrap" id="listView" hidden>
+  <div class="tools" id="tools">
+    <div class="sorter"><label for="sortSel">Sort by</label><select id="sortSel"></select><button type="button" id="dirBtn" aria-label="Reverse the sort order"></button></div>
+    <div class="chips" id="filters" role="group" aria-label="Filter by status"></div>
+  </div>
+  <div class="tbl" id="tbl" role="table" aria-label="Characters">
+    <div class="grid hdr" role="row" id="hdr">
+      <div role="columnheader" data-sort="status"><button type="button">Status</button></div>
+      <div role="columnheader" data-sort="name"><button type="button">Character</button></div>
+      <div role="columnheader" data-sort="level" class="num hs"><button type="button">Lv</button></div>
+      <div role="columnheader" class="static hs">HP</div>
+      <div role="columnheader" class="static hs">MP</div>
+      <div role="columnheader" class="static hs">XP</div>
+      <div role="columnheader" data-sort="xpph" class="num"><button type="button">XP/h</button></div>
+      <div role="columnheader" data-sort="goldph" class="num hs"><button type="button">Gold/h</button></div>
+      <div role="columnheader" data-sort="gold" class="num hs"><button type="button">Gold</button></div>
+      <div role="columnheader" data-sort="age" class="num"><button type="button">Seen</button></div>
+    </div>
+    <div id="rows"></div>
+  </div>
+</div>
+
+<section id="empty" hidden><div class="glyph" aria-hidden="true">&#9876;</div><h2 data-k="t"></h2><p data-k="h"></p></section>
+
+<template id="card">
+  <article>
+    <div class="top"><h2><span data-k="name"></span><span class="lv" data-k="lv"></span></h2><span class="badge"><span data-k="icon" aria-hidden="true"></span><span class="stt" data-k="status"></span></span></div>
+    <div class="sub" data-k="sub"></div>
+    <div class="meters">
+      <div class="m hp"><span>HP</span><div class="bar"><i data-k="hpBar"></i></div><span data-k="hp"></span></div>
+      <div class="m mp"><span>MP</span><div class="bar"><i data-k="mpBar"></i></div><span data-k="mp"></span></div>
+      <div class="m xp"><span>XP</span><div class="bar"><i data-k="xpBar"></i></div><span data-k="xp"></span></div>
+    </div>
+    <dl class="nums">
+      <div><dt>XP / hour</dt><dd data-k="rate"></dd></div>
+      <div><dt>Net gold</dt><dd data-k="gold"></dd></div>
+      <div><dt>Kills</dt><dd data-k="kills"></dd></div>
+      <div><dt>Hunting time</dt><dd data-k="time"></dd></div>
+    </dl>
+    <div class="minis"><span>Deaths <b data-k="deaths"></b></span><span>Potions <b data-k="potions"></b></span><span>Items <b data-k="items"></b></span>
+      <span class="rare">Sun <b data-k="sun"></b></span><span class="rare">Moon <b data-k="moon"></b></span><span class="rare">Star <b data-k="star"></b></span></div>
+    <div class="seen" data-k="seen"></div>
+    <div class="logbox" data-k="log"></div>
+  </article>
+</template>
+
+<template id="bot">
+  <div class="bot" role="rowgroup">
+    <div class="grid row" role="row">
+      <div role="cell" class="c-st"><span class="badge"><span data-k="icon" aria-hidden="true"></span><span class="stt" data-k="status"></span></span></div>
+      <div role="cell" class="c-name"><button type="button" class="rowbtn" aria-expanded="false"><span data-k="name"></span><span class="lvsub" data-k="lvsub"></span></button></div>
+      <div role="cell" class="num hs" data-k="lv"></div>
+      <div role="cell" class="hs"><div class="pbar hp"><div class="bar"><i data-k="hpBar"></i></div><span class="num" data-k="hp"></span></div></div>
+      <div role="cell" class="hs"><div class="pbar mp"><div class="bar"><i data-k="mpBar"></i></div><span class="num" data-k="mp"></span></div></div>
+      <div role="cell" class="hs"><div class="pbar xp"><div class="bar"><i data-k="xpBar"></i></div><span class="num" data-k="xp"></span></div></div>
+      <div role="cell" class="num c-xph" data-k="rate"></div>
+      <div role="cell" class="num hs" data-k="goldph"></div>
+      <div role="cell" class="num hs" data-k="gold"></div>
+      <div role="cell" class="num c-seen" data-k="seen"></div>
+      <div role="cell" class="c-m2" data-k="m2"></div>
+    </div>
+    <div class="detail">
+      <dl class="facts">
+        <div class="wide"><dt>Doing</dt><dd data-k="doing"></dd></div>
+        <div><dt>HP</dt><dd data-k="hpt"></dd></div><div><dt>MP</dt><dd data-k="mpt"></dd></div>
+        <div><dt>XP</dt><dd data-k="xpt"></dd></div><div><dt>Gold / hour</dt><dd data-k="goldph2"></dd></div>
+        <div><dt>XP gained</dt><dd data-k="xpg"></dd></div><div><dt>Hunting time</dt><dd data-k="time"></dd></div>
+        <div><dt>Net gold</dt><dd data-k="gold2"></dd></div><div><dt>Kills</dt><dd data-k="kills"></dd></div>
+        <div><dt>Deaths</dt><dd data-k="deaths"></dd></div><div><dt>Potions</dt><dd data-k="potions"></dd></div>
+        <div><dt>Items</dt><dd data-k="items"></dd></div><div><dt>Sun / Moon / Star</dt><dd data-k="sox"></dd></div>
+        <div class="wide"><dt>Target</dt><dd data-k="target"></dd></div>
+        <div class="wide"><dt>Position / spot</dt><dd data-k="pos"></dd></div>
+        <div class="wide"><dt>Bot / last report</dt><dd data-k="seenl"></dd></div>
+      </dl>
+      <div data-k="log"></div>
+    </div>
+  </div>
+</template>
+
+<script>
+// ===== data layer: one poll, one set of derived bots, two views =====
+// Reports come every 10 s by default (3 to 60), but a browser slows a background game tab's timers to about once a minute,
+// so a report is only "late" after 20 s and the character "offline" after 90 s.
+const LATE_MS = 20000, STALE_MS = 90000;
+const POLL_MS = 10000; // the Cloudflare free plan counts every request, and one open dashboard at 10 s stays far below it
+let skew = 0; // this device's clock minus the hub's, measured on every poll, so a wrong phone clock cannot fake "offline"
+const $ = id => document.getElementById(id);
+const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
+const bots = new Map(); // name -> { snap }
+const conn = { state: 'connecting', lastOkAt: 0 }; // connecting | live | lost | wrong | noset | nolink
+
+function ago(ms) { // "12s", "5m", "2h 5m"
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return s < 60 ? s + 's' : s < 3600 ? Math.floor(s / 60) + 'm' : Math.floor(s / 3600) + 'h ' + Math.floor(s / 60) % 60 + 'm';
+}
+function rel(ms) { return ms < 3000 ? 'just now' : ago(ms) + ' ago'; }
+// Stats.display() sends formatted strings ("1,234,567", "+12,345", "—" = unknown, "00:12:34"). null = unknown, 0 = known zero.
+function parseNum(v) {
+  if (v == null) return null;
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  const m = String(v).replace(/,/g, '').match(/-?\d+(?:\.\d+)?/);
+  return m ? Number(m[0]) : null;
+}
+function parseClock(v) { const m = /^(\d+):(\d\d):(\d\d)$/.exec(String(v || '')); return m ? (+m[1] * 3600 + +m[2] * 60 + +m[3]) : null; }
+function full(n) { return n == null ? '—' : Math.round(n).toLocaleString('en-US'); }
+function signed(n) { return n == null ? '—' : (n > 0 ? '+' : n < 0 ? '−' : '') + Math.abs(Math.round(n)).toLocaleString('en-US'); }
+function compact(n) { // 0 stays "0", unknown stays an em dash
+  if (n == null) return '—';
+  const a = Math.abs(n), f = (x, u) => (x >= 100 ? Math.round(x) : Math.round(x * 10) / 10) + u;
+  return (n < 0 ? '−' : '') + (a >= 1e9 ? f(a / 1e9, 'B') : a >= 1e6 ? f(a / 1e6, 'M') : a >= 1e4 ? f(a / 1e3, 'K') : Math.round(a).toLocaleString('en-US'));
+}
+function pair(now, max) { return now == null || max == null ? '' : full(now) + ' / ' + full(max); } // "1,820 / 2,000"
+function clampPct(v) { return Math.min(100, Math.max(0, Number(v) || 0)); }
+const num = (v, f) => Number.isFinite(v) ? v : f;
+
+// Log line kinds: the icon SHAPE and the spoken word carry the kind, colour only reinforces it.
+function classify(e) {
+  const t = String(e.text || '');
+  if (e.level === 'error') return { kind: 'error', icon: '✖', word: 'Error' };
+  if (e.level === 'warn') return { kind: 'warn', icon: '▲', word: 'Warning' };
+  if (/\((?:Sun|Moon|Star)\)|\b(?:Sun|Moon|Star)\b/i.test(t) && /pick|found|drop|loot/i.test(t)) return { kind: 'rare', icon: '★', word: 'Rare drop' };
+  if (/^killed|\bkill/i.test(t)) return { kind: 'kill', icon: '⚔', word: 'Kill' };
+  if (/pick|loot|drop|gold/i.test(t)) return { kind: 'loot', icon: '◆', word: 'Loot' };
+  if (/potion|\bhp\b|\bmp\b|pill/i.test(t)) return { kind: 'potion', icon: '✚', word: 'Potion' };
+  if (/walk|return|travel|moving|heading|teleport|town/i.test(t)) return { kind: 'move', icon: '➜', word: 'Move' };
+  return { kind: 'info', icon: '•', word: 'Info' };
+}
+
+// What the bot's Hunt.state can be (lean-controller.js, lean-chase.js, lean-lure.js, lean-loot.js, lean-town.js, restock.js,
+// lean-trace.js, lean-buff-gear.js) -> [kind, label]. Anything else is shown as "Running" with the raw text kept beside it.
+const HUNT_STATE = new Map(Object.entries({
+  search: ['hunting', 'Hunting'], fight: ['hunting', 'Fighting'], lure: ['hunting', 'Luring'], follow: ['hunting', 'Following'],
+  loot: ['hunting', 'Looting'], buff: ['hunting', 'Buffing'], resting: ['hunting', 'Resting'], standing: ['hunting', 'Standing up'],
+  'support only': ['hunting', 'Supporting'],
+  restock: ['town', 'In town'], return: ['back', 'Walking back'],
+  player: ['away', 'Paused: player near'], manual: ['away', 'Paused: manual'], waiting: ['away', 'Waiting for game'],
+  dead: ['dead', 'Dead'],
+}));
+// Reconnect.message while the character is out of the world (lean-reconnect.js): "Connection lost; waiting...", "Reconnecting…",
+// "The page was reloaded; restoring...", "The game failed to load; reloading...", "The login is gone...", "Back in the game; settling."
+const RECONNECT_RE = /reconnect|connection lost|reload|restoring|settling|login|failed to load|still not back/i;
+
+// One snapshot (see lean-live.js snapshot()) -> everything a view needs, with unknown vs zero kept apart.
+function derive(s) {
+  const st = s.stats || {}, state = String(s.state || '').trim(), note = String(s.note || '');
+  const age = Date.now() - skew - s.at, stale = age > STALE_MS, late = age > LATE_MS;
+  let kind, label;
+  if (stale) { kind = 'offline'; label = 'Offline'; }
+  else if (!s.inWorld) { kind = 'away'; label = RECONNECT_RE.test(note) ? 'Reconnecting' : 'Not in game'; }
+  else if (s.dead) { kind = 'dead'; label = 'Dead'; }
+  else if (!s.running) { kind = 'stopped'; label = 'Stopped'; }
+  else if (HUNT_STATE.has(state)) { [kind, label] = HUNT_STATE.get(state); }
+  else { kind = 'running'; label = 'Running'; }
+  // New snapshot fields (session, hpNow...) win; the formatted stats strings and the old percentages are the fallback for older bots.
+  const ses = s.session || {};
+  const secs = num(ses.seconds, parseClock(st.time)), gold = num(ses.gold, parseNum(st.gold));
+  const xpph = num(ses.xpPerHour, parseNum(st.rate)), goldph = gold != null && secs != null && secs >= 30 ? gold * 3600 / secs : null;
+  const hpNow = num(s.hpNow, null), hpMax = num(s.hpMax, null), mpNow = num(s.mpNow, null), mpMax = num(s.mpMax, null);
+  const pctOf = (now, max, old) => now != null && max > 0 ? clampPct(now / max * 100) : old == null ? null : clampPct(old);
+  return {
+    name: s.name, bot: s.bot || '', level: s.level, kind, label, state, note, dead: !!s.dead,
+    age, late, stale, seenAt: s.at,
+    hp: pctOf(hpNow, hpMax, s.hp), mp: pctOf(mpNow, mpMax, s.mp), xpPct: s.xpPct == null ? null : clampPct(s.xpPct),
+    pos: s.pos ? 'Region ' + s.pos.region + ' (' + s.pos.x + ', ' + s.pos.z + ')' : '',
+    xpph, xp: num(ses.xp, parseNum(st.xp)), gold, goldph,
+    time: secs == null ? (st.time || null) : [Math.floor(secs / 3600), Math.floor(secs / 60) % 60, secs % 60].map(v => String(v).padStart(2, '0')).join(':'),
+    kills: num(ses.kills, parseNum(st.kills)), deaths: num(ses.deaths, parseNum(st.deaths)), potions: num(ses.potions, parseNum(st.potions)), items: num(ses.items, parseNum(st.items)),
+    hpNow, hpMax, mpNow, mpMax, target: s.target || '',
+    hunt: s.hunt ? 'Spot: region ' + s.hunt.region + ' (' + s.hunt.x + ', ' + s.hunt.z + '), radius ' + s.hunt.radius : '',
+    sun: parseNum(st.sun), moon: parseNum(st.moon), star: parseNum(st.star),
+    log: (Array.isArray(s.log) ? s.log : []).slice().reverse().map(e => Object.assign({ at: e.at, text: String(e.text || ''), level: e.level }, classify(e))), // newest first
+  };
+}
+function summarize(list) {
+  const on = list.filter(b => b.kind !== 'offline'), sum = k => on.reduce((t, b) => t + (b[k] || 0), 0);
+  return { total: list.length, online: on.length, hunting: list.filter(b => b.kind === 'hunting').length, xpph: sum('xpph'), goldph: sum('goldph') };
+}
+const ORDER = { hunting: 0, running: 1, back: 2, town: 3, away: 4, stopped: 5, dead: 6, offline: 7 };
+const ICON = { hunting: '▶', running: '▶', town: '⌂', back: '➜', dead: '☠', stopped: '❚❚', offline: '⊘', away: '◌' };
+const KIND_NAME = { hunting: 'Hunting', running: 'Running', back: 'Walking back', town: 'In town', away: 'Away', stopped: 'Stopped', dead: 'Dead', offline: 'Offline' };
+
+// Plain words for the ways to arrive without a working link. The take-back steps stay in full: this is all a player has when the link is lost.
+const WRONG_LINK = "Open the link from your hub's setup page again. If you lost it, take the hub back: in Cloudflare open Workers & Pages, nix-live, Settings, Variables and secrets, press Add, choose Secret, name it LIVE_CODE and give it any 16 to 64 letters, numbers, - or _. Then open " + location.origin + "/pair/ followed by that code, and press Pair in NIX again. (Open " + location.origin + "/pair/x for a ready-made code.)";
+function emptyCopy() {
+  const c = conn.state;
+  if (c === 'nolink') return { title: 'This page needs your private link', hint: "Open the link from your hub's setup page, or scan the QR code shown there. The link ends in #…" };
+  if (c === 'wrong') return { title: "That link's code is not right", hint: WRONG_LINK };
+  if (c === 'noset') return { title: 'This hub is not set up yet', hint: 'Open its address in a browser (without #…) and press Create my private link.' };
+  if (c === 'lost') return { title: 'Cannot reach the hub', hint: 'No data has arrived yet. The page keeps retrying; check the hub is running and this device is online.' };
+  return { title: 'Waiting for your first character…', hint: 'Start the NIX bot in the game page and switch on Live in its settings. Your character shows up here within about 10 seconds.' };
+}
+function connCopy() { // the connection chip / banner text
+  const c = conn.state;
+  if (c === 'live') return { short: 'Live', long: '' };
+  if (c === 'connecting') return { short: 'Connecting…', long: '' };
+  if (c === 'lost') return { short: 'Connection lost', long: 'Connection lost — retrying.' + (conn.lastOkAt ? ' Showing the last data from ' + rel(Date.now() - conn.lastOkAt) + '.' : '') };
+  if (c === 'wrong') return { short: 'Wrong code', long: 'The hub refused this link’s code.' };
+  if (c === 'noset') return { short: 'Not set up', long: 'This hub is not set up yet.' };
+  return { short: 'No link', long: 'This page needs your private link.' };
+}
+
+// Keyed DOM helpers: elements persist between renders so scroll, focus and expanded rows survive the 1 s refresh.
+function fill(root, values) { for (const k in values) { const n = root.querySelector('[data-k="' + k + '"]'); if (n && n.textContent !== String(values[k])) n.textContent = values[k]; } }
+function setBar(root, k, pct) { const n = root.querySelector('[data-k="' + k + '"]'); if (n) n.style.width = (pct == null ? 0 : pct) + '%'; }
+function keyed(container, list, make, update) { // list: derived bots; make(b) -> element; update(el, b)
+  const els = container._els || (container._els = new Map());
+  for (const [name, el] of els) if (!list.some(b => b.name === name)) { el.remove(); els.delete(name); }
+  list.forEach((b, i) => {
+    let el = els.get(b.name);
+    if (!el) { el = make(b); els.set(b.name, el); }
+    if (container.children[i] !== el) container.insertBefore(el, container.children[i] || null);
+    update(el, b);
+  });
+}
+// Log: newest first, `limit` lines then "Show more". All text via textContent (log lines can carry other players' names).
+// The list is rebuilt only when its lines change, and a reader who scrolled inside the opened list keeps their place.
+const logOpen = new Set();
+function renderLog(box, b, limit) {
+  const open = logOpen.has(b.name), shown = open ? b.log : b.log.slice(0, limit);
+  const key = b.name + '|' + open + '|' + shown.map(e => e.at + e.text).join('\n');
+  if (box._key !== key) {
+    box._key = key;
+    const was = box.querySelector('ul'), top = was && !box._reset ? was.scrollTop : 0;
+    box._reset = false;
+    box.replaceChildren();
+    if (!b.log.length) { const p = document.createElement('p'); p.className = 'log-empty'; p.textContent = 'No activity yet.'; box.append(p); }
+    else {
+      const ul = document.createElement('ul'); ul.className = 'log' + (open ? ' scroll' : ''); ul.setAttribute('aria-label', 'Recent activity, newest first');
+      for (const e of shown) {
+        const li = document.createElement('li'); li.className = 'k-' + e.kind;
+        const ic = document.createElement('span'); ic.className = 'ic'; ic.setAttribute('aria-hidden', 'true'); ic.textContent = e.icon;
+        const sr = document.createElement('span'); sr.className = 'sr'; sr.textContent = e.word + ': ';
+        const tx = document.createElement('span'); tx.className = 'tx'; tx.textContent = e.text;
+        const t = document.createElement('time'); t.dataset.at = e.at; t.title = new Date(e.at).toLocaleTimeString('en-GB');
+        li.append(ic, sr, tx, t); ul.append(li);
+      }
+      box.append(ul); ul.scrollTop = top;
+    }
+    if (b.log.length > limit) {
+      const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'more';
+      btn.textContent = open ? 'Show less' : 'Show ' + (b.log.length - limit) + ' more'; btn.setAttribute('aria-expanded', String(open));
+      btn.onclick = () => { open ? logOpen.delete(b.name) : logOpen.add(b.name); box._key = ''; box._reset = true; renderLog(box, b, limit); };
+      box.append(btn);
+    }
+  }
+  for (const t of box.querySelectorAll('time[data-at]')) { const v = ago(Date.now() - skew - Number(t.dataset.at)); if (t.textContent !== v) t.textContent = v; }
+}
+
+// The dashboard code rides in the link (#code) and is remembered, so a home-screen shortcut keeps working.
+let code = '';
+try { code = decodeURIComponent(location.hash.slice(1)); } catch {} // a mangled link falls back to the saved code or the hint
+code = code || store.get('nixChannel');
+onhashchange = () => location.reload(); // a code pasted into an already-open tab
+
+// ===== view state (this browser only) =====
+const view = {
+  mode: store.get('nixView') === 'list' ? 'list' : 'cards',
+  sort: store.get('nixSortB') || 'status', dir: Number(store.get('nixDirB')) === -1 ? -1 : 1, filter: 'all', open: new Set(),
+};
+const SORTS = { status: 'Status', name: 'Character', level: 'Level', xpph: 'XP / hour', goldph: 'Gold / hour', gold: 'Net gold', age: 'Last seen' };
+const KEY = { status: b => ORDER[b.kind], name: b => b.name.toLowerCase(), level: b => b.level, xpph: b => b.xpph, goldph: b => b.goldph, gold: b => b.gold, age: b => b.age };
+if (!KEY[view.sort]) view.sort = 'status';
+
+function emit() {
+  const list = [...bots.values()].map(b => derive(b.snap));
+  render({ bots: list, conn: conn.state, summary: summarize(list) });
+}
+function onSnap(s) {
+  if (!s || typeof s.name !== 'string' || !Number.isFinite(s.at)) return;
+  let bot = bots.get(s.name);
+  if (!bot) bots.set(s.name, bot = {});
+  bot.snap = s;
+}
+function start() {
+  if (!code) { conn.state = 'nolink'; emit(); return; }
+  // The hub keeps each character's last report, so a bot that died hours ago still shows as offline.
+  (async function poll() {
+    try {
+      const r = await fetch('/state', { headers: { 'X-Code': code }, cache: 'no-store' });
+      if (r.status === 401 || r.status === 403) { conn.state = 'wrong'; store.set('nixChannel', ''); emit(); return; } // a wrong code is not retried
+      if (r.status === 503) { conn.state = 'noset'; emit(); setTimeout(poll, POLL_MS); return; }
+      if (!r.ok) throw new Error('hub ' + r.status);
+      const { now, reports } = await r.json();
+      if (!Array.isArray(reports) || !Number.isFinite(now)) throw new Error('bad reply');
+      skew = Date.now() - now;
+      reports.forEach(onSnap);
+      // The hub decides who exists: a character it no longer lists (renamed, deleted, hub restarted) loses its card.
+      for (const [name] of bots) if (!reports.some(r => r.name === name)) bots.delete(name);
+      conn.state = 'live'; conn.lastOkAt = Date.now(); store.set('nixChannel', code); // remembered only once the hub accepts it
+    } catch { conn.state = 'lost'; } // keep the last data on screen; the banner says it is old
+    emit(); setTimeout(poll, POLL_MS);
+  })();
+  setInterval(emit, 1000); // ages, statuses and relative times tick between polls
+}
+
+// ===== shared chrome =====
+function renderChrome({ bots: list, conn: state, summary }) {
+  const c = connCopy();
+  const chip = $('conn'); chip.textContent = c.short; chip.className = 'chip ' + state;
+  const banner = $('banner'); banner.hidden = !c.long || state === 'nolink'; banner.textContent = c.long;
+  document.title = (summary.hunting ? '▶ ' + summary.hunting + ' hunting · ' : '') + 'NIX live';
+  fill($('sum'), { online: summary.online + ' / ' + summary.total, xpph: compact(summary.xpph), goldph: summary.total ? (summary.goldph > 0 ? '+' : '') + compact(summary.goldph) : '—' });
+  $('sum').hidden = list.length === 0;
+  for (const b of $('seg').querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.view === view.mode));
+  // A link problem is shown even when old cards are still on screen.
+  const e = $('empty'), problem = state === 'wrong' || state === 'noset' || state === 'nolink';
+  e.hidden = list.length > 0 && !problem;
+  if (!e.hidden) fill(e, { t: emptyCopy().title, h: emptyCopy().hint });
+  return list.length > 0;
+}
+$('seg').addEventListener('click', e => {
+  const b = e.target.closest('[data-view]');
+  if (!b || b.dataset.view === view.mode) return;
+  view.mode = b.dataset.view; store.set('nixView', view.mode); emit();
+});
+
+// ===== view 1: cards =====
+const LOG_SHOWN_CARD = 5;
+function renderCard(el, b) {
+  const off = b.kind === 'offline';
+  el.className = 's-' + b.kind;
+  const sub = [b.bot && 'bot ' + b.bot, b.target && 'target ' + b.target, b.kind === 'running' && b.state, (b.kind === 'away' || off) && b.note, b.pos || b.hunt].filter(Boolean).join(' · ');
+  fill(el, {
+    name: b.name, lv: b.level != null ? 'Lv ' + b.level : '', icon: ICON[b.kind], status: b.label, sub,
+    hp: pair(b.hpNow, b.hpMax) || (b.hp == null ? '—' : Math.round(b.hp) + '%'), mp: pair(b.mpNow, b.mpMax) || (b.mp == null ? '—' : Math.round(b.mp) + '%'), xp: b.xpPct == null ? '—' : b.xpPct.toFixed(1) + '%',
+    rate: compact(b.xpph), gold: signed(b.gold), kills: full(b.kills), time: b.time || '—', deaths: full(b.deaths), potions: full(b.potions), items: full(b.items),
+    sun: full(b.sun), moon: full(b.moon), star: full(b.star),
+    seen: off ? 'Last report ' + rel(b.age) + '. Numbers are from then.' : b.late ? 'Report is ' + rel(b.age) + ' old' : 'Updated ' + rel(b.age),
+  });
+  el.querySelector('.badge').title = b.label + (b.state ? ' (' + b.state + ')' : '');
+  el.querySelector('[data-k=seen]').className = 'seen' + (off || b.late ? ' old' : '');
+  setBar(el, 'hpBar', off ? 0 : b.hp); setBar(el, 'mpBar', off ? 0 : b.mp); setBar(el, 'xpBar', b.xpPct);
+  renderLog(el.querySelector('[data-k=log]'), b, LOG_SHOWN_CARD);
+}
+function renderCards(list) {
+  const sorted = list.slice().sort((a, b) => ORDER[a.kind] - ORDER[b.kind] || a.name.localeCompare(b.name));
+  const main = $('cards'); main.dataset.n = sorted.length;
+  keyed(main, sorted, () => $('card').content.firstElementChild.cloneNode(true), renderCard);
+}
+
+// ===== view 2: list =====
+const LOG_SHOWN_ROW = 8;
+function sortedList(list) {
+  const f = KEY[view.sort];
+  return list.filter(b => view.filter === 'all' || b.kind === view.filter).sort((a, b) => {
+    const x = f(a), y = f(b); // unknown values (null) always sort last
+    if (x == null || y == null) return x == null && y == null ? a.name.localeCompare(b.name) : x == null ? 1 : -1;
+    return (x < y ? -1 : x > y ? 1 : 0) * view.dir || a.name.localeCompare(b.name);
+  });
+}
+function setSort(k, dir) {
+  if (dir) { view.sort = k; view.dir = dir; }
+  else if (view.sort === k) view.dir = -view.dir;
+  else { view.sort = k; view.dir = (k === 'xpph' || k === 'goldph' || k === 'gold' || k === 'level') ? -1 : 1; }
+  store.set('nixSortB', view.sort); store.set('nixDirB', view.dir); emit();
+}
+$('hdr').addEventListener('click', e => { const h = e.target.closest('[data-sort]'); if (h) setSort(h.dataset.sort); });
+$('sortSel').append(...Object.entries(SORTS).map(([k, t]) => new Option(t, k)));
+$('sortSel').addEventListener('change', e => setSort(e.target.value));
+$('dirBtn').addEventListener('click', () => setSort(view.sort, -view.dir));
+function makeRow(b) {
+  const el = $('bot').content.firstElementChild.cloneNode(true), btn = el.querySelector('.rowbtn');
+  const toggle = () => { view.open.has(b.name) ? view.open.delete(b.name) : view.open.add(b.name); emit(); };
+  el.querySelector('.row').addEventListener('click', e => { if (e.target !== btn && !btn.contains(e.target)) toggle(); });
+  btn.addEventListener('click', toggle);
+  return el;
+}
+function updateRow(el, b) {
+  const off = b.kind === 'offline', open = view.open.has(b.name);
+  el.className = 'bot s-' + b.kind + (open ? ' open' : '');
+  el.querySelector('.rowbtn').setAttribute('aria-expanded', String(open));
+  const goldph = b.goldph == null ? '—' : compact(b.goldph);
+  const m2 = [b.level != null ? 'Lv ' + b.level : '', compact(b.xpph) + ' XP/h', goldph + ' gold/h', off || b.late ? 'seen ' + rel(b.age) : ''].filter(Boolean).join(' · ');
+  fill(el, {
+    icon: ICON[b.kind], status: b.label, name: b.name, lvsub: b.level != null ? 'Lv ' + b.level : '', lv: b.level == null ? '—' : b.level,
+    hp: b.hp == null ? '—' : Math.round(b.hp) + '%', mp: b.mp == null ? '—' : Math.round(b.mp) + '%', xp: b.xpPct == null ? '—' : Math.floor(b.xpPct) + '%',
+    rate: compact(b.xpph), goldph, gold: signed(b.gold), m2,
+    seen: off || b.late ? rel(b.age) : ago(b.age),
+    doing: off ? 'Offline, last report ' + rel(b.age) : [b.label, b.kind === 'running' ? b.state : '', b.note].filter(Boolean).join(' · '),
+    xpg: full(b.xp), time: b.time || '—', gold2: signed(b.gold), kills: full(b.kills), deaths: full(b.deaths), potions: full(b.potions), items: full(b.items),
+    sox: [b.sun, b.moon, b.star].map(full).join(' / '), pos: [b.pos, b.hunt].filter(Boolean).join(' · ') || '—',
+    hpt: pair(b.hpNow, b.hpMax) || (b.hp == null ? '—' : Math.round(b.hp) + '%'), mpt: pair(b.mpNow, b.mpMax) || (b.mp == null ? '—' : Math.round(b.mp) + '%'),
+    xpt: b.xpPct == null ? '—' : b.xpPct.toFixed(1) + '%', goldph2: b.goldph == null ? '—' : signed(b.goldph), target: b.target || '—',
+    seenl: [b.bot && 'bot ' + b.bot, 'report ' + rel(b.age)].filter(Boolean).join(' · '),
+  });
+  el.querySelector('.badge').title = b.label + (b.state ? ' (' + b.state + ')' : '');
+  el.querySelector('.c-seen').classList.toggle('old', off || b.late);
+  setBar(el, 'hpBar', off ? 0 : b.hp); setBar(el, 'mpBar', off ? 0 : b.mp); setBar(el, 'xpBar', b.xpPct);
+  if (open) renderLog(el.querySelector('[data-k=log]'), b, LOG_SHOWN_ROW);
+}
+function renderFilters(list) {
+  const box = $('filters'), kinds = ['all', ...Object.keys(ORDER).filter(k => list.some(b => b.kind === k))];
+  if (view.filter !== 'all' && !kinds.includes(view.filter)) view.filter = 'all';
+  const count = k => k === 'all' ? list.length : list.filter(b => b.kind === k).length;
+  const key = kinds.map(k => k + count(k) + (view.filter === k)).join();
+  if (box._key === key) return;
+  box._key = key;
+  box.replaceChildren(...kinds.map(k => {
+    const btn = document.createElement('button'); btn.type = 'button'; btn.setAttribute('aria-pressed', String(view.filter === k));
+    btn.textContent = (k === 'all' ? 'All' : KIND_NAME[k]) + ' ' + count(k);
+    if (k !== 'all') btn.prepend(Object.assign(document.createElement('i'), { textContent: ICON[k] }));
+    btn.onclick = () => { view.filter = k; emit(); };
+    return btn;
+  }));
+}
+function renderList(list) {
+  renderFilters(list);
+  for (const h of $('hdr').querySelectorAll('[data-sort]')) { if (h.dataset.sort === view.sort) h.setAttribute('aria-sort', view.dir > 0 ? 'ascending' : 'descending'); else h.removeAttribute('aria-sort'); }
+  if ($('sortSel').value !== view.sort) $('sortSel').value = view.sort;
+  const dir = $('dirBtn'), arrow = view.dir > 0 ? '▲' : '▼'; if (dir.textContent !== arrow) dir.textContent = arrow;
+  keyed($('rows'), sortedList(list), makeRow, updateRow);
+}
+
+// Only the visible view is rebuilt; the hidden one keeps its elements for when it comes back.
+function render(state) {
+  const has = renderChrome(state);
+  $('cardsView').hidden = !has || view.mode !== 'cards';
+  $('listView').hidden = !has || view.mode !== 'list';
+  if (!has) return;
+  if (view.mode === 'cards') renderCards(state.bots); else renderList(state.bots);
+}
+start();
+</script>
+</body>
+</html>

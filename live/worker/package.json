@@ -1,0 +1,18 @@
+{
+  "name": "nix-live-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "cd test && npm test",
+    "check": "node --check worker.mjs && node --check pages.mjs && node --check qr.mjs && node --check setup.mjs",
+    "setup": "node setup.mjs",
+    "deploy": "wrangler deploy",
+    "login": "wrangler login"
+  },
+  "dependencies": {
+    "qrcode-generator": "2.0.4"
+  },
+  "devDependencies": {
+    "wrangler": "4.149.0"
+  }
+}
