@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node worker.test.mjs && node worker.runtime.test.mjs",
+    "test": "cd test && npm test",
     "check": "node --check worker.mjs && node --check pages.mjs && node --check qr.mjs && node --check setup.mjs",
     "setup": "node setup.mjs",
     "deploy": "wrangler deploy",
@@ -13,8 +13,6 @@
     "qrcode-generator": "2.0.4"
   },
   "devDependencies": {
-    "jsqr": "1.4.0",
-    "miniflare": "5.20261006.1-alpha",
     "wrangler": "4.149.0"
   }
 }

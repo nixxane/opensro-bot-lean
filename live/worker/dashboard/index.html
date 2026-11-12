@@ -125,7 +125,7 @@ onhashchange = () => location.reload(); // a code pasted into an already-open ta
 // Plain words for the three ways to arrive without a working link; "empty" is where they show.
 const WAITING = 'Waiting for a bot to report…';
 const NO_LINK = "This page needs your private link. Open the link from your hub's setup page, or scan the QR code shown there. The link ends in #…";
-const WRONG_LINK = "That link's code is not right. Open the link from your hub's setup page again. If you lost it, the README explains how to get a new one (see Lost your link).";
+const WRONG_LINK = "That link's code is not right. Open the link from your hub's setup page again. If you lost it, take the hub back: in Cloudflare open Workers & Pages, nix-live, Settings, Variables and secrets, press Add, choose Secret, name it LIVE_CODE and give it any 16 to 64 letters, numbers, - or _. Then open " + location.origin + "/pair/ followed by that code, and press Pair in NIX again. (Open " + location.origin + "/pair/x for a ready-made code.)";
 const NOT_SET_UP = 'This hub is not set up yet. Open its address in a browser (without #…) and press Create my private link.';
 if (!code) { $('conn').textContent = 'no link'; $('empty').textContent = NO_LINK; }
 else {

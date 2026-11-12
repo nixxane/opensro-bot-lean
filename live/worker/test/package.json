@@ -1,0 +1,12 @@
+{
+  "name": "nix-live-worker-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node worker.test.mjs && node worker.runtime.test.mjs"
+  },
+  "devDependencies": {
+    "jsqr": "1.4.0",
+    "miniflare": "5.20261006.1-alpha"
+  }
+}

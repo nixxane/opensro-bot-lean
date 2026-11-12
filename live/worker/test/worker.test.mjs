@@ -3,10 +3,10 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
-import worker, { LiveRoom } from './worker.mjs';
+import worker, { LiveRoom } from '../worker.mjs';
 import jsQR from 'jsqr';
-import { deployedUrl, links, newCode } from './setup.mjs';
-import { qrMatrix, qrSvg } from './qr.mjs';
+import { deployedUrl, links, newCode } from '../setup.mjs';
+import { qrMatrix, qrSvg } from '../qr.mjs';
 
 const CODE = 'test-code-0123456789abcdef';
 const HUB = 'https://nix-live.example.workers.dev';
@@ -207,7 +207,11 @@ try {
     assert.equal(target, '/pair/' + stored);
     const again = await call(env, '/setup', { method: 'POST' });
     assert.equal(again.status, 409);
-    assert.match(await again.text(), /already set up[\s\S]*Lost your link\?[\s\S]*LIVE_CODE/);
+    const calm = await again.text();
+    assert.match(calm, /Already created/);
+    assert.match(calm, /If you pressed twice, go back to the page that opened, or use your saved link\./);
+    assert.match(calm, /If you didn't press Create yourself, someone else may have\. Take it back:/);
+    assert.match(calm, /Workers &amp; Pages[\s\S]*nix-live[\s\S]*Variables and secrets[\s\S]*Secret[\s\S]*LIVE_CODE[\s\S]*getRandomValues[\s\S]*\/pair\//);
     assert.equal(ctx.rows.get('code'), stored, 'the first code is kept');
     // The claimed code works for the ready page, reports and state; a wrong one does not.
     assert.equal((await call(env, target)).status, 200);
@@ -365,14 +369,14 @@ try {
   // The "Deploy to Cloudflare" button copies only this folder: the dashboard lives inside it, no source imports from outside,
   // and no .dev.vars.example (its presence would make the deploy page ask for secrets, which this flow avoids).
   {
-    const here = new URL('./', import.meta.url);
+    const here = new URL('../', import.meta.url);
     const config = fs.readFileSync(new URL('wrangler.jsonc', here), 'utf8').replace(/^\s*\/\/.*$/gm, '');
     const wrangler = JSON.parse(config);
     assert.equal(wrangler.assets.directory, './dashboard');
     assert.deepEqual(wrangler.assets.run_worker_first, ['/']);
     assert.ok(fs.existsSync(new URL('dashboard/index.html', here)));
     assert.equal(wrangler.ratelimits, undefined, 'the button deploy may not support rate limit bindings');
-    assert.equal(wrangler.compatibility_date, '2026-11-01');
+    assert.equal(wrangler.compatibility_date, '2026-10-13', 'the newest date the pinned workerd runs, so wrangler dev starts without flags');
     assert.equal(fs.existsSync(new URL('.dev.vars.example', here)), false);
     for (const file of ['worker.mjs', 'pages.mjs', 'qr.mjs', 'setup.mjs']) {
       const imports = [...fs.readFileSync(new URL(file, here), 'utf8').matchAll(/^import .* from '(\.[^']*)'/gm)].map(m => m[1]);
@@ -380,9 +384,126 @@ try {
     }
   }
 
+  // Every page a person can open carries the privacy headers: no referrer (the address holds the code), never cached, and a CSP.
+  {
+    const assets = { fetch: async () => new Response('<html>dashboard</html>', { headers: { 'Cache-Control': 'public, max-age=3600' } }) };
+    const unclaimed = setup({ LIVE_CODE: undefined, ASSETS: assets });
+    const claimedRoom = setup({ ASSETS: assets });
+    const again = setup({ LIVE_CODE: undefined });
+    await call(again.env, '/setup', { method: 'POST' });
+    const pages = [
+      ['unclaimed /', await call(unclaimed.env, '/')],
+      ['/pair', await call(claimedRoom.env, '/pair/' + CODE)],
+      ['404 page', await call(claimedRoom.env, '/pair/wrong')],
+      ['409 page', await call(again.env, '/setup', { method: 'POST' })],
+    ];
+    assert.deepEqual(pages.map(([, r]) => r.status), [200, 200, 404, 409]);
+    for (const [name, page] of pages) {
+      assert.equal(page.headers.get('referrer-policy'), 'no-referrer', name);
+      assert.equal(page.headers.get('cache-control'), 'no-store', name);
+      assert.match(page.headers.get('content-security-policy'), /default-src 'none'/, name);
+      assert.equal(page.headers.get('x-content-type-options'), 'nosniff', name);
+    }
+    // The dashboard from the assets binding: same privacy headers, revalidated rather than stored.
+    const dash = await call(claimedRoom.env, '/');
+    assert.equal(await dash.text(), '<html>dashboard</html>');
+    assert.equal(dash.headers.get('referrer-policy'), 'no-referrer');
+    assert.equal(dash.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(dash.headers.get('cache-control'), 'no-cache');
+  }
+
+  // HEAD is answered like GET, without a body, for "/" and /pair/...; nothing else answers HEAD.
+  {
+    const { env } = setup({ ASSETS: { fetch: async () => new Response('<html>dashboard</html>') } });
+    const home = await call(env, '/', { method: 'HEAD' });
+    assert.equal(home.status, 200);
+    assert.equal(await home.text(), '');
+    const ready = await call(env, '/pair/' + CODE, { method: 'HEAD' });
+    assert.equal(ready.status, 200);
+    assert.equal(await ready.text(), '');
+    assert.match(ready.headers.get('content-type'), /text\/html/);
+    assert.equal((await call(env, '/pair/wrong', { method: 'HEAD' })).status, 404);
+    assert.equal((await call(env, '/state', { method: 'HEAD', headers: { 'X-Code': CODE } })).status, 404);
+    assert.equal((await call(env, '/report', { method: 'HEAD' })).status, 404);
+    const fresh = setup({ LIVE_CODE: undefined });
+    assert.equal((await call(fresh.env, '/', { method: 'HEAD' })).status, 200);
+    assert.equal(fresh.ctx.rows.has('code'), false, 'HEAD never claims');
+  }
+
+  // The rate limit also covers /pair (code guessing), when the binding exists.
+  {
+    const { env, calls, limit } = setup();
+    limit(true);
+    const refused = await call(env, '/pair/' + CODE);
+    assert.equal(refused.status, 429);
+    assert.equal(refused.headers.get('retry-after'), '60');
+    assert.equal((await call(env, '/pair/wrong')).status, 429);
+    limit(false);
+    assert.equal((await call(env, '/pair/' + CODE)).status, 200);
+    assert.equal(calls(), 0);
+  }
+
+  // Once a stored code has been seen, "/" no longer asks the Durable Object; a secret never does.
+  {
+    const { env, calls } = setup({ LIVE_CODE: undefined, ASSETS: { fetch: async () => new Response('<html>dashboard</html>') } });
+    assert.match(await (await call(env, '/')).text(), /running\./);
+    await call(env, '/setup', { method: 'POST' });
+    const before = calls();
+    assert.equal(await (await call(env, '/')).text(), '<html>dashboard</html>'); // asks once, sees the code
+    const asked = calls();
+    assert.ok(asked > before);
+    await call(env, '/');
+    await call(env, '/');
+    assert.equal(calls(), asked, 'claimed is remembered');
+    const withSecret = setup({ ASSETS: { fetch: async () => new Response('<html>dashboard</html>') } });
+    await call(withSecret.env, '/');
+    assert.equal(withSecret.calls(), 0, 'LIVE_CODE answers without the room');
+  }
+
+  // The ready page: step 1 is on the PC, a phone gets a note to open it there, the copy buttons exist.
+  {
+    const { env } = setup();
+    const text = await (await call(env, '/pair/' + CODE)).text();
+    assert.match(text, /On the computer where you play, pair NIX/);
+    assert.match(text, /id="phone" hidden>Pairing happens on your PC\. Open this page there too:/);
+    assert.match(text, /pointer:coarse/);
+    assert.match(text, /id="phonecopy"/);
+    assert.match(text, /private window/);
+  }
+
+  // The setup button turns itself off on the first press, so a double click posts once.
+  {
+    const text = await (await call(setup({ LIVE_CODE: undefined }).env, '/')).text();
+    assert.match(text, /addEventListener\("submit"[\s\S]*disabled=true/);
+  }
+
+  // The wrong-link page offers the takeover steps with a code made in the browser; an unclaimed hub says to press Create instead.
+  {
+    const { env } = setup();
+    const text = await (await call(env, '/pair/wrong')).text();
+    assert.match(text, /That link is not right/);
+    assert.match(text, /Variables and secrets[\s\S]*LIVE_CODE[\s\S]*getRandomValues/);
+    const unclaimed = await (await call(setup({ LIVE_CODE: undefined }).env, '/pair/wrong')).text();
+    assert.match(unclaimed, /no private link yet/);
+    assert.doesNotMatch(unclaimed, /LIVE_CODE/);
+  }
+
+  // The QR code keeps the 4-module quiet zone, and is black on an explicit white square so a dark page cannot invert it.
+  {
+    const svg = qrSvg('https://nix-live.example.workers.dev/#abc');
+    const size = Number(svg.match(/viewBox="0 0 (\d+) /)[1]), modules = qrMatrix('https://nix-live.example.workers.dev/#abc').length;
+    assert.equal(size, modules + 8);
+    const coords = [...svg.matchAll(/M(\d+) (\d+)h1v1h-1z/g)].map(m => [Number(m[1]), Number(m[2])]);
+    assert.ok(coords.length > 0);
+    for (const [x, y] of coords) assert.ok(x >= 4 && y >= 4 && x <= size - 5 && y <= size - 5, 'a dark module inside the quiet zone');
+    assert.match(svg, new RegExp('<rect width="' + size + '" height="' + size + '" fill="#fff"/>'));
+    assert.match(svg, /<path fill="#000"/);
+    assert.doesNotMatch(svg, /currentColor|var\(/);
+  }
+
   // The dashboard's inline script at least parses (a quote slipped into one of its messages once broke the whole page).
   {
-    const page = fs.readFileSync(new URL('dashboard/index.html', import.meta.url), 'utf8');
+    const page = fs.readFileSync(new URL('../dashboard/index.html', import.meta.url), 'utf8');
     assert.doesNotThrow(() => new vm.Script(page.match(/<script>([\s\S]*)<\/script>/)[1]));
   }
 

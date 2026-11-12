@@ -9564,7 +9564,7 @@ async function updateTests() {
     broken.Live.startTimer(); assert.equal(broken.Live.worker, null);
   });
 
-  test('Settings offers the Cloudflare deploy link while no hub is paired and hides it once one is', () => {
+  test('Settings offers the Cloudflare deploy link; once a hub is paired only a small "Set up another hub" link stays', () => {
     const document = { createElement(tag) {
       return { tag, children: [], className: '', hidden: false, append(...nodes) { this.children.push(...nodes); }, setAttribute() {}, addEventListener() {} };
     } };
@@ -9573,22 +9573,25 @@ async function updateTests() {
     assert.equal(f.Live.channel(), null);
     f.UI.refreshers = [];
     const box = f.UI.liveSetupHelp();
-    const link = box.children.find(n => n.tag === 'a');
-    assert.equal(box.hidden, false, 'shown while no hub is paired');
+    const link = box.children.find(n => n.tag === 'a'), paragraphs = box.children.filter(n => n.tag === 'p');
     assert.equal(link.textContent, 'Set up free on Cloudflare');
     assert.equal(link.href, DEPLOY, 'the exact deploy address');
     assert.equal(f.Live.DEPLOY_URL, DEPLOY);
     assert.equal(link.target, '_blank', 'opens in a new tab');
     assert.equal(link.rel, 'noopener noreferrer');
-    assert.deepEqual(box.children.filter(n => n.tag === 'p').map(n => n.textContent), ['No hub yet?', 'Deploy, open your hub, press Pair.']);
+    assert.deepEqual(paragraphs.map(n => n.textContent), ['No hub yet?', '1 Deploy. 2 Open your hub, press Create. 3 Press Pair.']);
+    assert.deepEqual(paragraphs.map(n => n.hidden), [false, false]);
     assert.equal(f.UI.refreshers.length, 1);
-    // Pairing a hub hides it on the next panel refresh; forgetting the hub brings it back.
+    // Pairing a hub keeps the link, reworded and with the steps hidden, on the next panel refresh; forgetting the hub restores it.
     assert.equal(f.Live.setChannel(LIVE_URL, LIVE_CODE), true);
     f.UI.refreshers[0]();
-    assert.equal(box.hidden, true, 'hidden once paired');
+    assert.equal(link.textContent, 'Set up another hub');
+    assert.equal(link.href, DEPLOY);
+    assert.deepEqual(paragraphs.map(n => n.hidden), [true, true], 'the "no hub yet" lines go once paired');
     f.Live.clearChannel();
     f.UI.refreshers[0]();
-    assert.equal(box.hidden, false);
+    assert.equal(link.textContent, 'Set up free on Cloudflare');
+    assert.deepEqual(paragraphs.map(n => n.hidden), [false, false]);
     // The link is only a link: nothing is saved or sent by it.
     assert.equal(f.Live.channel(), null);
     assert.equal(f.Settings.profile.live.on, false);

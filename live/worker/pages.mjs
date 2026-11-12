@@ -49,68 +49,114 @@ ol h2{margin:2px 0 6px;font-size:17px}
 input.link{flex:1;min-width:0;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);font:14px ui-monospace,Menlo,Consolas,monospace}
 .warn{background:var(--warn);border:1px solid var(--warnLine);border-radius:10px;padding:10px 12px;font-size:14px}
 a{color:inherit}
+[hidden]{display:none!important}
+ol.plain{list-style:decimal;padding-left:20px}
+ol.plain>li{counter-increment:none;padding:0;margin:0 0 8px}
+ol.plain>li::before{content:none}
+code{font:13px ui-monospace,Menlo,Consolas,monospace}
+.warn .btn{margin-left:6px}
 `;
 
-function shell(title, body) {
+
+// One copy routine for every page: select the field or use the clipboard, and say "Copied" for two seconds.
+const COPY_SCRIPT = 'function nixCopy(b,text){var done=function(){var t=b.textContent;b.textContent="Copied";setTimeout(function(){b.textContent=t},2000)};'
+  + 'var old=function(){try{var i=document.createElement("textarea");i.value=text;document.body.appendChild(i);i.select();document.execCommand("copy");i.remove();done()}catch(e){}};'
+  + 'if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text).then(done,old)}else{old()}}';
+
+function shell(title, body, script = '') {
   return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
     + '<meta name="robots" content="noindex"><meta name="color-scheme" content="light dark"><title>' + htmlEscape(title) + '</title>'
-    + '<style>' + STYLE + '</style></head><body><main><p class="brand">NIX live</p>' + body + '</main></body></html>';
+    + '<style>' + STYLE + '</style></head><body><main><p class="brand">NIX live</p>' + body + '</main>'
+    + (script ? '<script>' + COPY_SCRIPT + script + '</script>' : '') + '</body></html>';
 }
+
+/*
+================
+takeoverSteps
+
+How to take a hub back, or to get a new link after losing the old one: set the LIVE_CODE secret in Cloudflare. The page
+makes a random code in the browser (crypto.getRandomValues; it never leaves the page) so nobody has to invent one, and
+shows the address to open afterwards. The script half is TAKEOVER_SCRIPT; a page that shows the steps passes it to shell().
+================
+*/
+function takeoverSteps(origin) {
+  return '<ol class="plain"><li>In Cloudflare open <strong>Workers &amp; Pages</strong>, then <strong>nix-live</strong>, then <strong>Settings</strong>, then <strong>Variables and secrets</strong>.</li>'
+    + '<li>Press <strong>Add</strong>, choose type <strong>Secret</strong>, name it <code>LIVE_CODE</code> and paste this as the value:'
+    + '<div class="row"><input class="link" id="newcode" readonly aria-label="A ready-made code" value="(your browser makes a code here)"><button class="btn small" id="newcopy" type="button" hidden>Copy</button></div></li>'
+    + '<li>Save and deploy, then open <a id="newpair" href="#">' + htmlEscape(origin) + '/pair/&lt;that code&gt;</a> and press Pair in NIX again.</li></ol>';
+}
+const TAKEOVER_SCRIPT = '(function(){var i=document.getElementById("newcode"),c=document.getElementById("newcopy"),a=document.getElementById("newpair");if(!i||!window.crypto)return;'
+  + 'var b=crypto.getRandomValues(new Uint8Array(18)),s="";for(var k=0;k<b.length;k++)s+=String.fromCharCode(b[k]);'
+  + 'var code=btoa(s).replace(/\\+/g,"-").replace(/\\//g,"_");i.value=code;c.hidden=false;c.onclick=function(){nixCopy(c,code)};'
+  + 'a.href=location.origin+"/pair/"+code;a.textContent=location.origin+"/pair/"+code;})();';
+export const TAKEOVER_TEXT = 'Take it back: in Cloudflare open Workers & Pages, nix-live, Settings, Variables and secrets, press Add, choose Secret, name it LIVE_CODE and give it any 16 to 64 letters, numbers, - or _. Then open this hub\'s address followed by /pair/ and that code, and press Pair in NIX again.';
 
 /*
 ================
 setupPage
 
 First run, before any code exists. Nothing is created by showing this page: the button is a POST, so a link preview or a
-crawler that only fetches addresses cannot claim the hub.
+crawler that only fetches addresses cannot claim the hub. The button turns off on the first press so a double click does
+not post twice.
 ================
 */
 export function setupPage() {
   return shell('NIX live setup', '<h1>Your NIX live hub is running.</h1>'
     + '<p>Create your private link. It opens your dashboard on your phone and pairs your bot with this hub.</p>'
     + '<form method="post" action="/setup" class="card"><button class="btn" type="submit">Create my private link</button>'
-    + '<p class="dim" style="margin:12px 0 0">Do this once, now. Whoever presses it first owns this hub, so do it right after deploying.</p></form>');
+    + '<p class="dim" style="margin:12px 0 0">Do this once, now. Whoever presses it first owns this hub, so do it right after deploying.</p></form>',
+  'document.forms[0].addEventListener("submit",function(){var b=this.querySelector("button");setTimeout(function(){b.disabled=true;b.textContent="Creating\\u2026"},0)});');
 }
 
 /*
 ================
 readyPage
 
-The page after the code exists, also served later at /pair/<code>. Three steps: pair the bot in this browser, scan the
-QR code on the phone, keep the links private. The QR code holds the dashboard link (<hub>/#<code>).
+The page after the code exists, also served later at /pair/<code>. Pairing happens on the computer where the game runs;
+the QR code (the dashboard link, <hub>/#<code>) is for the phone. A phone that opens this page is told to open it on the
+PC instead, with a button that copies this page's address.
 ================
 */
 export function readyPage(origin, code) {
   const pair = pairLink(origin, code), dashboard = dashboardLink(origin, code);
   return shell('Your NIX hub is ready', '<h1>Your hub is ready</h1><p class="dim">Hub: ' + htmlEscape(origin) + '</p>'
+    + '<div class="warn" id="phone" hidden>Pairing happens on your PC. Open this page there too: <button class="btn small" id="phonecopy" type="button">Copy link</button></div>'
     + '<div class="card"><ol>'
-    + '<li><h2>Pair NIX in this browser</h2><a class="btn" href="' + htmlEscape(pair) + '">Pair NIX in this browser</a>'
-    + '<p class="dim">Opens the game. NIX asks you to confirm: press <strong>Pair</strong> in its window. Do this in the browser where you play.</p></li>'
+    + '<li><h2>On the computer where you play, pair NIX</h2><a class="btn" href="' + htmlEscape(pair) + '">Pair NIX in this browser</a>'
+    + '<p class="dim">Opens the game. NIX asks you to confirm: press <strong>Pair</strong> in its window. Use the browser where NIX is installed.</p></li>'
     + '<li><h2>Open the dashboard on your phone</h2><div class="qr">' + qrSvg(dashboard, 'QR code for your phone dashboard') + '</div>'
     + '<div class="row"><input class="link" id="link" readonly value="' + htmlEscape(dashboard) + '" aria-label="Phone dashboard link">'
     + '<button class="btn small" id="copy" type="button" hidden>Copy</button></div>'
     + '<p class="dim">Scan the code with your phone camera, or copy the link and send it to yourself. Your characters appear within about 10 seconds of entering the game.</p></li>'
-    + '<li><h2>Keep it private</h2><p class="dim" style="margin:0">Bookmark this page to find the links again.</p></li>'
+    + '<li><h2>Keep it private</h2><p class="dim" style="margin:0">Bookmark this page to find the links again. Opening it in a private window keeps its address out of your history.</p></li>'
     + '</ol></div>'
-    + '<p class="warn"><strong>Anyone with these links can watch your stats.</strong> Do not share this page, the link or the QR code.</p>'
-    + '<script>(function(){var b=document.getElementById("copy"),i=document.getElementById("link");if(!b||!i)return;b.hidden=false;'
-    + 'b.onclick=function(){i.select();var done=function(){b.textContent="Copied";setTimeout(function(){b.textContent="Copy"},2000)};'
-    + 'if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(i.value).then(done,function(){try{document.execCommand("copy");done()}catch(e){}})}'
-    + 'else{try{document.execCommand("copy");done()}catch(e){}}};})();</script>');
+    + '<p class="warn"><strong>Anyone with these links can watch your stats.</strong> Do not share this page, the link or the QR code.</p>',
+  '(function(){var b=document.getElementById("copy"),i=document.getElementById("link");if(b&&i){b.hidden=false;b.onclick=function(){nixCopy(b,i.value)}}'
+  + 'var p=document.getElementById("phone"),pc=document.getElementById("phonecopy");'
+  + 'if(p&&pc&&((window.matchMedia&&matchMedia("(pointer:coarse)").matches)||innerWidth<600)){p.hidden=false;pc.onclick=function(){nixCopy(pc,location.href)}}})();');
 }
 
-// A second press of Create, or Create on a hub whose code comes from the LIVE_CODE secret.
-export function alreadySetupPage() {
-  return shell('NIX live is already set up', '<h1>This hub is already set up</h1>'
-    + '<p>Its private link was created earlier. Open the page you saved then, or the dashboard link on your phone.</p>'
-    + '<div class="card"><h2 style="margin-top:0;font-size:17px">Lost your link?</h2>'
-    + '<p class="dim" style="margin:0">In Cloudflare open <strong>Workers &amp; Pages</strong>, your worker, then <strong>Settings</strong> and <strong>Variables and secrets</strong>. '
-    + 'Add a secret named <code>LIVE_CODE</code> with any 16 to 64 letters, numbers, <code>-</code> or <code>_</code>. '
-    + 'Then open this address followed by <code>/pair/</code> and that code to pair NIX again, or followed by <code>/#</code> and that code on your phone.</p></div>');
+/*
+================
+alreadySetupPage
+
+A second press of Create, or Create on a hub whose code comes from the LIVE_CODE secret. Calm wording first (most of the
+time the person pressed twice), then how to take the hub back in case somebody else pressed first.
+================
+*/
+export function alreadySetupPage(origin) {
+  return shell('NIX live is already created', '<h1>Already created</h1>'
+    + '<p>If you pressed twice, go back to the page that opened, or use your saved link.</p>'
+    + '<div class="card"><h2 style="margin-top:0;font-size:17px">Not you, or lost your link?</h2>'
+    + '<p class="dim" style="margin-top:0">If you didn\'t press Create yourself, someone else may have. Take it back:</p>' + takeoverSteps(origin) + '</div>', TAKEOVER_SCRIPT);
 }
 
 // Shown for /pair/<wrong code> in a browser: the status is 404, the words are for a person.
-export function wrongLinkPage() {
+export function wrongLinkPage(origin, claimed = true) {
+  if (!claimed) {
+    return shell('NIX live is not set up', '<h1>This hub has no private link yet</h1><p>Open the hub\'s address and press <strong>Create my private link</strong>. <a href="/">Go to the hub</a>.</p>');
+  }
   return shell('Link not recognised', '<h1>That link is not right</h1>'
-    + '<p>Open the link from your hub\'s setup page exactly as it was shown. <a href="/">Go to the hub</a>.</p>');
+    + '<p>Open the link from your hub\'s setup page exactly as it was shown.</p>'
+    + '<div class="card"><h2 style="margin-top:0;font-size:17px">Lost it?</h2>' + takeoverSteps(origin) + '</div>', TAKEOVER_SCRIPT);
 }

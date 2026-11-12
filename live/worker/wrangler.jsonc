@@ -4,7 +4,7 @@
   // No account id is committed: wrangler uses the account you deploy to.
   "name": "nix-live",
   "main": "worker.mjs",
-  "compatibility_date": "2026-11-01",
+  "compatibility_date": "2026-10-13",
   "workers_dev": true,
   "keep_vars": true,
   // The dashboard is a static asset. The Worker runs first for "/" only, so it can show the setup page before a code exists.

@@ -9,17 +9,16 @@ import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 
 const CODE = 'runtime-code-0123456789';
 const HUB = 'https://nix-live.example.workers.dev';
-const here = fileURLToPath(new URL('.', import.meta.url));
-const dashboard = fileURLToPath(new URL('./dashboard', import.meta.url));
+const here = fileURLToPath(new URL('..', import.meta.url));
+const dashboard = fileURLToPath(new URL('../dashboard', import.meta.url));
 
 // The Worker as Cloudflare runs it: bundled by wrangler (this is what pulls in the QR package), config read from wrangler.jsonc.
-const outdir = fileURLToPath(new URL('./.wrangler/bundle', import.meta.url));
-const built = spawnSync(process.execPath, [fileURLToPath(new URL('./node_modules/wrangler/bin/wrangler.js', import.meta.url)), 'deploy', '--dry-run', '--outdir', outdir], { cwd: here, encoding: 'utf8' });
+const outdir = fileURLToPath(new URL('../.wrangler/bundle', import.meta.url));
+const built = spawnSync(process.execPath, [fileURLToPath(new URL('../node_modules/wrangler/bin/wrangler.js', import.meta.url)), 'deploy', '--dry-run', '--outdir', outdir], { cwd: here, encoding: 'utf8' });
 assert.equal(built.status, 0, 'wrangler deploy --dry-run failed: ' + built.stdout + built.stderr);
 const source = fs.readFileSync(outdir + '/worker.js', 'utf8');
 
 const common = {
-  // The newest date this workerd supports; wrangler.jsonc names a later one, which wrangler dev lowers the same way.
   modules: true, compatibilityDate: '2026-10-13', script: source,
   durableObjects: { LIVE: { className: 'LiveRoom', useSQLite: true } },
 };
@@ -27,7 +26,7 @@ const start = (bindings, extra = {}) => new Miniflare(convertV4MiniflareOptions(
 const send = (mf, pathname, init = {}) => mf.dispatchFetch(HUB + pathname, init);
 const snap = (over = {}) => JSON.stringify({ name: 'Tester', level: 42, state: 'fight', running: true, inWorld: true, dead: false, stats: { kills: '12' }, ...over });
 
-const mf = start({ LIVE_CODE: CODE }, { ratelimits: { LIVE_IP_LIMIT: { namespace_id: '1', simple: { limit: 6, period: 60 } } } });
+const mf = start({ LIVE_CODE: CODE }, { ratelimits: { LIVE_IP_LIMIT: { namespace_id: '1', simple: { limit: 14, period: 60 } } } });
 // What wrangler sets up for assets.run_worker_first: ["/"] in wrangler.jsonc: the Worker answers "/" before the assets do.
 const assets = { directory: dashboard, binding: 'ASSETS', routerConfig: { has_user_worker: true }, run_worker_first: ['/'] };
 const fresh = start({}, { assets }); // no secret, no stored code: a deployment straight from the button (and no rate limit binding)
@@ -118,9 +117,9 @@ try {
   assert.equal(response.status, 200);
   assert.equal(await response.text(), fs.readFileSync(dashboard + '/index.html', 'utf8'));
 
-  // Rate limit: the budget is 6 a minute, and 7 requests have been counted above, so this one is refused.
+  // Rate limit: the budget is 14 a minute; keep asking until it answers 429.
   let limited = null;
-  for (let i = 0; i < 10 && !limited; i++) {
+  for (let i = 0; i < 30 && !limited; i++) {
     const r = await send(mf, '/state', { headers: { 'X-Code': CODE } });
     if (r.status === 429) limited = r;
   }

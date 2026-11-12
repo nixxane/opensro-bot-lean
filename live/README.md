@@ -18,17 +18,20 @@ You need one hub, reachable over HTTPS. Pick one:
 
 The Worker and one Durable Object run on your own Cloudflare account and serve the dashboard at a stable `https://nix-live.<your-name>.workers.dev` address. No PC has to stay on, no tunnel is needed, and you install nothing. You need a free Cloudflare account and a free GitHub (or GitLab) account: Cloudflare copies the Worker into your own repository and builds it from there.
 
-1. Click the button above (or **Set up free on Cloudflare** in NIX, Settings, Live dashboard). Sign in to Cloudflare and to GitHub (or GitLab) when asked, and accept the defaults. Wait for the build to finish.
-2. Open the worker address Cloudflare shows (`https://nix-live.<your-name>.workers.dev`). You see "Your NIX live hub is running."
-3. Press **Create my private link**. This makes your private code. It can only be done once.
-4. On the page that follows, press **Pair NIX in this browser** in the browser where the game runs. NIX asks "Pair with a live hub?"; press **Pair**. That saves the hub and turns the dashboard on. Nothing is saved until you press Pair.
-5. Scan the QR code with your phone, or copy the link under it. Your characters appear within about 10 seconds of entering the game. Bookmark the page: `<address>/pair/<code>` shows it again.
+1. Click the button above. Sign in to Cloudflare. A brand-new Cloudflare account may first ask you to pick a `workers.dev` subdomain; any name is fine.
+2. Connect your GitHub (or GitLab) account when Cloudflare asks. Choose a name for your copy of the repository; private is fine.
+3. Keep the Worker name `nix-live`. If you change it, your address changes too: use the address Cloudflare shows, not the one written here.
+4. Press **Create and deploy** and wait for the build to finish.
+5. Open the worker address (`https://nix-live.<your-name>.workers.dev`). You see "Your NIX live hub is running."
+6. Press **Create my private link**. This makes your private code and can only be done once. Do steps 5 and 6 right after the build: whoever presses Create first owns the hub.
+7. On the computer where you play, press **Pair NIX in this browser**. NIX asks "Pair with a live hub?"; press **Pair**. That saves the hub and turns the dashboard on. Nothing is saved until you press Pair.
+8. Scan the QR code with your phone, or copy the link under it. Your characters appear within about 10 seconds of entering the game.
 
-Do steps 2 and 3 right after the build: whoever presses Create first owns the hub.
+Bookmark the page: `<address>/pair/<code>` shows it again. That address holds your private code, so open it in a private window if you do not want it to stay in your browser history.
 
 ### Lost your link?
 
-In Cloudflare open **Workers & Pages**, your worker (`nix-live`), **Settings**, **Variables and secrets**, and add a secret named `LIVE_CODE` with any 16 to 64 letters, numbers, `-` or `_`. Then open `<address>/pair/<that code>` to pair NIX again, and `<address>/#<that code>` on your phone. A `LIVE_CODE` secret always wins over the code made by the Create button, so deleting the secret brings the first code back.
+In Cloudflare open **Workers & Pages**, your worker (`nix-live`), **Settings**, **Variables and secrets**, press **Add**, choose **Secret**, and name it `LIVE_CODE` with any 16 to 64 letters, numbers, `-` or `_` as the value. (Any wrong link, such as `<address>/pair/x`, shows a page that makes a random code for you.) Then open `<address>/pair/<that code>` to pair NIX again, and `<address>/#<that code>` on your phone. The same steps take a hub back if you think someone else pressed Create first. A `LIVE_CODE` secret always wins over the code made by the Create button, so deleting the secret brings the first code back.
 
 ### For technical users
 
@@ -90,7 +93,7 @@ Do not also turn on the bot's Live dashboard for the same hub; the two would rep
 ## Files
 
 - `hub.js`: the Node hub, no dependencies. `hub.test.cjs`: its self-check (`node hub.test.cjs`).
-- `worker/`: everything the Cloudflare button deploys, self-contained: the Worker and Durable Object (`worker.mjs`), its pages (`pages.mjs`), the QR code (`qr.mjs`, using the pinned `qrcode-generator` package), `dashboard/index.html` (the dashboard page, also served by `hub.js`), `wrangler.jsonc`, `setup.mjs`, and tests. After `npm install` there, `npm test` runs them locally with Miniflare; they are not part of the release checks.
+- `worker/`: everything the Cloudflare button deploys, self-contained: the Worker and Durable Object (`worker.mjs`), its pages (`pages.mjs`), the QR code (`qr.mjs`, using the pinned `qrcode-generator` package), `dashboard/index.html` (the dashboard page, also served by `hub.js`), `wrangler.jsonc`, `setup.mjs`, and tests. `worker/test/` holds the tests and their own `package.json` (Miniflare, a QR decoder), so the button's build installs only what the Worker needs. To run them: `cd worker`, `npm install`, `cd test`, `npm install`, then `npm test` (in either folder). They are not part of the release checks.
 - `reporter.user.js`: the separate Tampermonkey script for the local-only option; install it from the hub's link, which fills in your code. `reporter.test.cjs`: its self-check.
 
 Both hubs speak the same small protocol: `POST /report` with an `X-Code` header, `GET /state`, `GET /pair/<code>`, and `OPTIONS` answered without a code. The Worker adds `POST /setup` (the Create button). The built-in client is `lean-live.js`; the reporter script reads the bot's diagnostics on `window.SROLean` (`stats`, `world`, `hunt`, `log`, `activity.userMessage`), so if those change, update `snapshot()` in `reporter.user.js` and its test.

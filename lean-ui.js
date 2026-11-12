@@ -1318,12 +1318,17 @@ const UI = {
         this.reportNote,
         el('p', 'One message per interval with the current session totals. It keeps reporting while the bot is stopped and says when you are dead or out of the game. The address is kept in this browser only and is not part of shared settings or backups.', 'muted')));
   },
-  // "No hub yet?" help for a player who has not set one up. It opens Cloudflare's deploy page in a new tab and goes away once a hub is saved.
+  // "No hub yet?" help: opens Cloudflare's deploy page in a new tab. Once a hub is saved only a small "Set up another hub" link stays.
   liveSetupHelp() {
     const box = el('div', null, 'live-setup'), link = el('a', 'Set up free on Cloudflare');
+    const intro = el('p', 'No hub yet?', 'muted'), steps = el('p', '1 Deploy. 2 Open your hub, press Create. 3 Press Pair.', 'muted');
     link.href = Live.DEPLOY_URL; link.target = '_blank'; link.rel = 'noopener noreferrer';
-    box.append(el('p', 'No hub yet?', 'muted'), link, el('p', 'Deploy, open your hub, press Pair.', 'muted'));
-    const show = () => { box.hidden = !!Live.channel(); };
+    box.append(intro, link, steps);
+    const show = () => {
+      const paired = !!Live.channel();
+      intro.hidden = steps.hidden = paired;
+      link.textContent = paired ? 'Set up another hub' : 'Set up free on Cloudflare';
+    };
     show(); this.refreshers.push(show);
     return box;
   },

@@ -87,9 +87,28 @@ const badSecret = () => reply(500, 'The LIVE_CODE secret must be 16 to 64 letter
 const html = (status, page, headers = {}) => reply(status, page, { ...HTML, ...headers });
 const room = env => env.LIVE.get(env.LIVE.idFromName('room')); // one code per deployment, so one room
 
+// Once a stored code has been seen, the hub is claimed for good (the code never changes or goes away), so "/" skips the
+// Durable Object call from then on. Keyed by the namespace binding so one deployment's answer never leaks into another's.
+const claimedBindings = new WeakSet();
+
 async function storedCode(env) {
   const answer = await room(env).fetch('https://room/code');
-  return (await answer.json()).code;
+  const { code } = await answer.json();
+  if (code && env.LIVE && typeof env.LIVE === 'object') claimedBindings.add(env.LIVE);
+  return code;
+}
+
+const isClaimed = env => !!env.LIVE && typeof env.LIVE === 'object' && claimedBindings.has(env.LIVE);
+
+// The dashboard comes from the assets binding; it gets the same privacy headers as every other page. no-cache (not
+// no-store) lets the browser keep it but check with the Worker each time.
+async function dashboard(request, env) {
+  if (!env.ASSETS) return reply(404, null);
+  const answer = await env.ASSETS.fetch(request), headers = new Headers(answer.headers);
+  headers.set('Referrer-Policy', 'no-referrer');
+  headers.set('X-Content-Type-Options', 'nosniff');
+  headers.set('Cache-Control', 'no-cache');
+  return new Response(answer.body, { status: answer.status, statusText: answer.statusText, headers });
 }
 
 // Reads at most MAX_REPORT_BYTES. A lying Content-Length is caught by the first check, a missing one by the count.
@@ -144,15 +163,25 @@ async function setup(request, env, url, secret) {
   const site = request.headers.get('Sec-Fetch-Site'), origin = request.headers.get('Origin');
   if (site ? site !== 'same-origin' && site !== 'none' : origin && origin !== url.origin) return reply(403, null);
   if (await limited(request, env)) return reply(429, null, { 'Retry-After': String(RETRY_AFTER_SECONDS) });
-  if (secret.code) return html(409, alreadySetupPage());
+  if (secret.code) return html(409, alreadySetupPage(url.origin));
   const answer = await room(env).fetch('https://room/claim', { method: 'POST' });
-  if (answer.status !== 201) return html(409, alreadySetupPage());
+  if (answer.status !== 201) return html(409, alreadySetupPage(url.origin));
   const { code } = await answer.json();
   return reply(303, null, { Location: '/pair/' + code }); // a reload shows the page again instead of posting twice
 }
 
 export default {
+  // HEAD is answered like GET for the two pages that people open ("/" and /pair/...), without the body.
   async fetch(request, env) {
+    if (request.method !== 'HEAD') return handle(request, env);
+    const path = new URL(request.url).pathname;
+    if (path !== '/' && !/^\/pair\/[^/]+$/.test(path)) return reply(404, null);
+    const answer = await handle(new Request(request.url, { method: 'GET', headers: request.headers }), env);
+    return new Response(null, { status: answer.status, headers: answer.headers });
+  },
+};
+
+async function handle(request, env) {
     if (request.method === 'OPTIONS') return reply(204, null);
     const url = new URL(request.url);
     const isHome = request.method === 'GET' && url.pathname === '/';
@@ -168,12 +197,14 @@ export default {
 
     if (isHome) {
       // The dashboard once a code exists, the setup page before. (The assets binding runs after this code for "/".)
-      if (!secret.code && !(await storedCode(env))) return html(200, setupPage());
-      return env.ASSETS ? env.ASSETS.fetch(request) : reply(404, null);
+      if (!secret.code && !isClaimed(env) && !(await storedCode(env))) return html(200, setupPage());
+      return dashboard(request, env);
     }
     if (pair) {
+      if (await limited(request, env)) return reply(429, null, { 'Retry-After': String(RETRY_AFTER_SECONDS) });
       const wanted = secret.code || (await storedCode(env));
-      if (!wanted || !(await sameCode(pair[1], wanted))) return html(404, wrongLinkPage());
+      if (!wanted) return html(404, wrongLinkPage(url.origin, false));
+      if (!(await sameCode(pair[1], wanted))) return html(404, wrongLinkPage(url.origin));
       return html(200, readyPage(url.origin, wanted));
     }
 
@@ -192,8 +223,7 @@ export default {
     if (read.status) return reply(read.status, null);
     const answer = await room(env).fetch('https://room/report', { method: 'POST', body: JSON.stringify(read.report), headers });
     return answer.status === 204 ? reply(204, null) : roomRefusal(answer.status);
-  },
-};
+}
 
 // 401: wrong code. 503: no code exists yet, so nothing can be right (the bot retries on a 503 instead of switching off).
 function roomRefusal(status) {
