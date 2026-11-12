@@ -68,12 +68,14 @@ const DEFAULT_PROFILE = {
     onDeath: 'stop', stopNoHpPotion: false, stopInvFull: false, autoStart: false, retry: false,
     playerAlert: { enabled: false, radius: 250, pause: false }, manualPauseS: 6,
   },
+  // Discord session reports (lean-reporter.js). The webhook URL is a secret and lives in Store, never here.
+  sessionReport: { on: false, minutes: 3 },
 };
 // Preserve only bot settings. The original assistant's settings are never changed.
 function botProfile(input) {
   const result = deepMerge(DEFAULT_PROFILE, {});
   if (!input || typeof input !== 'object') return result;
-  for (const key of ['macro', 'potion', 'hunt', 'lure', 'pet', 'scroll', 'mall', 'wardrobe', 'party', 'alchemy', 'mastery', 'statPoints', 'leveling', 'trace', 'items', 'trade', 'stall', 'quest', 'sounds']) {
+  for (const key of ['macro', 'potion', 'hunt', 'lure', 'pet', 'scroll', 'mall', 'wardrobe', 'party', 'alchemy', 'mastery', 'statPoints', 'leveling', 'trace', 'items', 'trade', 'stall', 'quest', 'sounds', 'sessionReport']) {
     if (!input[key] || typeof input[key] !== 'object') continue;
     for (const field of Object.keys(DEFAULT_PROFILE[key])) {
       if (field in input[key]) result[key][field] = deepMerge(DEFAULT_PROFILE[key][field], input[key][field]);
@@ -90,6 +92,7 @@ function botProfile(input) {
   }
   delete result.potion.restock.town.stacks;
   if (!Number.isInteger(result.potion.delayMs) || result.potion.delayMs < 0 || result.potion.delayMs > 60000) result.potion.delayMs = DEFAULT_PROFILE.potion.delayMs;
+  if (!Number.isInteger(result.sessionReport.minutes) || result.sessionReport.minutes < 1 || result.sessionReport.minutes > 60) result.sessionReport.minutes = DEFAULT_PROFILE.sessionReport.minutes;
   if (!['death', 'recall'].includes(result.potion.restock.town.deathReturn)) result.potion.restock.town.deathReturn = 'recall';
   if (!['reverse', 'walk'].includes(result.potion.restock.town.returnBy)) result.potion.restock.town.returnBy = 'reverse';
   // Reverse Return Scrolls used to have two switches: a gold-merchant one (no merchant sells them) and the Item mall

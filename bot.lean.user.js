@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         nixxane bot
 // @namespace    https://opensro.online/
-// @version      1.2.261
+// @version      1.2.262
 // @updateURL    https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.meta.js
 // @downloadURL  https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -22,7 +22,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[NIX] Another SRO assistant is active. Disable it and reload to use NIX.');
   return;
 }
-const VERSION = '1.2.261';
+const VERSION = '1.2.262';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -252,12 +252,14 @@ const DEFAULT_PROFILE = {
     onDeath: 'stop', stopNoHpPotion: false, stopInvFull: false, autoStart: false, retry: false,
     playerAlert: { enabled: false, radius: 250, pause: false }, manualPauseS: 6,
   },
+  // Discord session reports (lean-reporter.js). The webhook URL is a secret and lives in Store, never here.
+  sessionReport: { on: false, minutes: 3 },
 };
 // Preserve only bot settings. The original assistant's settings are never changed.
 function botProfile(input) {
   const result = deepMerge(DEFAULT_PROFILE, {});
   if (!input || typeof input !== 'object') return result;
-  for (const key of ['macro', 'potion', 'hunt', 'lure', 'pet', 'scroll', 'mall', 'wardrobe', 'party', 'alchemy', 'mastery', 'statPoints', 'leveling', 'trace', 'items', 'trade', 'stall', 'quest', 'sounds']) {
+  for (const key of ['macro', 'potion', 'hunt', 'lure', 'pet', 'scroll', 'mall', 'wardrobe', 'party', 'alchemy', 'mastery', 'statPoints', 'leveling', 'trace', 'items', 'trade', 'stall', 'quest', 'sounds', 'sessionReport']) {
     if (!input[key] || typeof input[key] !== 'object') continue;
     for (const field of Object.keys(DEFAULT_PROFILE[key])) {
       if (field in input[key]) result[key][field] = deepMerge(DEFAULT_PROFILE[key][field], input[key][field]);
@@ -274,6 +276,7 @@ function botProfile(input) {
   }
   delete result.potion.restock.town.stacks;
   if (!Number.isInteger(result.potion.delayMs) || result.potion.delayMs < 0 || result.potion.delayMs > 60000) result.potion.delayMs = DEFAULT_PROFILE.potion.delayMs;
+  if (!Number.isInteger(result.sessionReport.minutes) || result.sessionReport.minutes < 1 || result.sessionReport.minutes > 60) result.sessionReport.minutes = DEFAULT_PROFILE.sessionReport.minutes;
   if (!['death', 'recall'].includes(result.potion.restock.town.deathReturn)) result.potion.restock.town.deathReturn = 'recall';
   if (!['reverse', 'walk'].includes(result.potion.restock.town.returnBy)) result.potion.restock.town.returnBy = 'reverse';
   // Reverse Return Scrolls used to have two switches: a gold-merchant one (no merchant sells them) and the Item mall
@@ -16986,7 +16989,7 @@ const Alchemy = {
 };
 
 
-const RELEASE_NOTES = [{"version": "1.2.261", "title": "Session stats count Sun, Moon and Star", "items": ["The Session panel and Session window now show Seal of Sun, Seal of Moon and Seal of Star counts under SoX found.", "When hunting stops, the log line now lists the session totals: time, kills, items, SoX per seal, XP and gold."], "note": "Tested in simulation."}, {"version": "1.2.260", "title": "Loot log shows Star/Moon/Sun", "items": ["Picked-up loot in the log now names the item, and SoX gear says which seal it is, e.g. \"Picked up ... (Seal of Sun)\". Before it only said \"Picked up loot.\"", "This works even with the SoX sound turned off."], "note": "Tested in simulation."}, {"version": "1.2.259", "title": "Hotfix: stuck on \"Waiting for game world\"", "items": ["The game update changed how it sends character state (only the parts that changed). The bot lost track of your character and stayed on \"Waiting for game world\". It now follows the new format again."], "note": "Checked against the live game's code; tested in simulation."}, {"version": "1.2.258", "title": "Auto party invite by name or nearby", "items": ["New \"Auto-invite players\" option in Party, off by default. It invites the players you list by name whenever they are in view.", "Optional \"Also invite anyone nearby\" invites everyone within the radius you set (30 m by default).", "Only invites while you are solo, the party leader, or in a party that lets members invite, and never into a full party.", "A player who does not answer is asked again after 30 s, then 1, 2, 4 minutes and so on, up to 10 minutes, so nobody gets spammed."], "note": "Tested in simulation only."}, {"version": "1.2.257", "title": "SoX chime for Sun only (or Moon and Sun)", "items": ["New \"SoX chime for\" choice under the SoX chime in Hunting → Loot: Star, Moon and Sun (as before), Moon and Sun, or Sun only.", "The choice also covers the \"SoX found\" notice and your custom SoX sound. Every SoX pickup is still counted in the session stats."]}, {"version": "1.2.256", "title": "Pick your own sound for SoX drops", "items": ["Hunting → Loot has a new \"Custom SoX sound…\" button under the SoX chime. Choose an audio file (mp3, wav, ogg, up to 1 MB) and the bot plays it instead of the built-in chime when it picks up Star, Moon or Sun gear.", "\"Use built-in chime\" puts the old sound back. Test SoX chime plays whichever sound is set.", "The sound is saved in this browser only, so it is not part of shared or exported settings."]}, {"version": "1.2.255", "title": "Leveling keeps the weapon type your character started with", "items": ["A blade character could end up buying swords. Auto-equip treated every weapon as the same kind, so a dropped sword with better stats replaced the blade, and leveling then bought the next sword at every tier.", "With Level up by itself on, the bot now remembers the weapon type your character had when leveling first saw it (a new character's starting weapon) and keeps buying that type. If it holds another type, the next town trip buys the right one back. Choosing a build in \"Character build\" still decides the weapon instead.", "Auto-equip now only swaps a weapon for one of the same type.", "A character that already switched type is remembered with the weapon it holds now. If that is wrong, pick a build with the right weapon in \"Character build\"."], "note": "Tested in simulation only, not in a live game."}, {"version": "1.2.254", "title": "Leveling never uses wall skills, and you can pick a character build", "items": ["Zero-setup leveling no longer uses Crystal Wall and Fire Wall (they keep the character from moving). Teleports, dashes, hides, traps, auras and transforms are left out too.", "Wall skills that leveling added to an existing profile are taken out. Skills you added yourself stay.", "New \"Character build\" choice in zero-setup leveling: Auto (as before, minus the blocked skills), or Glaive nuker, Spear fighter, Blade tank, Sword fighter, Bow nuker, Force support, Wizard, Warlock, Warrior, Rogue, Cleric, Bard.", "A build sets the masteries and their order, learns only its own skills, puts them in its order, uses one imbue and buys its weapon type (and a shield) on a town trip. Enhanced or protected gear is never replaced.", "Changing the build starts the setup again for that character. Skills already learned stay learned; skill points are not refunded."], "note": "Only tested in simulation. Not tried on the live server yet. The builds come from community guides and the game data, so check one before you rely on it."}];
+const RELEASE_NOTES = [{"version": "1.2.262", "title": "Discord session reports", "items": ["Post the current hunting-session totals to your own Discord webhook every 1 to 60 minutes.", "Off by default, and it needs your own Discord webhook address saved; a shared settings code never carries the address.", "The report keeps coming while the bot is stopped, dead or out of the game, and says which state it is in.", "Send a test report from Settings, and see when the next one is due or why the last one failed.", "A webhook Discord refuses switches reports off instead of retrying forever.", "The webhook address is kept in this browser only; it is not part of shared settings or backups and is never logged."], "note": "Only tested in simulation: no live Discord message was sent by the tests."}, {"version": "1.2.261", "title": "Session stats count Sun, Moon and Star", "items": ["The Session panel and Session window now show Seal of Sun, Seal of Moon and Seal of Star counts under SoX found.", "When hunting stops, the log line now lists the session totals: time, kills, items, SoX per seal, XP and gold."], "note": "Tested in simulation."}, {"version": "1.2.260", "title": "Loot log shows Star/Moon/Sun", "items": ["Picked-up loot in the log now names the item, and SoX gear says which seal it is, e.g. \"Picked up ... (Seal of Sun)\". Before it only said \"Picked up loot.\"", "This works even with the SoX sound turned off."], "note": "Tested in simulation."}, {"version": "1.2.259", "title": "Hotfix: stuck on \"Waiting for game world\"", "items": ["The game update changed how it sends character state (only the parts that changed). The bot lost track of your character and stayed on \"Waiting for game world\". It now follows the new format again."], "note": "Checked against the live game's code; tested in simulation."}, {"version": "1.2.258", "title": "Auto party invite by name or nearby", "items": ["New \"Auto-invite players\" option in Party, off by default. It invites the players you list by name whenever they are in view.", "Optional \"Also invite anyone nearby\" invites everyone within the radius you set (30 m by default).", "Only invites while you are solo, the party leader, or in a party that lets members invite, and never into a full party.", "A player who does not answer is asked again after 30 s, then 1, 2, 4 minutes and so on, up to 10 minutes, so nobody gets spammed."], "note": "Tested in simulation only."}, {"version": "1.2.257", "title": "SoX chime for Sun only (or Moon and Sun)", "items": ["New \"SoX chime for\" choice under the SoX chime in Hunting → Loot: Star, Moon and Sun (as before), Moon and Sun, or Sun only.", "The choice also covers the \"SoX found\" notice and your custom SoX sound. Every SoX pickup is still counted in the session stats."]}, {"version": "1.2.256", "title": "Pick your own sound for SoX drops", "items": ["Hunting → Loot has a new \"Custom SoX sound…\" button under the SoX chime. Choose an audio file (mp3, wav, ogg, up to 1 MB) and the bot plays it instead of the built-in chime when it picks up Star, Moon or Sun gear.", "\"Use built-in chime\" puts the old sound back. Test SoX chime plays whichever sound is set.", "The sound is saved in this browser only, so it is not part of shared or exported settings."]}, {"version": "1.2.255", "title": "Leveling keeps the weapon type your character started with", "items": ["A blade character could end up buying swords. Auto-equip treated every weapon as the same kind, so a dropped sword with better stats replaced the blade, and leveling then bought the next sword at every tier.", "With Level up by itself on, the bot now remembers the weapon type your character had when leveling first saw it (a new character's starting weapon) and keeps buying that type. If it holds another type, the next town trip buys the right one back. Choosing a build in \"Character build\" still decides the weapon instead.", "Auto-equip now only swaps a weapon for one of the same type.", "A character that already switched type is remembered with the weapon it holds now. If that is wrong, pick a build with the right weapon in \"Character build\"."], "note": "Tested in simulation only, not in a live game."}];
 
 // Check trusted repository metadata; never execute downloaded update code.
 const Updates = {
@@ -17470,6 +17473,153 @@ const Reports = {
     }
   },
 };
+
+
+// Discord session reports: one webhook message every few minutes with the current session totals.
+// The address is a bearer secret, so it lives in this browser's storage (not the profile) and is never
+// shared, backed up or logged. Only the panel's test button sends at once; a failed report waits for the
+// next interval, and a refused webhook switches the feature off instead of retrying forever.
+const REPORT_WEBHOOK = /^https:\/\/(?:canary\.|ptb\.)?discord(?:app)?\.com\/api(?:\/v\d+)?\/webhooks\/\d{5,}\/[\w-]{20,}$/;
+const REPORT_COLORS = { Hunting: 0x2ecc71, Stopped: 0xf1c40f, Dead: 0xe74c3c, 'Out of game': 0x95a5a6 };
+const Reporter = {
+  sending: false, nextAt: 0, lastAt: 0, lastError: '', holdUntil: 0,
+  // A hand-edited or corrupted storage value must never become a POST target.
+  webhook() {
+    const url = String(Store.get('sessionWebhook', '') || '');
+    return REPORT_WEBHOOK.test(url) ? url : '';
+  },
+  setWebhook(value) {
+    const url = String(value ?? '').trim();
+    if (!url) { Store.remove('sessionWebhook'); return true; }
+    if (!REPORT_WEBHOOK.test(url)) return false;
+    return Store.set('sessionWebhook', url);
+  },
+  enabled() { return Settings.profile.sessionReport.on === true && !!this.webhook() && typeof W.fetch === 'function'; },
+  // Clamped again here: an edited profile must never post more often than once a minute.
+  intervalMs() {
+    const minutes = Number(Settings.profile.sessionReport.minutes);
+    return clamp(Number.isFinite(minutes) ? Math.round(minutes) : 3, 1, 60) * 60000;
+  },
+  state() {
+    if (!World.inWorld()) return 'Out of game';
+    if (World.isDead()) return 'Dead';
+    return Hunt.running ? 'Hunting' : 'Stopped';
+  },
+  text(value) { return String(value ?? '').slice(0, 1024); },
+  message() {
+    const d = Stats.display(), s = Stats.session, level = World.gp?.progression?.level;
+    const fields = [
+      ['Session', this.state()],
+      ['Character', (World.charName || 'No character') + (Number.isInteger(level) ? ' · level ' + level : '')],
+      ['Hunting time', d.time],
+      ['XP gained', d.xp],
+      ['XP / hour', d.rate],
+      ['Net gold', d.gold],
+      ['Confirmed kills', d.kills],
+      ['Deaths', d.deaths],
+      ['Potions used', d.potions],
+      ['Items picked up', d.items],
+      ['SoX found', d.sox],
+      ['Star / Moon / Sun', s.star + ' / ' + s.moon + ' / ' + s.sun],
+    ].map(([name, value]) => ({ name, value: this.text(value), inline: true })).filter(field => field.value);
+    return { username: 'nixxane bot', allowed_mentions: { parse: [] },
+      embeds: [{ title: this.text((World.charName || 'No character') + ' — session report').slice(0, 256), color: REPORT_COLORS[this.state()] ?? REPORT_COLORS.Stopped,
+        timestamp: new Date().toISOString(), fields: fields.slice(0, 25),
+        footer: { text: this.text('nixxane bot ' + VERSION + ' · every ' + this.intervalMs() / 60000 + ' min') } }] };
+  },
+  clock(ms) {
+    const seconds = Math.max(0, Math.ceil(ms / 1000));
+    return Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0');
+  },
+  ago(ms) {
+    const seconds = Math.max(0, Math.round(ms / 1000));
+    if (seconds < 60) return 'less than a minute ago';
+    return seconds < 3600 ? Math.floor(seconds / 60) + ' min ago' : Math.floor(seconds / 3600) + ' h ago';
+  },
+  // Cheap enough for the panel: called by update() every 500 ms.
+  status() {
+    if (Settings.profile.sessionReport.on !== true) return this.lastError ? 'Off: ' + this.lastError + '.' : 'Off.';
+    if (typeof W.fetch !== 'function') return 'This browser cannot send reports.';
+    if (!this.webhook()) return 'No webhook saved.';
+    if (this.sending) return 'Sending…';
+    const next = !this.nextAt ? 'Waiting to send.' : this.nextAt > now() ? 'Next in ' + this.clock(this.nextAt - now()) + '.' : 'Next report due.';
+    if (this.lastError) return 'Last report failed: ' + this.lastError + '. ' + (this.nextAt > now() ? 'Next try in ' + this.clock(this.nextAt - now()) + '.' : 'Retrying shortly.');
+    if (!this.lastAt) return 'No report sent yet. ' + next;
+    return 'Last report ' + this.ago(now() - this.lastAt) + '. ' + next;
+  },
+  // The panel's timer. Enabling arms one full interval; lowering the interval takes effect on the next tick.
+  // A rate-limit hold always wins over the interval, and a disable does not throw it away.
+  tick() {
+    if (this.sending) return;
+    if (!this.enabled()) { this.nextAt = 0; return; }
+    if (!this.nextAt) { this.nextAt = Math.max(now() + this.intervalMs(), this.holdUntil); return; }
+    if (this.nextAt - now() > this.intervalMs()) this.nextAt = Math.max(now() + this.intervalMs(), this.holdUntil);
+    if (now() < this.nextAt) return;
+    // Move the next slot before sending, so a failure or a rate limit can never retry early.
+    this.nextAt = now() + this.intervalMs();
+    void this.send(false).catch(() => {});
+  },
+  async send(manual) {
+    const base = this.webhook();
+    if (!base) { if (manual) UI.toast('Save a Discord webhook address first.', 'warn'); return false; }
+    if (this.sending) { if (manual) UI.toast('A session report is already being sent.', 'info', 3000); return false; }
+    if (typeof W.fetch !== 'function') { if (manual) UI.toast('This browser cannot send Discord reports.', 'warn'); return false; }
+    const url = base + (base.includes('?') ? '&' : '?') + 'wait=true';
+    this.sending = true;
+    let timer;
+    try {
+      const controller = new (W.AbortController || AbortController)();
+      timer = setTimeout(() => controller.abort(), 20000);
+      const response = await W.fetch(url, { method: 'POST', mode: 'cors', credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(this.message()), signal: controller.signal });
+      if (response.ok) {
+        this.lastAt = now(); this.lastError = ''; this.holdUntil = 0; this.nextAt = now() + this.intervalMs();
+        if (manual) UI.toast('Test report sent to Discord.');
+        return true;
+      }
+      if (response.status === 429) {
+        let seconds = NaN;
+        try { seconds = Number((await response.json())?.retry_after); } catch {}
+        if (!Number.isFinite(seconds) || seconds <= 0) seconds = Number(response.headers?.get?.('Retry-After'));
+        const wait = clamp(Number.isFinite(seconds) && seconds > 0 ? seconds : 60, 1, 900);
+        this.lastError = 'Discord asked to wait ' + Math.ceil(wait) + ' s';
+        this.holdUntil = now() + wait * 1000;
+        this.nextAt = this.holdUntil;
+        if (manual) UI.toast('Discord asked the bot to wait before the next report.', 'info', 4000);
+        return false;
+      }
+      if (response.status >= 400 && response.status < 500) {
+        // 401/403/404 mean the address itself is gone; 400 and the rest mean Discord refused this report.
+        // Retrying any of them on the interval would repeat the refusal forever.
+        const reason = [401, 403, 404].includes(response.status) ? 'Discord refused the webhook' : 'Discord refused the report';
+        Settings.profile.sessionReport.on = false;
+        Settings.saveProfile();
+        this.lastError = reason;
+        this.nextAt = 0;
+        UI.toast('Discord reports stopped: ' + reason + '. Check the address.', 'warn');
+        Activity.emit({ category: 'session', code: 'session-report-rejected', level: 'warn', text: 'Discord reports stopped: ' + reason + '.' });
+        return false;
+      }
+      return this.failed('Discord answered ' + response.status, manual);
+    } catch {
+      return this.failed('No answer from Discord', manual);
+    } finally {
+      clearTimeout(timer);
+      this.sending = false;
+    }
+  },
+  // Short reasons only: never the address, the token or a response body.
+  failed(reason, manual) {
+    this.lastError = reason;
+    this.nextAt = Math.max(now() + this.intervalMs(), this.holdUntil);
+    Activity.emit({ category: 'session', code: 'session-report-failed', level: 'warn', text: 'Discord session report failed: ' + reason + '.' });
+    if (manual) UI.toast('Discord report failed: ' + reason + '.', 'warn');
+    return false;
+  },
+  // A world reset clears the schedule and the error; a rate-limit hold expires on its own.
+  reset() { this.nextAt = 0; this.lastError = ''; },
+};
+bus.on('reset', () => Reporter.reset());
 
 
 // Item rules: what to do with each item of the game's catalogue, like sBot's item list.
@@ -18828,7 +18978,7 @@ const UI = {
     } else if (this.current === 'Wardrobe') {
       LeanWardrobe.draw(this.pane);
     } else {
-      this.sections('settingsStats', 'settingsBehaviour', 'settingsObstacles', 'settingsAntiStuck', 'settingsMastery', 'settingsStatPoints', 'settingsProfiles', 'settingsShare', 'settingsReports', 'settingsActivity');
+      this.sections('settingsStats', 'settingsBehaviour', 'settingsObstacles', 'settingsAntiStuck', 'settingsMastery', 'settingsStatPoints', 'settingsProfiles', 'settingsShare', 'settingsReports', 'settingsSessionReport', 'settingsActivity');
     }
     this.balance();
     this.update();
@@ -18855,7 +19005,7 @@ const UI = {
       { name: 'Auto alchemy', icon: 'action\\icon_cha_alchemy', pages: ['Alchemy'], draw() { Alchemy.draw(); } },
       { name: 'Stall', icon: 'action\\icon_cha_shop', pages: ['Stall'], draw() { Stall.draw(); } },
       { name: 'Extra', icon: 'action\\icon_cha_helper', pages: ['Settings'], sections: [
-        ['settingsStats'], ['settingsMastery'], ['settingsStatPoints'], ['settingsProfiles'], ['settingsShare'], ['settingsReports'], ['settingsActivity']] },
+        ['settingsStats'], ['settingsMastery'], ['settingsStatPoints'], ['settingsProfiles'], ['settingsShare'], ['settingsReports'], ['settingsSessionReport', 'Discord reports'], ['settingsActivity']] },
       { name: 'Map', pages: ['Map'], draw() { LeanMap.draw(this.pane); } },
       { name: 'Auto trade', icon: 'action\\icon_cha_shop', pages: ['Trade'], draw() { Trade.draw(); } },
       { name: 'Wardrobe', icon: 'action\\icon_cha_shop', pages: ['Wardrobe'], draw() { LeanWardrobe.draw(this.pane); } },
@@ -19540,6 +19690,23 @@ const UI = {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
       host.append(this.group('Bug reports', el('p', 'Preview diagnostics and optionally a screenshot, then send them to the developer. Nothing sends automatically.', 'muted'), this.button('Send bug report', () => Reports.open())));
   },
+  section_settingsSessionReport(host) {
+    const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
+      const input = el('input'); input.type = 'text'; input.spellcheck = false; input.autocomplete = 'off';
+      input.placeholder = 'https://discord.com/api/webhooks/…'; input.value = Reporter.webhook();
+      input.addEventListener('change', () => {
+        if (Reporter.setWebhook(input.value)) { input.value = Reporter.webhook(); Reporter.tick(); }
+        else { input.value = Reporter.webhook(); UI.toast('That address could not be saved. Check it, and that this browser allows storage.', 'warn'); }
+      });
+      this.reportNote = el('p', Reporter.status(), 'muted');
+      host.append(this.group('Discord session report',
+        this.check('Post session totals to a Discord webhook', () => Settings.profile.sessionReport.on, v => { Settings.profile.sessionReport.on = v; Reporter.tick(); }),
+        this.number('Every (minutes)', () => Settings.profile.sessionReport.minutes, v => Settings.profile.sessionReport.minutes = v, 1, 60),
+        this.field('Webhook URL', input),
+        this.button('Send test report', () => { void Reporter.send(true).catch(() => {}); }),
+        this.reportNote,
+        el('p', 'One message per interval with the current session totals. It keeps reporting while the bot is stopped and says when you are dead or out of the game. The address is kept in this browser only and is not part of shared settings or backups.', 'muted')));
+  },
   section_settingsActivity(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
       this.logs = this.activityLog('Settings activity');
@@ -19712,6 +19879,7 @@ const UI = {
     if (this.stuckNote) this.stuckNote.textContent = AntiStuck.status();
     if (this.autoStartNote) this.autoStartNote.textContent = AutoStart.status();
     if (this.retryNote) this.retryNote.textContent = Retry.status();
+    if (this.reportNote?.isConnected) this.reportNote.textContent = Reporter.status();
     if (this.is('Party') && Trace.note) Trace.note.textContent = Trace.status();
     if (Lure.note) Lure.note.textContent = Lure.status();
     if (this.is('Party') && this.partyNote) {
@@ -20665,7 +20833,7 @@ function boot() {
     }
   }, true);
   Ticker.start(() => Controller.tick(), 100);
-  setInterval(() => { Wardrobe.tick(); UI.update(); }, 500);
+  setInterval(() => { Wardrobe.tick(); Reporter.tick(); UI.update(); }, 500);
   W.SROLean = { version: VERSION, stats: Stats, updates: Updates, diagnostics: Diagnostics, reports: Reports, alchemy: Alchemy, buffGear: BuffGear, world: World, settings: Settings, hunt: Hunt, loot: Loot, speedScroll: SpeedScroll, repairHammer: RepairHammer, resurrect: Resurrect, stall: Stall, quest: Quest,
     restock: Restock, town: Town, walkBack: WalkBack, travel: Travel, antiStuck: AntiStuck, chase: Chase, trap: Trap, autoMastery: AutoMastery, statPoints: StatPoints, share: ProfileShare, trace: Trace, setup: Setup, reconnect: Reconnect, petPotion: PetPotion, petAttack: PetAttack, mall: MallProbe, mallBuyer: MallBuyer, scrolls: ScrollBuff, navigation: Navigation, route: Route, wardrobe: Wardrobe, wardrobeData: WdData, learned: Learned, controller: Controller, ui: UI, activity: Activity, map: LeanMap, render: RenderControl, support: Support, items: ItemRules, stop: stopAll, log: Log };
   Log.info('NIX ready. F8 starts/stops; F7 folds; F6 or the × minimises and restores; Shift+F7 hides/shows the window.');

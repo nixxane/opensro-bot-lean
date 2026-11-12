@@ -27,6 +27,7 @@ The **Setup** page checks all this for you and fixes the next missing thing.
 - Auto trade: buy specialty goods in one town, walk to another and sell them (needs a trader suit and a transport)
 - Automatic reconnect, optional start on entering the game, walk-back after death, anti-stuck, obstacle detours
 - Minimap, session stats, wardrobe, share and import settings
+- Discord session reports: post the current session totals to your own webhook every few minutes
 
 Settings are saved per character.
 

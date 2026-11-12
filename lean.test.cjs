@@ -3,11 +3,11 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(__dirname + '/bot.lean.user.js', 'utf8');
 const isolated = source.slice(0, source.lastIndexOf('installWorkerHook();')) +
-  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, Leveling, ScrollBuff, boot, Ticker, Sound, LeanMap};\n})();';
+  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Reporter, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, Leveling, ScrollBuff, boot, Ticker, Sound, LeanMap};\n})();';
 function fixture(document, sharedStorage) {
   let time = 100000;
   const storage = sharedStorage || new Map(), commands = [], notices = [], intervals = [], timers = [];
-  const win = { addEventListener() {}, localStorage: { getItem: k => storage.get(k) ?? null, setItem: (k, v) => storage.set(k, v) } };
+  const win = { addEventListener() {}, localStorage: { getItem: k => storage.get(k) ?? null, setItem: (k, v) => storage.set(k, v), removeItem: k => { storage.delete(k); } } };
   const context = { window: win, document, performance: { now: () => time }, console,
     setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimeout() {}, clearInterval() {}, setInterval(fn, ms) { intervals.push({ fn, ms }); }, AbortController, Blob, FormData, URL, Map, Set, Date, ArrayBuffer, DataView, atob };
   vm.createContext(context); vm.runInContext(isolated, context);
@@ -8903,6 +8903,314 @@ async function updateTests() {
     assert.equal(f.Stats.session.xp,38n);assert.equal(f.Stats.pendingXP.length,0);assert.equal(f.Stats.display().xp,'38');
     assert.equal(f.storage.size,0);assert.equal(f.commands.length,0);
   });
+
+  // ---- Discord session reports (lean-reporter.js) ----
+  const SESSION_WEBHOOK = 'https://discord.com/api/webhooks/123456789012345678/abcDEFghijKLMNOPQRSTUVWXYZ0123456789';
+  const SESSION_TOKEN = 'abcDEFghijKLMNOPQRSTUVWXYZ0123456789';
+  function reporterFixture() {
+    const f = fixture();
+    f.Settings.profile.sessionReport.on = true;
+    f.World.charName = 'Tester'; f.World.gp.progression.level = 40;
+    assert.equal(f.Reporter.setWebhook(SESSION_WEBHOOK), true);
+    return f;
+  }
+  // The fixture's setTimeout never fires, so tests only wait for promise continuations.
+  async function flushReporter(f) { for (let n = 0; n < 50 && f.Reporter.sending; n++) await Promise.resolve(); }
+
+  test('session reports are off by default and their settings survive a profile reload', () => {
+    const f = fixture();
+    assert.deepEqual(plain(f.Settings.profile.sessionReport), { on: false, minutes: 3 });
+    const saved = plain(f.Settings.profile); saved.sessionReport = { on: true, minutes: 7 };
+    assert.deepEqual(plain(f.botProfile(JSON.parse(JSON.stringify(saved))).sessionReport), { on: true, minutes: 7 });
+  });
+
+  test('session report minutes outside 1 to 60 fall back to the three-minute default', () => {
+    const f = fixture();
+    for (const minutes of [0, 61, 2.5, 'x', null, undefined]) {
+      assert.equal(f.botProfile({ sessionReport: { on: true, minutes } }).sessionReport.minutes, 3, String(minutes));
+    }
+    const kept = f.botProfile({ sessionReport: { on: true, minutes: 60 } });
+    assert.deepEqual(plain(kept.sessionReport), { on: true, minutes: 60 });
+  });
+
+  test('the Discord webhook address is validated before it replaces the saved one', () => {
+    const f = fixture();
+    assert.equal(f.Reporter.webhook(), '');
+    assert.equal(f.Reporter.setWebhook(SESSION_WEBHOOK), true);
+    assert.equal(f.Reporter.webhook(), SESSION_WEBHOOK);
+    for (const bad of ['http://discord.com/api/webhooks/123456789012345678/' + 'a'.repeat(24),
+      'https://example.com/api/webhooks/123456789012345678/' + 'a'.repeat(24),
+      'https://discord.com/api/webhooks/12345/short', 'not-a-webhook']) assert.equal(f.Reporter.setWebhook(bad), false, bad);
+    assert.equal(f.Reporter.webhook(), SESSION_WEBHOOK, 'a rejected address keeps the old one');
+    assert.equal(f.Reporter.setWebhook('  ' + SESSION_WEBHOOK + '  '), true);
+    assert.equal(f.Reporter.webhook(), SESSION_WEBHOOK, 'it is trimmed');
+    assert.equal(f.Reporter.setWebhook('https://canary.discord.com/api/webhooks/123456789012345678/' + 'a'.repeat(24)), true);
+    assert.equal(f.Reporter.setWebhook('https://ptb.discordapp.com/api/webhooks/123456789012345678/' + 'a'.repeat(24)), true);
+    assert.equal(f.Reporter.setWebhook('https://discord.com/api/v10/webhooks/1234567890123456789/' + 'b'.repeat(24)), true, 'a versioned API path is accepted');
+    assert.equal(f.Reporter.setWebhook(''), true); assert.equal(f.Reporter.webhook(), '');
+  });
+
+  test('a disabled session report never fetches, even long after an interval', () => {
+    const f = fixture(); let calls = 0;
+    f.win.fetch = () => { calls++; return Promise.resolve({ ok: true, status: 200 }); };
+    f.Reporter.setWebhook(SESSION_WEBHOOK);
+    f.Reporter.tick(); f.advance(6 * 3600000); f.Reporter.tick();
+    assert.equal(calls, 0, 'off by default');
+    f.Settings.profile.sessionReport.on = true; f.Reporter.tick();
+    f.Settings.profile.sessionReport.on = false; f.advance(6 * 3600000); f.Reporter.tick();
+    assert.equal(calls, 0, 'switched off after being armed');
+  });
+
+  test('an enabled session report posts one Discord message after one interval', async () => {
+    const f = reporterFixture(), calls = [];
+    f.win.fetch = async (url, options) => { calls.push({ url, options }); return { ok: true, status: 200, json: async () => ({ id: '9', channel_id: '8' }) }; };
+    f.Reporter.tick(); assert.equal(calls.length, 0, 'the first tick only arms one interval');
+    f.advance(3 * 60000); f.Reporter.tick();
+    assert.equal(calls.length, 1, 'exactly one request');
+    const { url, options } = calls[0];
+    assert.equal(options.method, 'POST'); assert.equal(options.mode, 'cors'); assert.equal(options.credentials, 'omit');
+    assert.equal(options.headers['Content-Type'], 'application/json'); assert.ok(options.signal);
+    assert.ok(url.startsWith(SESSION_WEBHOOK)); assert.ok(url.endsWith('?wait=true'));
+    assert.ok(f.timers.some(t => t.ms === 20000), 'a 20 s abort timer is armed');
+    const body = JSON.parse(options.body), embed = body.embeds[0], field = name => embed.fields.find(x => x.name === name);
+    assert.equal(body.username, 'nixxane bot'); assert.deepEqual(body.allowed_mentions, { parse: [] });
+    assert.equal(body.embeds.length, 1); assert.ok(embed.fields.length > 0 && embed.fields.length <= 25);
+    assert.equal(embed.color, 0xf1c40f, 'a stopped bot is yellow'); assert.ok(embed.timestamp);
+    for (const name of ['Session', 'Character', 'Hunting time', 'XP gained', 'XP / hour', 'Net gold', 'Confirmed kills', 'Deaths', 'Potions used', 'Items picked up', 'SoX found', 'Star / Moon / Sun']) assert.ok(field(name), name);
+    assert.equal(field('Session').value, 'Stopped'); assert.equal(field('Character').value, 'Tester · level 40');
+    assert.equal(field('Star / Moon / Sun').value, '0 / 0 / 0');
+    for (const item of embed.fields) assert.ok(item.value.length > 0 && item.value.length <= 1024, item.name);
+    for (const item of embed.fields) assert.equal(item.inline, true, item.name + ' is inline');
+    assert.equal(options.body.includes(SESSION_WEBHOOK), false); assert.equal(options.body.includes(SESSION_TOKEN), false, 'the token stays out of the message');
+    await flushReporter(f);
+    assert.equal(f.Reporter.sending, false); assert.ok(f.Reporter.lastAt > 0); assert.equal(f.Reporter.lastError, '');
+    assert.equal(f.notices.length, 0, 'a periodic success makes no toast');
+    f.Hunt.running = true; assert.equal(f.Reporter.state(), 'Hunting');
+    f.World.ents.get(1).appearanceState = [2, 0, 0]; assert.equal(f.Reporter.state(), 'Dead');
+    f.World.gp = null; assert.equal(f.Reporter.state(), 'Out of game');
+  });
+
+  test('a session report keeps its interval and never overlaps itself', async () => {
+    const f = reporterFixture(); let calls = 0, release;
+    f.win.fetch = () => { calls++; return new Promise(done => { release = done; }); };
+    f.Reporter.tick(); assert.equal(calls, 0);
+    f.advance(3 * 60000); f.Reporter.tick(); assert.equal(calls, 1);
+    f.advance(3 * 60000); f.Reporter.tick(); assert.equal(calls, 1, 'a send is already in flight');
+    release({ ok: true, status: 200, json: async () => ({}) }); await flushReporter(f);
+    f.Reporter.tick(); assert.equal(calls, 1, 'the next interval has not passed yet');
+    f.advance(3 * 60000); f.Reporter.tick(); assert.equal(calls, 2);
+  });
+
+  test('a 429 reply waits retry_after and keeps session reports on', async () => {
+    const f = reporterFixture(); let calls = 0;
+    f.win.fetch = async () => { calls++; return { ok: false, status: 429, json: async () => ({ retry_after: 300 }), headers: { get: () => null } }; };
+    f.Reporter.tick(); f.advance(3 * 60000); f.Reporter.tick(); assert.equal(calls, 1);
+    await flushReporter(f);
+    assert.equal(f.Reporter.sending, false); assert.equal(f.Settings.profile.sessionReport.on, true);
+    assert.match(f.Reporter.status(), /asked to wait/);
+    assert.equal(f.Reporter.holdUntil, f.Reporter.nextAt, 'the rate-limit hold owns the next slot');
+    f.Reporter.tick(); assert.equal(calls, 1, 'the hold is not pulled in by the next tick');
+    f.advance(4 * 60000); f.Reporter.tick(); assert.equal(calls, 1, 'no retry before the five-minute wait');
+    f.advance(60000); f.Reporter.tick(); assert.equal(calls, 2, 'exactly one retry once the wait is over');
+  });
+
+  test('a refused webhook turns session reports off but keeps the address for editing', async () => {
+    const f = reporterFixture();
+    f.win.fetch = async () => ({ ok: false, status: 404, json: async () => ({}) });
+    f.Reporter.tick(); f.advance(3 * 60000); f.Reporter.tick();
+    await flushReporter(f);
+    assert.equal(f.Settings.profile.sessionReport.on, false);
+    assert.equal(f.Reporter.webhook(), SESSION_WEBHOOK, 'the address is kept so it can be corrected');
+    assert.ok(f.notices.some(n => /refused the webhook/.test(n)));
+    assert.ok(f.Log.lines.some(l => l.code === 'session-report-rejected'));
+    assert.equal(JSON.stringify([f.notices, f.Log.lines.map(l => l.text)]).includes(SESSION_WEBHOOK), false);
+    assert.equal(f.Reporter.status(), 'Off: Discord refused the webhook.');
+  });
+
+  test('a failed session report stays on and reports only a short reason', async () => {
+    const f = reporterFixture();
+    f.win.fetch = () => Promise.reject(new TypeError('Failed to fetch'));
+    f.Reporter.tick(); f.advance(3 * 60000); f.Reporter.tick();
+    await flushReporter(f);
+    assert.equal(f.Settings.profile.sessionReport.on, true);
+    assert.ok(f.Log.lines.some(l => l.code === 'session-report-failed'));
+    const status = f.Reporter.status();
+    assert.match(status, /No answer from Discord/);
+    assert.equal(status.includes(SESSION_WEBHOOK), false); assert.equal(status.includes(SESSION_TOKEN), false);
+    assert.equal(status.includes('Failed to fetch'), false, 'the raw error is not shown');
+    assert.equal(JSON.stringify(f.Log.lines.map(l => l.text)).includes(SESSION_TOKEN), false);
+  });
+
+  test('session report status is a short line in every idle state without the address', () => {
+    const f = fixture();
+    const off = f.Reporter.status(); assert.equal(off, 'Off.');
+    f.win.fetch = async () => ({ ok: true, status: 200 });
+    f.Settings.profile.sessionReport.on = true;
+    assert.equal(f.Reporter.status(), 'No webhook saved.');
+    f.Reporter.setWebhook(SESSION_WEBHOOK);
+    const idle = f.Reporter.status(); assert.match(idle, /No report sent yet/); assert.match(idle, /Waiting to send/);
+    f.Reporter.tick(); f.advance(60000);
+    const scheduled = f.Reporter.status(); assert.match(scheduled, /^No report sent yet\. Next in 2:00\.$/);
+    for (const text of [off, idle, scheduled]) assert.equal(text.includes(SESSION_WEBHOOK), false);
+    f.Reporter.reset(); assert.equal(f.Reporter.nextAt, 0); assert.equal(f.Reporter.lastError, '');
+  });
+
+  test('a saved webhook never appears in shares, backups, diagnostics, the log or activity', async () => {
+    const doc = { documentElement: { append() {} }, createElement: () => ({ style: {}, setAttribute() {}, addEventListener() {}, click() {} }) };
+    const f = fixture(doc);
+    f.World.charName = 'Tester';
+    assert.equal(f.Reporter.setWebhook(SESSION_WEBHOOK), true);
+    const backupJson = JSON.stringify({ app: 'sro-bot-lean', version: 'test', profile: f.Settings.profile }, null, 2);
+    let exported = '';
+    const realCreate = URL.createObjectURL;
+    URL.createObjectURL = blob => { exported = blob; return 'blob:test'; };
+    try { f.UI.exportBackup(); } finally { URL.createObjectURL = realCreate; }
+    assert.ok(exported && typeof exported.text === 'function', 'the export produced a blob');
+    const surfaces = {
+      'share code': f.ProfileShare.text(true),
+      'full backup text': f.ProfileShare.text(false),
+      profile: JSON.stringify(f.Settings.profile),
+      diagnostics: f.Diagnostics.report(),
+      backup: backupJson,
+      'exported backup': await exported.text(),
+      log: JSON.stringify(f.Log.lines),
+      activity: JSON.stringify(f.Activity.visible(false)),
+    };
+    for (const [name, text] of Object.entries(surfaces)) {
+      assert.equal(String(text).includes(SESSION_WEBHOOK), false, name + ' must not carry the address');
+      assert.equal(String(text).includes(SESSION_TOKEN), false, name + ' must not carry the token');
+    }
+  });
+
+  test('a rate-limit hold survives a world reset', async () => {
+    const f = reporterFixture(); let calls = 0;
+    f.win.fetch = async () => { calls++; return { ok: false, status: 429, json: async () => ({ retry_after: 300 }), headers: { get: () => null } }; };
+    f.Reporter.tick(); f.advance(3 * 60000); f.Reporter.tick(); await flushReporter(f);
+    assert.equal(calls, 1); const hold = f.Reporter.holdUntil;
+    assert.ok(hold > 0);
+    f.bus.emit('reset');
+    assert.equal(f.Reporter.nextAt, 0); assert.equal(f.Reporter.holdUntil, hold, 'a reset keeps the hold');
+    f.Reporter.tick();
+    f.advance(4 * 60000); f.Reporter.tick(); assert.equal(calls, 1, 'no retry before the hold expires');
+    f.advance(60000); f.Reporter.tick(); assert.equal(calls, 2, 'reports resume after the hold');
+  });
+
+  test('a rate-limit hold survives a failed manual send', async () => {
+    const f = reporterFixture(); let calls = 0, mode = 'limit';
+    f.win.fetch = () => {
+      calls++;
+      if (mode === 'limit') return Promise.resolve({ ok: false, status: 429, json: async () => ({ retry_after: 300 }), headers: { get: () => null } });
+      return Promise.reject(new TypeError('Failed to fetch'));
+    };
+    f.Reporter.tick(); f.advance(3 * 60000); f.Reporter.tick(); await flushReporter(f);
+    assert.equal(calls, 1); const hold = f.Reporter.holdUntil;
+    mode = 'fail';
+    assert.equal(await f.Reporter.send(true), false);
+    assert.equal(calls, 2, 'the manual test still goes out');
+    assert.equal(f.Reporter.lastError, 'No answer from Discord');
+    assert.equal(f.Reporter.nextAt, hold, 'the failed manual test cannot schedule inside the hold');
+    f.advance(4 * 60000); f.Reporter.tick(); assert.equal(calls, 2, 'no tick retry before the hold');
+    f.advance(60000); f.Reporter.tick(); assert.equal(calls, 3, 'the next tick after the hold sends');
+  });
+
+  test('a refused report switches session reports off, while a server error keeps retrying', async () => {
+    const refused = async (status, expected) => {
+      const f = reporterFixture();
+      f.win.fetch = async () => ({ ok: false, status });
+      f.Reporter.tick(); f.advance(3 * 60000); f.Reporter.tick();
+      await flushReporter(f);
+      assert.equal(f.Settings.profile.sessionReport.on, false, String(status));
+      assert.equal(f.Reporter.lastError, expected, String(status));
+      assert.ok(f.notices.some(n => n.includes(expected)), String(status));
+      assert.ok(f.Log.lines.some(l => l.code === 'session-report-rejected' && l.text.includes(expected)), String(status));
+      assert.equal(f.Reporter.status(), 'Off: ' + expected + '.');
+    };
+    await refused(400, 'Discord refused the report');
+    await refused(403, 'Discord refused the webhook');
+    await refused(404, 'Discord refused the webhook');
+    const f = reporterFixture(); let calls = 0;
+    f.win.fetch = async () => { calls++; return { ok: false, status: 500 }; };
+    f.Reporter.tick(); f.advance(3 * 60000); f.Reporter.tick(); await flushReporter(f);
+    assert.equal(calls, 1); assert.equal(f.Settings.profile.sessionReport.on, true);
+    assert.equal(f.Reporter.lastError, 'Discord answered 500');
+    f.advance(3 * 60000); f.Reporter.tick(); assert.equal(calls, 2, 'a 5xx retries on the next interval');
+  });
+
+  test('a manual session report needs a webhook and never overlaps a send', async () => {
+    const f = fixture(); let calls = 0, release;
+    f.win.fetch = () => { calls++; return new Promise(done => { release = done; }); };
+    f.Settings.profile.sessionReport.on = true;
+    assert.equal(await f.Reporter.send(true), false);
+    assert.equal(calls, 0); assert.ok(f.notices.some(n => /Save a Discord webhook address/.test(n)));
+    f.Reporter.setWebhook(SESSION_WEBHOOK);
+    const pending = f.Reporter.send(true);
+    assert.equal(calls, 1);
+    assert.equal(await f.Reporter.send(true), false, 'the second test does not start');
+    assert.equal(calls, 1); assert.ok(f.notices.some(n => /already being sent/.test(n)));
+    release({ ok: true, status: 200 });
+    assert.equal(await pending, true);
+    assert.ok(f.notices.some(n => /Test report sent to Discord/.test(n)));
+  });
+
+  test('session reports keep coming out of game and dead, and say so', async () => {
+    const out = reporterFixture(), seen = [];
+    out.win.fetch = async (url, options) => { seen.push(JSON.parse(options.body)); return { ok: true, status: 200 }; };
+    out.World.gp = null;
+    out.Reporter.tick(); out.advance(3 * 60000); out.Reporter.tick(); await flushReporter(out);
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].embeds[0].fields.find(x => x.name === 'Session').value, 'Out of game');
+    const dead = reporterFixture(), deadSeen = [];
+    dead.win.fetch = async (url, options) => { deadSeen.push(JSON.parse(options.body)); return { ok: true, status: 200 }; };
+    dead.World.ents.get(1).appearanceState = [2, 0, 0];
+    dead.Reporter.tick(); dead.advance(3 * 60000); dead.Reporter.tick(); await flushReporter(dead);
+    assert.equal(deadSeen.length, 1);
+    assert.equal(deadSeen[0].embeds[0].fields.find(x => x.name === 'Session').value, 'Dead');
+  });
+
+  test('a very long character name is capped in the report', async () => {
+    const f = reporterFixture(); let body;
+    f.World.charName = 'N'.repeat(300);
+    f.win.fetch = async (url, options) => { body = JSON.parse(options.body); return { ok: true, status: 200 }; };
+    f.Reporter.tick(); f.advance(3 * 60000); f.Reporter.tick(); await flushReporter(f);
+    assert.equal(body.embeds.length, 1);
+    const embed = body.embeds[0], serialised = JSON.stringify(body);
+    assert.ok(embed.title.length <= 256, 'title length ' + embed.title.length);
+    for (const item of embed.fields) assert.ok(item.value.length <= 1024, item.name);
+    assert.ok(serialised.length < 6000, 'serialised message length ' + serialised.length);
+  });
+
+  test('a poisoned webhook value in storage is never used', () => {
+    const f = fixture(); let calls = 0;
+    f.win.fetch = () => { calls++; return Promise.resolve({ ok: true, status: 200 }); };
+    f.storage.set('sroBotLean:v1:sessionWebhook', JSON.stringify('https://evil.example/hook'));
+    assert.equal(f.Reporter.webhook(), '');
+    f.Settings.profile.sessionReport.on = true;
+    f.Reporter.tick(); f.advance(6 * 3600000); f.Reporter.tick();
+    assert.equal(calls, 0);
+    assert.equal(f.Reporter.status(), 'No webhook saved.');
+  });
+
+  test('an enabled report with no webhook never posts', () => {
+    const f = fixture(); let calls = 0;
+    f.win.fetch = () => { calls++; return Promise.resolve({ ok: true, status: 200 }); };
+    f.Settings.profile.sessionReport.on = true;
+    f.Reporter.tick(); f.advance(6 * 3600000); f.Reporter.tick();
+    assert.equal(calls, 0);
+  });
+
+  test('a disable and re-enable during a rate-limit hold cannot post early', async () => {
+    const f = reporterFixture(); let calls = 0;
+    f.win.fetch = async () => { calls++; return { ok: false, status: 429, json: async () => ({ retry_after: 300 }), headers: { get: () => null } }; };
+    f.Reporter.tick(); f.advance(3 * 60000); f.Reporter.tick(); await flushReporter(f);
+    assert.equal(calls, 1); const hold = f.Reporter.holdUntil;
+    f.Settings.profile.sessionReport.on = false;
+    f.Reporter.tick();
+    assert.equal(f.Reporter.nextAt, 0); assert.equal(f.Reporter.holdUntil, hold, 'a disable keeps the hold');
+    f.Settings.profile.sessionReport.on = true; f.Reporter.tick();
+    f.advance(4 * 60000); f.Reporter.tick(); assert.equal(calls, 1, 'no post while the hold is active');
+    f.advance(60000); f.Reporter.tick(); assert.equal(calls, 2, 'the hold still ends when Discord said');
+  });
+
   await Promise.all(asyncTests);
   console.log('Total integration tests: ' + passed);
 }

@@ -589,7 +589,7 @@ const UI = {
     } else if (this.current === 'Wardrobe') {
       LeanWardrobe.draw(this.pane);
     } else {
-      this.sections('settingsStats', 'settingsBehaviour', 'settingsObstacles', 'settingsAntiStuck', 'settingsMastery', 'settingsStatPoints', 'settingsProfiles', 'settingsShare', 'settingsReports', 'settingsActivity');
+      this.sections('settingsStats', 'settingsBehaviour', 'settingsObstacles', 'settingsAntiStuck', 'settingsMastery', 'settingsStatPoints', 'settingsProfiles', 'settingsShare', 'settingsReports', 'settingsSessionReport', 'settingsActivity');
     }
     this.balance();
     this.update();
@@ -616,7 +616,7 @@ const UI = {
       { name: 'Auto alchemy', icon: 'action\\icon_cha_alchemy', pages: ['Alchemy'], draw() { Alchemy.draw(); } },
       { name: 'Stall', icon: 'action\\icon_cha_shop', pages: ['Stall'], draw() { Stall.draw(); } },
       { name: 'Extra', icon: 'action\\icon_cha_helper', pages: ['Settings'], sections: [
-        ['settingsStats'], ['settingsMastery'], ['settingsStatPoints'], ['settingsProfiles'], ['settingsShare'], ['settingsReports'], ['settingsActivity']] },
+        ['settingsStats'], ['settingsMastery'], ['settingsStatPoints'], ['settingsProfiles'], ['settingsShare'], ['settingsReports'], ['settingsSessionReport', 'Discord reports'], ['settingsActivity']] },
       { name: 'Map', pages: ['Map'], draw() { LeanMap.draw(this.pane); } },
       { name: 'Auto trade', icon: 'action\\icon_cha_shop', pages: ['Trade'], draw() { Trade.draw(); } },
       { name: 'Wardrobe', icon: 'action\\icon_cha_shop', pages: ['Wardrobe'], draw() { LeanWardrobe.draw(this.pane); } },
@@ -1301,6 +1301,23 @@ const UI = {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
       host.append(this.group('Bug reports', el('p', 'Preview diagnostics and optionally a screenshot, then send them to the developer. Nothing sends automatically.', 'muted'), this.button('Send bug report', () => Reports.open())));
   },
+  section_settingsSessionReport(host) {
+    const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
+      const input = el('input'); input.type = 'text'; input.spellcheck = false; input.autocomplete = 'off';
+      input.placeholder = 'https://discord.com/api/webhooks/…'; input.value = Reporter.webhook();
+      input.addEventListener('change', () => {
+        if (Reporter.setWebhook(input.value)) { input.value = Reporter.webhook(); Reporter.tick(); }
+        else { input.value = Reporter.webhook(); UI.toast('That address could not be saved. Check it, and that this browser allows storage.', 'warn'); }
+      });
+      this.reportNote = el('p', Reporter.status(), 'muted');
+      host.append(this.group('Discord session report',
+        this.check('Post session totals to a Discord webhook', () => Settings.profile.sessionReport.on, v => { Settings.profile.sessionReport.on = v; Reporter.tick(); }),
+        this.number('Every (minutes)', () => Settings.profile.sessionReport.minutes, v => Settings.profile.sessionReport.minutes = v, 1, 60),
+        this.field('Webhook URL', input),
+        this.button('Send test report', () => { void Reporter.send(true).catch(() => {}); }),
+        this.reportNote,
+        el('p', 'One message per interval with the current session totals. It keeps reporting while the bot is stopped and says when you are dead or out of the game. The address is kept in this browser only and is not part of shared settings or backups.', 'muted')));
+  },
   section_settingsActivity(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
       this.logs = this.activityLog('Settings activity');
@@ -1473,6 +1490,7 @@ const UI = {
     if (this.stuckNote) this.stuckNote.textContent = AntiStuck.status();
     if (this.autoStartNote) this.autoStartNote.textContent = AutoStart.status();
     if (this.retryNote) this.retryNote.textContent = Retry.status();
+    if (this.reportNote?.isConnected) this.reportNote.textContent = Reporter.status();
     if (this.is('Party') && Trace.note) Trace.note.textContent = Trace.status();
     if (Lure.note) Lure.note.textContent = Lure.status();
     if (this.is('Party') && this.partyNote) {
