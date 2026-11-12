@@ -9564,6 +9564,36 @@ async function updateTests() {
     broken.Live.startTimer(); assert.equal(broken.Live.worker, null);
   });
 
+  test('Settings offers the Cloudflare deploy link while no hub is paired and hides it once one is', () => {
+    const document = { createElement(tag) {
+      return { tag, children: [], className: '', hidden: false, append(...nodes) { this.children.push(...nodes); }, setAttribute() {}, addEventListener() {} };
+    } };
+    const f = fixture(document);
+    const DEPLOY = 'https://deploy.workers.cloudflare.com/?url=https://github.com/nixxane/opensro-bot-lean/tree/main/live/worker';
+    assert.equal(f.Live.channel(), null);
+    f.UI.refreshers = [];
+    const box = f.UI.liveSetupHelp();
+    const link = box.children.find(n => n.tag === 'a');
+    assert.equal(box.hidden, false, 'shown while no hub is paired');
+    assert.equal(link.textContent, 'Set up free on Cloudflare');
+    assert.equal(link.href, DEPLOY, 'the exact deploy address');
+    assert.equal(f.Live.DEPLOY_URL, DEPLOY);
+    assert.equal(link.target, '_blank', 'opens in a new tab');
+    assert.equal(link.rel, 'noopener noreferrer');
+    assert.deepEqual(box.children.filter(n => n.tag === 'p').map(n => n.textContent), ['No hub yet?', 'Deploy, open your hub, press Pair.']);
+    assert.equal(f.UI.refreshers.length, 1);
+    // Pairing a hub hides it on the next panel refresh; forgetting the hub brings it back.
+    assert.equal(f.Live.setChannel(LIVE_URL, LIVE_CODE), true);
+    f.UI.refreshers[0]();
+    assert.equal(box.hidden, true, 'hidden once paired');
+    f.Live.clearChannel();
+    f.UI.refreshers[0]();
+    assert.equal(box.hidden, false);
+    // The link is only a link: nothing is saved or sent by it.
+    assert.equal(f.Live.channel(), null);
+    assert.equal(f.Settings.profile.live.on, false);
+  });
+
   test('the bot posts a real snapshot to the real hub and reads it back through /state', async () => {
     const { spawn } = require('node:child_process'), path = require('node:path'), PORT = 41731;
     const hub = spawn(process.execPath, [path.join(__dirname, 'live', 'hub.js')], { env: { ...process.env, PORT: String(PORT), TUNNEL: 'off' }, stdio: ['ignore', 'pipe', 'inherit'] });

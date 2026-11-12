@@ -8,19 +8,38 @@ You need one hub, reachable over HTTPS. Pick one:
 
 | | Needs | Phone link stays the same | PC must be on |
 | --- | --- | --- | --- |
-| 1. Cloudflare Worker (recommended) | free Cloudflare account, Node.js 22+ | yes | no |
+| 1. Cloudflare Worker (recommended) | free Cloudflare and GitHub (or GitLab) accounts, nothing to install | yes | no |
 | 2. Your PC with a named Cloudflare tunnel | a domain on Cloudflare, `cloudflared` | yes | yes |
 | 3. Local only | Node.js 18+, the separate reporter script | n/a (this machine only) | yes |
 
 ## 1. Cloudflare Worker (recommended)
 
-The Worker and one Durable Object run on your own Cloudflare account and serve the dashboard at a stable `https://nix-live.<your-name>.workers.dev` address. No PC has to stay on and no tunnel is needed.
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/nixxane/opensro-bot-lean/tree/main/live/worker)
 
-1. In this folder: `cd worker`, then `npm install`.
+The Worker and one Durable Object run on your own Cloudflare account and serve the dashboard at a stable `https://nix-live.<your-name>.workers.dev` address. No PC has to stay on, no tunnel is needed, and you install nothing. You need a free Cloudflare account and a free GitHub (or GitLab) account: Cloudflare copies the Worker into your own repository and builds it from there.
+
+1. Click the button above (or **Set up free on Cloudflare** in NIX, Settings, Live dashboard). Sign in to Cloudflare and to GitHub (or GitLab) when asked, and accept the defaults. Wait for the build to finish.
+2. Open the worker address Cloudflare shows (`https://nix-live.<your-name>.workers.dev`). You see "Your NIX live hub is running."
+3. Press **Create my private link**. This makes your private code. It can only be done once.
+4. On the page that follows, press **Pair NIX in this browser** in the browser where the game runs. NIX asks "Pair with a live hub?"; press **Pair**. That saves the hub and turns the dashboard on. Nothing is saved until you press Pair.
+5. Scan the QR code with your phone, or copy the link under it. Your characters appear within about 10 seconds of entering the game. Bookmark the page: `<address>/pair/<code>` shows it again.
+
+Do steps 2 and 3 right after the build: whoever presses Create first owns the hub.
+
+### Lost your link?
+
+In Cloudflare open **Workers & Pages**, your worker (`nix-live`), **Settings**, **Variables and secrets**, and add a secret named `LIVE_CODE` with any 16 to 64 letters, numbers, `-` or `_`. Then open `<address>/pair/<that code>` to pair NIX again, and `<address>/#<that code>` on your phone. A `LIVE_CODE` secret always wins over the code made by the Create button, so deleting the secret brings the first code back.
+
+### For technical users
+
+With Node.js 22+ you can deploy from this folder instead of the button:
+
+1. `cd worker`, then `npm install`.
 2. `npx wrangler login` (once; opens a browser to sign in to your Cloudflare account).
 3. `npm run setup`. It makes a private code, deploys the Worker, stores the code as the Worker secret `LIVE_CODE` and prints two links. Run `npm run setup -- --keep-code` later to redeploy with the same code.
-4. Open the **pair link** in the browser where the game runs. NIX shows "Pair with a live hub?" in its window; press **Pair**. That saves the hub and turns the dashboard on. Nothing is saved until you press Pair.
-5. Open the **dashboard link** on your phone. Your characters appear within about 10 seconds of entering the game.
+4. Open the **pair link** in the browser where the game runs and press **Pair** in NIX. Open the **dashboard link** on your phone.
+
+`wrangler.jsonc` has no rate limit binding because the button deploy may not support one; the Worker runs without it. To add a per-IP limit by hand, see the comment in that file.
 
 Cost: the free plan is enough. One character reporting every 10 seconds plus one open dashboard polling every 10 seconds is about 17,000 requests a day against the 100,000 daily limit. Reporting every 3 seconds, or several characters or open dashboards, uses more; when the daily limit is hit Cloudflare refuses requests until it resets, and the bot just waits and retries.
 
@@ -46,7 +65,7 @@ Do not also turn on the bot's Live dashboard for the same hub; the two would rep
 
 ## Good to know
 
-- **The code is private.** Anyone who has a dashboard or pair link can watch your stats. The part after `#` (or after `/pair/`) is the code. For the Node hub it is created on first start and kept in the `.code` file; for the Worker it is in `worker/.code` and in the Worker secret. Never share those files or links. To get a new code, delete `.code` and restart the hub (or run `npm run setup` without `--keep-code`), then pair again.
+- **The code is private.** Anyone who has a dashboard or pair link can watch your stats. The part after `#` (or after `/pair/`) is the code. For the Node hub it is created on first start and kept in the `.code` file; for a Worker made with the button it is kept inside your Worker and shown on its pair page; for `npm run setup` it is in `worker/.code` and in the Worker secret. Never share those files, pages or links. To get a new code, delete `.code` and restart the hub, run `npm run setup` without `--keep-code`, or set a new `LIVE_CODE` secret on the Worker (see Lost your link?), then pair again.
 - **Pairing never applies by itself.** A pair link only asks; a crafted link cannot point your bot at someone else's hub unless you press Pair. Only pair with a hub you set up yourself.
 - **What is sent**: character name, level, HP/MP/XP, state, position, session totals and the last 12 activity lines. It never includes game commands, account details or inventory contents.
 - **What stays in your browser**: the hub address and code. They are not part of share codes, backups, bug reports or the log.
@@ -60,7 +79,8 @@ Do not also turn on the bot's Live dashboard for the same hub; the two would rep
 | You see | What to do |
 | --- | --- |
 | "Waiting for a bot to report…" | Turn on Live dashboard in the bot's Settings (or pair), and check the status line there. |
-| "wrong code" on the dashboard | Open the dashboard link exactly as it was printed. |
+| "This page needs your private link" or "wrong code" on the dashboard | Open the link from your hub's setup page (scan its QR code). If you lost it, see Lost your link? |
+| "This hub is not set up yet" | Open the worker address without anything after it and press Create my private link. |
 | "Off: Hub refused the code." in NIX | The code changed. Pair again with the new pair link. |
 | "No answer from the hub" in NIX | The hub address is wrong or unreachable, or it is not HTTPS. Test the address in a browser. |
 | "hub unreachable, retrying…" on the dashboard | The hub or tunnel stopped. |
@@ -70,8 +90,7 @@ Do not also turn on the bot's Live dashboard for the same hub; the two would rep
 ## Files
 
 - `hub.js`: the Node hub, no dependencies. `hub.test.cjs`: its self-check (`node hub.test.cjs`).
-- `worker/`: the Cloudflare Worker and Durable Object (`worker.mjs`), `wrangler.jsonc`, `setup.mjs`, and tests. After `npm install` there, `npm test` runs them locally with Miniflare; they are not part of the release checks.
-- `dashboard/index.html`: the dashboard page, served by both hubs.
+- `worker/`: everything the Cloudflare button deploys, self-contained: the Worker and Durable Object (`worker.mjs`), its pages (`pages.mjs`), the QR code (`qr.mjs`, using the pinned `qrcode-generator` package), `dashboard/index.html` (the dashboard page, also served by `hub.js`), `wrangler.jsonc`, `setup.mjs`, and tests. After `npm install` there, `npm test` runs them locally with Miniflare; they are not part of the release checks.
 - `reporter.user.js`: the separate Tampermonkey script for the local-only option; install it from the hub's link, which fills in your code. `reporter.test.cjs`: its self-check.
 
-Both hubs speak the same small protocol: `POST /report` with an `X-Code` header, `GET /state`, `GET /pair/<code>`, and `OPTIONS` answered without a code. The built-in client is `lean-live.js`; the reporter script reads the bot's diagnostics on `window.SROLean` (`stats`, `world`, `hunt`, `log`, `activity.userMessage`), so if those change, update `snapshot()` in `reporter.user.js` and its test.
+Both hubs speak the same small protocol: `POST /report` with an `X-Code` header, `GET /state`, `GET /pair/<code>`, and `OPTIONS` answered without a code. The Worker adds `POST /setup` (the Create button). The built-in client is `lean-live.js`; the reporter script reads the bot's diagnostics on `window.SROLean` (`stats`, `world`, `hunt`, `log`, `activity.userMessage`), so if those change, update `snapshot()` in `reporter.user.js` and its test.

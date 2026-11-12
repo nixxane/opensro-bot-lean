@@ -8,9 +8,12 @@ const LIVE_CODE = /^[A-Za-z0-9_-]{16,64}$/;
 const LIVE_PAIR_PATH = /^\/pair\/([A-Za-z0-9_-]{16,64})\/?$/;
 const LIVE_FRAGMENT = /^#nixlive=([A-Za-z0-9_-]+):([A-Za-z0-9_-]+)$/;
 const LIVE_LOG_LINES = 12;
+// The "Deploy to Cloudflare" page for live/worker: Cloudflare copies that folder into the player's own repository and deploys it.
+const LIVE_DEPLOY_URL = 'https://deploy.workers.cloudflare.com/?url=https://github.com/nixxane/opensro-bot-lean/tree/main/live/worker';
 // Every new target is logged by the bot; on a phone that buries the events worth seeing, and kills are counted in the stats anyway.
 const LIVE_QUIET_CODES = ['target-selected', 'target-search'];
 const Live = {
+  DEPLOY_URL: LIVE_DEPLOY_URL,
   sending: false, nextAt: 0, lastAt: 0, lastError: '', holdUntil: 0, pending: null, worker: null,
   // ---- the secret: validated when it is written and again when it is read ----
   // A hand-edited or corrupted storage value must never become a POST target.

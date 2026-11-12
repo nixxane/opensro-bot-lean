@@ -122,19 +122,25 @@ let code = '';
 try { code = decodeURIComponent(location.hash.slice(1)); } catch {} // a mangled link falls back to the saved code or the hint below
 code = code || store.get('nixChannel');
 onhashchange = () => location.reload(); // a code pasted into an already-open tab
-if (!code) $('empty').textContent = 'Open this page with your dashboard code at the end of the link: …/#your-code';
+// Plain words for the three ways to arrive without a working link; "empty" is where they show.
+const WAITING = 'Waiting for a bot to report…';
+const NO_LINK = "This page needs your private link. Open the link from your hub's setup page, or scan the QR code shown there. The link ends in #…";
+const WRONG_LINK = "That link's code is not right. Open the link from your hub's setup page again. If you lost it, the README explains how to get a new one (see Lost your link).";
+const NOT_SET_UP = 'This hub is not set up yet. Open its address in a browser (without #…) and press Create my private link.';
+if (!code) { $('conn').textContent = 'no link'; $('empty').textContent = NO_LINK; }
 else {
   // The hub keeps each character's last report, so a bot that died hours ago still shows as offline.
   (async function poll() {
     try {
       const r = await fetch('/state', { headers: { 'X-Code': code }, cache: 'no-store' });
-      if (r.status === 401 || r.status === 403) { $('conn').textContent = 'wrong code'; return; }
+      if (r.status === 401 || r.status === 403) { $('conn').textContent = 'wrong code'; $('empty').textContent = WRONG_LINK; $('empty').hidden = false; store.set('nixChannel', ''); return; }
+      if (r.status === 503) { $('conn').textContent = 'not set up'; $('empty').textContent = NOT_SET_UP; $('empty').hidden = false; setTimeout(poll, POLL_MS); return; }
       const { now, reports } = await r.json();
       skew = Date.now() - now;
       reports.forEach(onSnap);
       // The hub decides who exists: a character it no longer lists (renamed, deleted, hub restarted) loses its card.
       for (const [name, bot] of bots) if (!reports.some(r => r.name === name)) { bot.el.remove(); bots.delete(name); }
-      $('empty').hidden = bots.size > 0;
+      $('empty').textContent = WAITING; $('empty').hidden = bots.size > 0;
       $('conn').textContent = 'live'; store.set('nixChannel', code); // remembered only once the hub accepts it
     } catch { $('conn').textContent = 'hub unreachable, retrying…'; }
     setTimeout(poll, POLL_MS);

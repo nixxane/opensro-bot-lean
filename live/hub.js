@@ -44,7 +44,7 @@ function handle(req, res) {
   if (req.method === 'OPTIONS') return res.writeHead(204, CORS).end();
   if (req.method === 'GET' && url.pathname === '/') {
     res.writeHead(200, { ...page, 'Content-Type': 'text/html; charset=utf-8' });
-    return res.end(fs.readFileSync(file('dashboard/index.html')));
+    return res.end(fs.readFileSync(file('worker/dashboard/index.html')));
   }
   // The reporter, ready to install with the code filled in. The code sits in the path so the address still ends in
   // .user.js, which is what makes Tampermonkey offer to install it.
