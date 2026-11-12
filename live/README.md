@@ -2,7 +2,7 @@
 
 Watch your bots from your phone: status, HP/MP/XP, XP per hour, gold, kills, drops and the activity log, one card per character, refreshed every few seconds.
 
-This is an optional companion, separate from the bot: the bot itself is unchanged and sends nothing. Everything runs on your own machine. There is no account, no outside server and no quota. For a summary every few minutes instead, see Discord session reports in the bot's Settings.
+This is an optional companion, separate from the bot: the bot itself is unchanged and sends nothing. Everything runs on your own machine. There is no account and no quota, and nothing is stored. With the phone link on, traffic passes through Cloudflare's tunnel. For a summary every few minutes instead, see Discord session reports in the bot's Settings.
 
 ## What you need
 
@@ -28,8 +28,10 @@ Without `cloudflared` the dashboard still works, but only on the machine itself.
 
 ## Good to know
 
-- **The phone link is private.** Anyone who has the full link can watch your stats. The part after `#` is your code; it is created on first start and kept in the `.code` file. Never share that file or the link. To get a new code, delete `.code`, restart the hub and install the reporter again.
-- **The phone link changes on every start.** Only the address changes; your code stays the same.
+- **The phone link is private.** Anyone who has the full link can watch your stats. The part after `#` is your code; it is created on first start and kept in the `.code` file. Never share that file or the link. The install link carries the same code, so treat it the same way. On Windows the `.code` file is not locked to your user the way it is on macOS and Linux, so keep the folder private. To get a new code, delete `.code`, restart the hub and install the reporter again.
+- **The phone link changes on every start.** Only the address changes; your code stays the same. The link is printed once its address resolves, which the hub checks with the public resolver `1.1.1.1`; on a network that blocks it, the link appears after 30 seconds instead.
+- **Local only.** Set `TUNNEL=off` to skip the phone link (macOS / Linux: `TUNNEL=off node hub.js`).
+- **"Offline" appears after 90 seconds without a report.** A background game tab can report as rarely as once a minute, so a late report first shows its age ("Hunting · fight · 40s ago"). A character that has not reported for a day is dropped.
 - **The hub must be running** on the machine with the bots. If that machine sleeps, the dashboard shows the bots as offline.
 - **Several bots** on the same machine all report to the same hub. Nothing extra to set up.
 - **Nothing is stored.** The hub keeps only each character's latest report in memory.
@@ -50,6 +52,6 @@ Without `cloudflared` the dashboard still works, but only on the machine itself.
 - `hub.js`: the hub, with no dependencies
 - `reporter.user.js`: the Tampermonkey script; install it from the hub's link, which fills in your code
 - `dashboard/index.html`: the dashboard page
-- `reporter.test.cjs`: self-check, run with `node reporter.test.cjs`
+- `reporter.test.cjs`, `hub.test.cjs`: self-checks, run with `node reporter.test.cjs` and `node hub.test.cjs`
 
 The reporter reads the bot's diagnostics on `window.SROLean` (`stats`, `world`, `hunt`, `log`, `activity.userMessage`). If those change, update `snapshot()` in `reporter.user.js` and its test.

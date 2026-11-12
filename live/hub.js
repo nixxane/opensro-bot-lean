@@ -16,9 +16,11 @@ const allowed = given => {
 };
 
 const last = new Map(); // character name -> latest report
+const FORGET_MS = 24 * 3600 * 1000; // a renamed or deleted character stops reporting; its card goes after a day
 
-http.createServer((req, res) => {
-  const url = new URL(req.url, 'http://hub');
+function handle(req, res) {
+  let url;
+  try { url = new URL(req.url, 'http://hub'); } catch { return res.writeHead(400).end(); } // e.g. "GET http://[ HTTP/1.1"
   const page = { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff' };
   if (req.method === 'GET' && url.pathname === '/') {
     res.writeHead(200, { ...page, 'Content-Type': 'text/html; charset=utf-8' });
@@ -36,7 +38,9 @@ http.createServer((req, res) => {
   // The dashboard polls this. A pushed stream would be nicer, but Cloudflare quick tunnels buffer streams until they close.
   if (req.method === 'GET' && url.pathname === '/state') {
     res.writeHead(200, { ...page, 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify([...last.values()]));
+    for (const [name, report] of last) if (Date.now() - report.at > FORGET_MS) last.delete(name);
+    // "now" travels with the reports so the dashboard measures their age on the hub's clock, not the phone's.
+    return res.end(JSON.stringify({ now: Date.now(), reports: [...last.values()] }));
   }
   if (req.method === 'POST' && url.pathname === '/report') {
     let body = '';
@@ -45,19 +49,24 @@ http.createServer((req, res) => {
       let report;
       try { report = JSON.parse(body); } catch {}
       if (!report || typeof report.name !== 'string' || !report.name || report.name.length > 40) return res.writeHead(400).end();
-      report.at = Date.now(); // shortcut: assumes the phone's clock matches this machine's within seconds, send ages instead if "offline" misfires
+      report.at = Date.now();
       last.set(report.name, report);
       res.writeHead(204).end();
     });
   }
   res.writeHead(404).end();
+}
+
+// Requests are handled before the code check and can arrive through the tunnel, so none of them may stop the hub.
+http.createServer((req, res) => {
+  try { handle(req, res); } catch { if (!res.headersSent) res.writeHead(500); res.end(); }
 }).on('error', e => {
   console.error(e.code === 'EADDRINUSE' ? 'Port ' + PORT + ' is in use: the hub is probably already running in another window.' : e);
   process.exit(1);
 }).listen(PORT, '127.0.0.1', () => {
   const base = 'http://127.0.0.1:' + PORT;
   console.log('NIX live hub running. Keep this window open; Ctrl-C stops it.\n  Dashboard:        ' + base + '/#' + CODE + '\n  Install reporter: ' + base + '/install/' + CODE + '/reporter.user.js');
-  tunnel();
+  if (process.env.TUNNEL !== 'off') tunnel();
 });
 
 // Phone access. A quick tunnel needs no account, but its address is new on every start, so the link is printed each time.
