@@ -505,6 +505,10 @@ try {
   {
     const page = fs.readFileSync(new URL('../dashboard/index.html', import.meta.url), 'utf8');
     assert.doesNotThrow(() => new vm.Script(page.match(/<script>([\s\S]*)<\/script>/)[1]));
+    // One self-contained file: it makes no request but the same-origin /state poll, and uses no external script, style or font.
+    assert.doesNotMatch(page, /<(?:script|link|img|iframe)[^>]*\s(?:src|href)=|@import|url\(\s*['"]?https?:|https?:\/\//i);
+    assert.equal((page.match(/fetch\(/g) || []).length, 1);
+    assert.match(page, /fetch\('\/state', \{ headers: \{ 'X-Code': code \}/);
   }
 
   // setup.mjs helpers.
