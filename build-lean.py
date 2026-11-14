@@ -36,6 +36,10 @@ world = world.replace(gp_call_old, "          this.applyGameplay(ev.state, !!ev.
 gp_old = "  applyGameplay(state) {\n    const prev = this.gp;\n"
 assert gp_old in world
 world = world.replace(gp_old, gp_old.replace('(state)', '(state, delta = false)') + "    if (delta && prev) state = { ...prev, ...state };\n")
+# A delta carries the previous skillCatalog over, so rebuild only when a new catalog arrives.
+catalog_old = "    if (state.skillCatalog) this.rebuildCatalog(state.skillCatalog);\n"
+assert catalog_old in world
+world = world.replace(catalog_old, "    if (state.skillCatalog && state.skillCatalog !== prev?.skillCatalog) this.rebuildCatalog(state.skillCatalog);\n")
 display = section('const Display =', '// ---------------------------------------------------------------------------\n// World mirror:')
 commands = section('const MIN_GAP =', '// ---------------------------------------------------------------------------\n// Assets.')
 # Remove chat, GM actions, and companion item targeting from the compact command layer.

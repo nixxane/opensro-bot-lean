@@ -1476,6 +1476,36 @@ test('delta gameplay events merge onto the last state and keep the bot in the wo
   f.World.applyEvent({kind:'gameplay',state:{localGid:gid}});
   assert.equal(f.World.gp.target, undefined, 'a full state still replaces the old one');
 });
+test('delta gameplay events rebuild the skill catalog only when a new catalog arrives', () => {
+  const f = fixture(); let builds = 0;
+  f.bus.on('catalog', () => builds++);
+  f.World.applyEvent({kind:'gameplay',state:{target:777},delta:true});
+  assert.equal(builds, 0, 'a delta without skillCatalog keeps the old catalog');
+  const catalog = [...f.World.catalog.values(), { id: 99001, group: 99001, level: 1, name: 'New skill', active: true }];
+  f.World.applyEvent({kind:'gameplay',state:{skillCatalog:catalog},delta:true});
+  assert.equal(builds, 1); assert.ok(f.World.skill(99001));
+  f.World.applyEvent({kind:'gameplay',state:{target:778},delta:true});
+  assert.equal(builds, 1);
+  f.World.applyEvent({kind:'gameplay',state:{...f.World.gp, skillCatalog:[...catalog]}});
+  assert.equal(builds, 2, 'a full state with a fresh catalog still rebuilds');
+});
+test('skill catalog survives null deltas and rebuilds after a world reset or character switch', () => {
+  const f = fixture(); let builds = 0;
+  f.bus.on('catalog', () => builds++);
+  const catalog = [{ id: 99001, group: 99001, level: 1, name: 'A', active: true }, { id: 99002, group: 99001, level: 2, name: 'A2', active: true }];
+  f.World.applyEvent({kind:'gameplay',state:{skillCatalog:catalog},delta:true});
+  assert.equal(builds, 1);
+  f.World.applyEvent({kind:'gameplay',state:{skillCatalog:null},delta:true});
+  assert.equal(builds, 1); assert.ok(f.World.skill(99002), 'a null catalog in a delta keeps the old one');
+  f.World.applyEvent({kind:'reset'});
+  f.World.applyEvent({kind:'gameplay',state:{...f.World.gp, skillCatalog:structuredClone(catalog)}});
+  assert.equal(builds, 2, 'a reconnect delivers a cloned catalog and rebuilds');
+  f.World.applyEvent({kind:'bootstrap',value:{character:{name:'Other'}}});
+  f.World.applyEvent({kind:'gameplay',state:{...f.World.gp, skillCatalog:[{ id: 99100, group: 99100, level: 3, name: 'B', active: true }]}});
+  assert.equal(builds, 3); assert.ok(f.World.skill(99100)); assert.ok(!f.World.skill(99001), 'the old character skills are gone');
+  f.World.applyEvent({kind:'gameplay',state:{skillCatalog:[{ id: 99100, group: 99100, level: 4, name: 'B', active: true }]},delta:true});
+  assert.equal(builds, 4); assert.equal(f.World.skill(99100).level, 4, 'a levelled skill arrives as a new catalog and is applied');
+});
 test('all compatible paid avatar skins remain browsable without ownership or equipment filters', () => {
   const f = fixture(), items = [];
   for (let n=0;n<70;n++) items.push([100+n,'ITEM_MALL_AVATAR_M_PREMIUM_'+n,-1,n%4,'CH_M',0,0]);

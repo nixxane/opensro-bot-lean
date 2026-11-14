@@ -877,7 +877,7 @@ const World = {
     };
     this.gp = merged;
     this.dirty.gp = true;
-    if (state.skillCatalog) this.rebuildCatalog(state.skillCatalog);
+    if (state.skillCatalog && state.skillCatalog !== prev?.skillCatalog) this.rebuildCatalog(state.skillCatalog);
 
     for (const n of merged.notices || []) {
       if (isNum(n.sequence) && n.sequence > this.lastSeq.notice) {
