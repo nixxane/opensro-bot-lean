@@ -822,20 +822,21 @@ const UI = {
         this.check('Chime when a unique monster comes into view', () => Settings.profile.sounds.unique, v => Settings.profile.sounds.unique = v),
         el('p', 'Short chimes, one per switch, all off by default (the player one uses the player alert detection). A click in the game unlocks the sound when the browser blocked it. The pet and SoX chimes above preview the sound.', 'muted')));
   },
-  soxSoundPicker() {
+  soundPicker(kind, label, onSet) {
     const file = el('input'); file.type = 'file'; file.accept = 'audio/*,.mp3,.wav,.ogg,.m4a'; file.hidden = true;
-    const name = () => Sound.custom('sox')?.name;
-    const status = el('p', name() ? 'SoX sound: ' + name() : 'SoX sound: built-in chime', 'muted');
-    const reset = this.button('Use built-in chime', () => { Sound.clearCustom('sox'); this.draw(); });
+    const name = () => Sound.custom(kind)?.name;
+    const status = el('p', name() ? label + ' sound: ' + name() : label + ' sound: built-in chime', 'muted');
+    const reset = this.button('Use built-in chime', () => { Sound.clearCustom(kind); this.draw(); });
     reset.hidden = !name();
     file.addEventListener('change', async () => {
       const f = file.files?.[0]; file.value = ''; if (!f) return;
-      try { await Sound.setCustom('sox', f); UI.toast('SoX sound set to ' + f.name + '.'); Sound.test('sox'); this.draw(); }
+      try { await Sound.setCustom(kind, f); onSet?.(); UI.toast(label + ' sound set to ' + f.name + '.'); Sound.test(kind); this.draw(); }
       catch (e) { UI.toast('Could not use that sound: ' + e.message + '.', 'warn'); }
     });
-    const box = el('div'); box.append(file, this.row(this.button('Custom SoX sound…', () => file.click()), reset), status);
+    const box = el('div'); box.append(file, this.row(this.button('Custom ' + label + ' sound…', () => file.click()), reset), status);
     return box;
   },
+  soxSoundPicker() { return this.soundPicker('sox', 'SoX'); },
   section_lootWho(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
     const L = () => H().pickup;

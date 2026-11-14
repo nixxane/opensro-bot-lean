@@ -269,6 +269,8 @@ const Alchemy = {
     if (outcome === 0x10) p.run.successes++; else p.run.failures++;
     if (outcome === 0x40) p.run.destroyed++;
     this.note(outcome === 0x10 ? `Success: +${p.plus} → +${item.plus}` : outcome === 0x40 ? `Destroyed at +${p.plus}` : `Failed at +${p.plus}: now +${item.plus}`);
+    // A hit is confirmed only by the server's success flag; the optional sound follows that, not a plus change alone.
+    if (outcome === 0x10 && this.cfg().sound) Sound.play('alchemy');
     if (item) p.run.highest = Math.max(p.run.highest, item.plus);
     if (outcome === 0x40) { this.selected = null; this.stop('Weapon destroyed; alchemy stopped.'); this.message = 'Weapon destroyed; alchemy stopped.'; return; }
     p.run.fingerprint = this.fingerprint(item); this.selected = { slot: item.slot, fingerprint: p.run.fingerprint };
@@ -419,6 +421,12 @@ const Alchemy = {
     UI.alchemyStats = el('p', '', 'muted'); UI.alchemyLog = el('p', '', 'muted');
     results.append(UI.alchemyStats, UI.alchemyLog, UI.button('Clear results', () => { this.result = null; this.log.length = 0; this.refresh(); }));
     UI.pane.append(results);
+    const sound = UI.group('Sound');
+    sound.append(UI.check('Play a sound when an enhancement succeeds', () => c().sound, value => c().sound = value),
+      UI.row(UI.button('Test alchemy sound', () => Sound.test('alchemy'))),
+      UI.soundPicker('alchemy', 'Alchemy', () => { c().sound = true; Settings.saveProfile(); }),
+      el('p', 'Off by default. The sound plays on every confirmed success, including when the target + is reached; a custom sound (MP3, WAV, OGG or M4A, up to 1 MB) replaces it. A click in the game unlocks the sound when the browser blocked it.', 'muted'));
+    UI.pane.append(sound);
     this.drawAttributes();
     this.refresh();
   },

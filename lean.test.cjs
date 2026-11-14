@@ -7286,6 +7286,39 @@ function alchemyFixture(powder = false) {
   return { ...f, result };
 }
 
+test('alchemy plays the sound on a confirmed success, not on a failure, and only when switched on', () => {
+  const f = alchemyFixture(); const played = [];
+  f.Sound.play = kind => { played.push(kind); return true; };
+  f.Settings.profile.alchemy.sound = true;
+  f.Alchemy.start(); f.Controller.tick();
+  f.result(0x20, 0); assert.deepEqual(played, [], 'a failure is silent');
+  f.advance(2000); f.Controller.tick(); f.result(0x10, 1);
+  assert.deepEqual(played, ['alchemy']);
+  const off = alchemyFixture(); const quiet = [];
+  off.Sound.play = kind => { quiet.push(kind); return true; };
+  off.Alchemy.start(); off.Controller.tick(); off.result(0x10, 1);
+  assert.deepEqual(quiet, [], 'the switch is off by default');
+  assert.equal(off.Settings.profile.alchemy.sound, false);
+});
+
+test('the alchemy sound accepts a custom file like the SoX chime and restarts instead of stacking it', () => {
+  const f = fixture(), starts = [], stops = [];
+  assert.ok(f.Sound.customKinds.includes('alchemy'));
+  f.Sound.ctx = { destination: {}, createBufferSource: () => ({ connect() {}, disconnect() {}, start() { starts.push(this); }, stop() { stops.push(this); } }),
+    createGain: () => ({ gain: {}, connect() {}, disconnect() {} }) };
+  f.Sound.playBuffer({}, 'alchemy'); f.Sound.playBuffer({}, 'alchemy');
+  assert.equal(starts.length, 2); assert.equal(stops.length, 1);
+});
+
+test('the alchemy chime is audible and distinct from the other alerts', () => {
+  const f = fixture(), notes = [];
+  f.Sound.ctx = { state: 'running', currentTime: 0, destination: {},
+    createOscillator: () => ({ frequency: {}, connect() {}, disconnect() {}, start() { notes.push(this.frequency.value); }, stop() {} }),
+    createGain: () => ({ gain: { setValueAtTime() {}, linearRampToValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {}, disconnect() {} }) };
+  assert.equal(f.Sound.play('alchemy'), true); assert.equal(notes.length, 5);
+  assert.equal(f.Sound.play('good'), false); assert.equal(notes.length, 5);
+});
+
 test('alchemy takes up to 9999 enhancement attempts', () => {
   let f = alchemyFixture(); f.Settings.profile.alchemy.limit = 9999; f.Alchemy.start();
   assert.ok(f.Alchemy.run, f.Alchemy.message); assert.equal(f.Alchemy.run.cfg.limit, 9999);

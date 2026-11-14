@@ -5,7 +5,7 @@ const DEFAULT_PROFILE = {
   items: { rules: {}, balance: false, petToBag: false, autoEquip: false, gear: { primaryWeapon: null, secondaryWeapon: null, shield: null } },
   sounds: { player: false, died: false, levelUp: false, unique: false },
   stall: { title: '', greeting: '', network: true, closeWhenEmpty: true, prices: {} },
-  alchemy: { target: 3, limit: 20, elixir: 0, powder: false, use: { luck: false, steady: false, immortal: false, astral: false }, stones: { luck: 1, steady: 1, immortal: 1, astral: 1 }, stoneLimit: 0,
+  alchemy: { target: 3, limit: 20, elixir: 0, powder: false, sound: false, use: { luck: false, steady: false, immortal: false, astral: false }, stones: { luck: 1, steady: 1, immortal: 1, astral: 1 }, stoneLimit: 0,
     // The plus from which each helper is used: a failure from +5 up can destroy the item (Steady and Immortal matter from there),
     // Luck and lucky powder help at every plus, and Astral keeps +4 on a failure.
     from: { powder: 0, luck: 0, steady: 5, immortal: 5, astral: 4 },
@@ -180,6 +180,7 @@ const Sound = {
   },
   // Only these alerts are audible; existing combat/UI calls stay silent.
   tones: { 'pet-full': { notes: [659.25, 830.61, 987.77], gap: 0.18 }, sox: { notes: [783.99, 987.77, 1174.66, 1567.98], gap: 0.11 },
+    alchemy: { notes: [523.25, 659.25, 830.61, 1046.5, 1318.51], gap: 0.09 },
     player: { notes: [392, 329.63], gap: 0.25 }, died: { notes: [523.25, 415.3, 329.63], gap: 0.2 },
     levelUp: { notes: [523.25, 659.25, 783.99, 1046.5], gap: 0.12 }, unique: { notes: [880, 1108.73, 880, 1108.73], gap: 0.15 } },
   // Alert chimes for events the bus already carries (SBot-style alarms); every switch is off by default.
@@ -200,9 +201,11 @@ const Sound = {
     bus.on('profile', () => { this.level = null; });
   },
   // A user-chosen audio file replaces the chime for these alerts. It lives in local storage (not the profile, so shares stay small).
-  customKinds: ['sox'],
+  customKinds: ['sox', 'alchemy'],
   customMaxBytes: 1024 * 1024,
   buffers: {},
+  // Custom sounds currently playing, so a new hit restarts the file instead of stacking it.
+  sources: {},
   customKey(kind) { return 'sound:' + kind; },
   custom(kind) { return this.customKinds.includes(kind) ? Store.get(this.customKey(kind), null) : null; },
   setCustom(kind, file) {
@@ -222,17 +225,24 @@ const Sound = {
       reader.readAsDataURL(file);
     });
   },
-  clearCustom(kind) { Store.remove(this.customKey(kind)); delete this.buffers[kind]; },
+  clearCustom(kind) {
+    Store.remove(this.customKey(kind)); delete this.buffers[kind];
+    const source = this.sources[kind]; if (source) { try { source.stop(); } catch {} delete this.sources[kind]; }
+  },
   async decode(dataUrl) {
     const ctx = this.ctx; if (!ctx) throw new Error('no audio');
     const bytes = Uint8Array.from(W.atob(dataUrl.slice(dataUrl.indexOf(',') + 1)), c => c.charCodeAt(0));
     return await ctx.decodeAudioData(bytes.buffer);
   },
-  playBuffer(buffer) {
-    const ctx = this.ctx, source = ctx.createBufferSource(), gain = ctx.createGain();
+  playBuffer(buffer, kind = '') {
+    const ctx = this.ctx;
+    const previous = this.sources[kind];
+    if (previous) { try { previous.stop(); } catch {} delete this.sources[kind]; }
+    const source = ctx.createBufferSource(), gain = ctx.createGain();
     source.buffer = buffer; gain.gain.value = 0.8;
     source.connect(gain); gain.connect(ctx.destination);
-    source.onended = () => { source.disconnect(); gain.disconnect(); };
+    source.onended = () => { source.disconnect(); gain.disconnect(); if (this.sources[kind] === source) delete this.sources[kind]; };
+    this.sources[kind] = source;
     source.start();
   },
   play(kind) {
@@ -244,9 +254,9 @@ const Sound = {
       const custom = this.custom(kind);
       if (custom?.data) {
         const cached = this.buffers[kind];
-        if (cached?.data === custom.data) { this.playBuffer(cached.buffer); return true; }
+        if (cached?.data === custom.data) { this.playBuffer(cached.buffer, kind); return true; }
         // First play after a reload decodes the saved file; a file that no longer decodes falls back to the chime.
-        this.decode(custom.data).then(buffer => { this.buffers[kind] = { data: custom.data, buffer }; this.playBuffer(buffer); })
+        this.decode(custom.data).then(buffer => { this.buffers[kind] = { data: custom.data, buffer }; this.playBuffer(buffer, kind); })
           .catch(() => { Store.remove(this.customKey(kind)); this.play(kind); });
         return true;
       }

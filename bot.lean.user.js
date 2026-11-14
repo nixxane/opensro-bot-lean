@@ -189,7 +189,7 @@ const DEFAULT_PROFILE = {
   items: { rules: {}, balance: false, petToBag: false, autoEquip: false, gear: { primaryWeapon: null, secondaryWeapon: null, shield: null } },
   sounds: { player: false, died: false, levelUp: false, unique: false },
   stall: { title: '', greeting: '', network: true, closeWhenEmpty: true, prices: {} },
-  alchemy: { target: 3, limit: 20, elixir: 0, powder: false, use: { luck: false, steady: false, immortal: false, astral: false }, stones: { luck: 1, steady: 1, immortal: 1, astral: 1 }, stoneLimit: 0,
+  alchemy: { target: 3, limit: 20, elixir: 0, powder: false, sound: false, use: { luck: false, steady: false, immortal: false, astral: false }, stones: { luck: 1, steady: 1, immortal: 1, astral: 1 }, stoneLimit: 0,
     // The plus from which each helper is used: a failure from +5 up can destroy the item (Steady and Immortal matter from there),
     // Luck and lucky powder help at every plus, and Astral keeps +4 on a failure.
     from: { powder: 0, luck: 0, steady: 5, immortal: 5, astral: 4 },
@@ -364,6 +364,7 @@ const Sound = {
   },
   // Only these alerts are audible; existing combat/UI calls stay silent.
   tones: { 'pet-full': { notes: [659.25, 830.61, 987.77], gap: 0.18 }, sox: { notes: [783.99, 987.77, 1174.66, 1567.98], gap: 0.11 },
+    alchemy: { notes: [523.25, 659.25, 830.61, 1046.5, 1318.51], gap: 0.09 },
     player: { notes: [392, 329.63], gap: 0.25 }, died: { notes: [523.25, 415.3, 329.63], gap: 0.2 },
     levelUp: { notes: [523.25, 659.25, 783.99, 1046.5], gap: 0.12 }, unique: { notes: [880, 1108.73, 880, 1108.73], gap: 0.15 } },
   // Alert chimes for events the bus already carries (SBot-style alarms); every switch is off by default.
@@ -384,9 +385,11 @@ const Sound = {
     bus.on('profile', () => { this.level = null; });
   },
   // A user-chosen audio file replaces the chime for these alerts. It lives in local storage (not the profile, so shares stay small).
-  customKinds: ['sox'],
+  customKinds: ['sox', 'alchemy'],
   customMaxBytes: 1024 * 1024,
   buffers: {},
+  // Custom sounds currently playing, so a new hit restarts the file instead of stacking it.
+  sources: {},
   customKey(kind) { return 'sound:' + kind; },
   custom(kind) { return this.customKinds.includes(kind) ? Store.get(this.customKey(kind), null) : null; },
   setCustom(kind, file) {
@@ -406,17 +409,24 @@ const Sound = {
       reader.readAsDataURL(file);
     });
   },
-  clearCustom(kind) { Store.remove(this.customKey(kind)); delete this.buffers[kind]; },
+  clearCustom(kind) {
+    Store.remove(this.customKey(kind)); delete this.buffers[kind];
+    const source = this.sources[kind]; if (source) { try { source.stop(); } catch {} delete this.sources[kind]; }
+  },
   async decode(dataUrl) {
     const ctx = this.ctx; if (!ctx) throw new Error('no audio');
     const bytes = Uint8Array.from(W.atob(dataUrl.slice(dataUrl.indexOf(',') + 1)), c => c.charCodeAt(0));
     return await ctx.decodeAudioData(bytes.buffer);
   },
-  playBuffer(buffer) {
-    const ctx = this.ctx, source = ctx.createBufferSource(), gain = ctx.createGain();
+  playBuffer(buffer, kind = '') {
+    const ctx = this.ctx;
+    const previous = this.sources[kind];
+    if (previous) { try { previous.stop(); } catch {} delete this.sources[kind]; }
+    const source = ctx.createBufferSource(), gain = ctx.createGain();
     source.buffer = buffer; gain.gain.value = 0.8;
     source.connect(gain); gain.connect(ctx.destination);
-    source.onended = () => { source.disconnect(); gain.disconnect(); };
+    source.onended = () => { source.disconnect(); gain.disconnect(); if (this.sources[kind] === source) delete this.sources[kind]; };
+    this.sources[kind] = source;
     source.start();
   },
   play(kind) {
@@ -428,9 +438,9 @@ const Sound = {
       const custom = this.custom(kind);
       if (custom?.data) {
         const cached = this.buffers[kind];
-        if (cached?.data === custom.data) { this.playBuffer(cached.buffer); return true; }
+        if (cached?.data === custom.data) { this.playBuffer(cached.buffer, kind); return true; }
         // First play after a reload decodes the saved file; a file that no longer decodes falls back to the chime.
-        this.decode(custom.data).then(buffer => { this.buffers[kind] = { data: custom.data, buffer }; this.playBuffer(buffer); })
+        this.decode(custom.data).then(buffer => { this.buffers[kind] = { data: custom.data, buffer }; this.playBuffer(buffer, kind); })
           .catch(() => { Store.remove(this.customKey(kind)); this.play(kind); });
         return true;
       }
@@ -16807,6 +16817,8 @@ const Alchemy = {
     if (outcome === 0x10) p.run.successes++; else p.run.failures++;
     if (outcome === 0x40) p.run.destroyed++;
     this.note(outcome === 0x10 ? `Success: +${p.plus} → +${item.plus}` : outcome === 0x40 ? `Destroyed at +${p.plus}` : `Failed at +${p.plus}: now +${item.plus}`);
+    // A hit is confirmed only by the server's success flag; the optional sound follows that, not a plus change alone.
+    if (outcome === 0x10 && this.cfg().sound) Sound.play('alchemy');
     if (item) p.run.highest = Math.max(p.run.highest, item.plus);
     if (outcome === 0x40) { this.selected = null; this.stop('Weapon destroyed; alchemy stopped.'); this.message = 'Weapon destroyed; alchemy stopped.'; return; }
     p.run.fingerprint = this.fingerprint(item); this.selected = { slot: item.slot, fingerprint: p.run.fingerprint };
@@ -16957,6 +16969,12 @@ const Alchemy = {
     UI.alchemyStats = el('p', '', 'muted'); UI.alchemyLog = el('p', '', 'muted');
     results.append(UI.alchemyStats, UI.alchemyLog, UI.button('Clear results', () => { this.result = null; this.log.length = 0; this.refresh(); }));
     UI.pane.append(results);
+    const sound = UI.group('Sound');
+    sound.append(UI.check('Play a sound when an enhancement succeeds', () => c().sound, value => c().sound = value),
+      UI.row(UI.button('Test alchemy sound', () => Sound.test('alchemy'))),
+      UI.soundPicker('alchemy', 'Alchemy', () => { c().sound = true; Settings.saveProfile(); }),
+      el('p', 'Off by default. The sound plays on every confirmed success, including when the target + is reached; a custom sound (MP3, WAV, OGG or M4A, up to 1 MB) replaces it. A click in the game unlocks the sound when the browser blocked it.', 'muted'));
+    UI.pane.append(sound);
     this.drawAttributes();
     this.refresh();
   },
@@ -19512,20 +19530,21 @@ const UI = {
         this.check('Chime when a unique monster comes into view', () => Settings.profile.sounds.unique, v => Settings.profile.sounds.unique = v),
         el('p', 'Short chimes, one per switch, all off by default (the player one uses the player alert detection). A click in the game unlocks the sound when the browser blocked it. The pet and SoX chimes above preview the sound.', 'muted')));
   },
-  soxSoundPicker() {
+  soundPicker(kind, label, onSet) {
     const file = el('input'); file.type = 'file'; file.accept = 'audio/*,.mp3,.wav,.ogg,.m4a'; file.hidden = true;
-    const name = () => Sound.custom('sox')?.name;
-    const status = el('p', name() ? 'SoX sound: ' + name() : 'SoX sound: built-in chime', 'muted');
-    const reset = this.button('Use built-in chime', () => { Sound.clearCustom('sox'); this.draw(); });
+    const name = () => Sound.custom(kind)?.name;
+    const status = el('p', name() ? label + ' sound: ' + name() : label + ' sound: built-in chime', 'muted');
+    const reset = this.button('Use built-in chime', () => { Sound.clearCustom(kind); this.draw(); });
     reset.hidden = !name();
     file.addEventListener('change', async () => {
       const f = file.files?.[0]; file.value = ''; if (!f) return;
-      try { await Sound.setCustom('sox', f); UI.toast('SoX sound set to ' + f.name + '.'); Sound.test('sox'); this.draw(); }
+      try { await Sound.setCustom(kind, f); onSet?.(); UI.toast(label + ' sound set to ' + f.name + '.'); Sound.test(kind); this.draw(); }
       catch (e) { UI.toast('Could not use that sound: ' + e.message + '.', 'warn'); }
     });
-    const box = el('div'); box.append(file, this.row(this.button('Custom SoX sound…', () => file.click()), reset), status);
+    const box = el('div'); box.append(file, this.row(this.button('Custom ' + label + ' sound…', () => file.click()), reset), status);
     return box;
   },
+  soxSoundPicker() { return this.soundPicker('sox', 'SoX'); },
   section_lootWho(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();
     const L = () => H().pickup;
@@ -21126,7 +21145,7 @@ function boot() {
   if (Setup.isNew()) UI.current = 'Setup';
   UI.mount(); Stats.init(); Sound.init(); Updates.start(); Diagnostics.start();
   const unlockSound = e => {
-    if (e.isTrusted && (Settings.profile.hunt.pickup.petFullSound || Settings.profile.hunt.pickup.soxSound || Sound.anyOn())) Sound.unlock();
+    if (e.isTrusted && (Settings.profile.hunt.pickup.petFullSound || Settings.profile.hunt.pickup.soxSound || Settings.profile.alchemy.sound || Sound.anyOn())) Sound.unlock();
   };
   W.addEventListener('pointerdown', unlockSound, true);
   W.addEventListener('keydown', unlockSound, true);
