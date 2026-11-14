@@ -7316,16 +7316,22 @@ function alchemyFixture(powder = false) {
   return { ...f, result };
 }
 
-test('alchemy plays the sound on a confirmed success, not on a failure, and only when switched on', () => {
+test('alchemy plays the sound only when a confirmed success reaches the target +', () => {
   const f = alchemyFixture(); const played = [];
   f.Sound.play = kind => { played.push(kind); return true; };
-  f.Settings.profile.alchemy.sound = true;
+  f.Settings.profile.alchemy.sound = true; f.Settings.profile.alchemy.target = 2;
   f.Alchemy.start(); f.Controller.tick();
-  f.result(0x20, 0); assert.deepEqual(played, [], 'a failure is silent');
-  f.advance(2000); f.Controller.tick(); f.result(0x10, 1);
-  assert.deepEqual(played, ['alchemy']);
+  f.result(0x10, 1); assert.deepEqual(played, [], 'a success below the target is silent');
+  f.advance(2000); f.Controller.tick(); f.result(0x10, 2);
+  assert.deepEqual(played, ['alchemy'], 'the target + plays once');
+  const failed = alchemyFixture(); const silent = [];
+  failed.Sound.play = kind => { silent.push(kind); return true; };
+  failed.Settings.profile.alchemy.sound = true;
+  failed.Alchemy.start(); failed.Controller.tick(); failed.result(0x20, 0);
+  assert.deepEqual(silent, [], 'a failure is silent');
   const off = alchemyFixture(); const quiet = [];
   off.Sound.play = kind => { quiet.push(kind); return true; };
+  off.Settings.profile.alchemy.target = 1;
   off.Alchemy.start(); off.Controller.tick(); off.result(0x10, 1);
   assert.deepEqual(quiet, [], 'the switch is off by default');
   assert.equal(off.Settings.profile.alchemy.sound, false);

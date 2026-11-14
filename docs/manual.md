@@ -140,7 +140,7 @@ Under **Stones that help and protect** tick **Use Luck / Steady / Immortal / Ast
 
 Stops at the target, attempt limit or missing materials. Failures can reduce +, damage or destroy the weapon. **Stop alchemy**, **Stop all** or **F8** prevents further attempts; a sent attempt can still finish. Unconfirmed results pause without retrying.
 
-Under **Sound**, tick **Play a sound when an enhancement succeeds** (off by default) to hear the built-in chime on every confirmed hit, including when the target + is reached. **Custom alchemy sound…** replaces the chime with your own MP3, WAV, OGG or M4A file (up to 1 MB, kept in this browser), **Use built-in chime** removes it and **Test alchemy sound** previews it. A click in the game unlocks the sound when the browser blocked it.
+Under **Sound**, tick **Play a sound when the target + is reached** (off by default) to hear the built-in chime once, when a confirmed success reaches the target + you set; earlier successes and failures stay silent. **Custom alchemy sound…** replaces the chime with your own MP3, WAV, OGG or M4A file (up to 1 MB, kept in this browser), **Use built-in chime** removes it and **Test alchemy sound** previews it. A click in the game unlocks the sound when the browser blocked it.
 
 ### Item attributes
 
