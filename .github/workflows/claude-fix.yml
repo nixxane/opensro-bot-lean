@@ -4,7 +4,8 @@ name: Claude fix
 # step, because gh returns nothing inside the agent's sandbox) and the other open issues (saved to
 # .issue/open-issues.md), edits the code and writes its outcome to .issue/result.md. Fixed steps then
 # build and test the change, and either open a PR as the Claude app ("Fixes #N"; claude-merge.yml and
-# release.yml take it from there), post the agent's comment, or close the issue as a duplicate.
+# release.yml take it from there), post the agent's comment, or close the issue as a duplicate or
+# because there is nothing to fix.
 # Issue text is public and untrusted: the agent's code runs here with no token in reach, a change under
 # .github/ or vendor/ is refused, and the PR still has to pass the reviewer and the tests to merge.
 # Re-run one by hand from the Actions tab with its number, or by adding the "claude" label.
@@ -99,17 +100,27 @@ jobs:
                  the rest: the PR body, starting with "Fixes #${{ env.ISSUE }}.", then the cause, the fix, and that the
                  tests have not been run by you (the workflow runs them next).
 
-            B. Too large, unclear even after reading the code, not a bot problem, or against the project's rules: change no
-               code and write .issue/result.md as:
+            B. Too large, or unclear even after reading the code and diagnostics: change no code and write .issue/result.md
+               as:
                  line 1: COMMENT
-                 the rest: a short comment for the issue: what you checked, your best understanding, what a fix would take.
+                 the rest: a short comment for the issue: what you checked, your best understanding, and what a fix would
+                 take. Leave the issue open.
 
             C. A duplicate: the same bug or wish is already described in .issue/open-issues.md (match it by content, not
                just the title), or is already covered by an open PR or a known fixed problem. Change no code and write
                .issue/result.md as:
                  line 1: CLOSE
-                 the rest: a short comment naming the issue or PR it duplicates (as "#number" or its link) and saying this
-                 one is closed as a duplicate. Only close when you are confident; when unsure, use B (COMMENT) instead.
+                 the rest: a short comment that says the issue is being closed as a duplicate and names the issue or PR it
+                 duplicates (as "#number" or its link).
+
+            D. Nothing to fix: the report is not a bug, the behaviour already works as intended, it is a game or server
+               problem rather than a bot problem, it cannot be reproduced from the given diagnostics, or it asks for
+               something the project has ruled out. Change no code and write .issue/result.md as:
+                 line 1: CLOSE
+                 the rest: a short comment that says the issue is being closed and explains exactly why there is nothing to
+                 fix.
+
+            Only close (C or D) when you are confident; when unsure, use B (COMMENT) instead of closing.
 
             The reporter is anonymous and will not answer: never ask questions. When the report is vague, make a
             best-effort fix for the most likely cause. Write .issue/result.md in every case; it is the only output used.
