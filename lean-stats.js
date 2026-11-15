@@ -2,6 +2,7 @@
 const Stats = {
   values: { loot: 0, casts: 0, potions: 0, deaths: 0 },
   session: { ms: 0, xp: 0n, gold: 0n, kills: 0, deaths: 0, potions: 0, items: 0, sox: 0, star: 0, moon: 0, sun: 0 },
+  soxList: [],
   active: false, lastAt: null, baseline: null, dead: false, character: null, started: false,
   levels: null, loading: null, retryAt: 0, pendingXP: [], xpPartial: false, xpKnown: false, goldKnown: false,
   killed: new Set(), potions: [], potionTotals: new Map(), fields: {},
@@ -26,6 +27,7 @@ const Stats = {
   reset() {
     this.values = { loot: 0, casts: 0, potions: 0, deaths: 0 };
     this.session = { ms: 0, xp: 0n, gold: 0n, kills: 0, deaths: 0, potions: 0, items: 0, sox: 0, star: 0, moon: 0, sun: 0 };
+    this.soxList = [];
     this.lastAt = now(); this.active = false; this.baseline = null; this.startedAt = null;
     this.dead = World.isDead(); this.pendingXP = []; this.xpPartial = this.xpKnown = this.goldKnown = false;
     this.potions = []; this.potionTotals.clear();
@@ -45,6 +47,8 @@ const Stats = {
   // A confirmed bot pickup of Star/Moon/Sun gear. Unknown items (catalogue not loaded) are not announced.
   soxFound(a, tier) {
     const name = a.name || Items.name(a.ref), label = ['Star', 'Moon', 'Sun'][tier - 1];
+    this.soxList.unshift({ name, tier, at: now() });
+    if (this.soxList.length > 10) this.soxList.pop();
     this.session.sox++; this.session[label.toLowerCase()]++;
     const P = Hunt.cfg().pickup;
     // The notice and sound can be kept for the rarer tiers only (e.g. Sun only); every pickup still counts.

@@ -115,6 +115,8 @@ const Live = {
       note: String(Reconnect.message || '').slice(0, 120),
       pos: pose ? { region: pose.regionId, x: Math.round(pose.x), z: Math.round(pose.z) } : null,
       stats, session,
+      sox: (Stats.soxList || []).slice(0, 10),
+      nearby: (() => { try { return Nearby.snapshot(); } catch { return null; } })(),
       target: target?.name ? String(target.name).slice(0, 60) : null,
       hunt: spot ? { region: spot.regionId ?? null, x: Math.round(spot.x), z: Math.round(spot.z), radius: Number(Settings.profile.hunt.radius) || null } : null,
       log: Log.lines.filter(e => this.feedEntry(e)).slice(-LIVE_LOG_LINES)

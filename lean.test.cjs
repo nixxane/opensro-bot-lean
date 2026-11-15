@@ -3,7 +3,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(__dirname + '/bot.lean.user.js', 'utf8');
 const isolated = source.slice(0, source.lastIndexOf('installWorkerHook();')) +
-  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Reporter, Live, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Search, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, Leveling, ScrollBuff, boot, Ticker, Sound, LeanMap};\n})();';
+  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Reporter, Live, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Search, Nearby, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, Leveling, ScrollBuff, boot, Ticker, Sound, LeanMap};\n})();';
 function fixture(document, sharedStorage) {
   let time = 100000;
   const storage = sharedStorage || new Map(), commands = [], notices = [], intervals = [], timers = [];
@@ -2985,6 +2985,49 @@ test('SoX pickups are counted per seal and the paused-session log line carries t
   assert.match(f.Activity.userMessage(entry), /SoX 4 \(Sun 2, Moon 1, Star 1\)/);
   f.Stats.reset(); assert.deepEqual([f.Stats.session.sun, f.Stats.session.moon, f.Stats.session.star], [0, 0, 0]);
 });
+test('a confirmed SoX pickup is recorded in the session ring with its name and tier', () => {
+  const f = fixture();
+  f.Sound.play = () => true;
+  f.Items.data.set(901, { name: 'Star sword', icon: '', code: 'ITEM_CH_SWORD_01_A_RARE' });
+  const pick = ref => f.Stats.pickup({ ref, name: 'Sword', gold: false, petGid: 0, before: 0 });
+  f.Hunt.start(); pick(901);
+  assert.equal(f.Stats.soxList.length, 1);
+  assert.equal(f.Stats.soxList[0].name, 'Sword');
+  assert.equal(f.Stats.soxList[0].tier, 1);
+  assert.equal(typeof f.Stats.soxList[0].at, 'number');
+});
+test('the SoX session ring lists the newest pickup first', () => {
+  const f = fixture();
+  f.Sound.play = () => true;
+  f.Items.data.set(901, { name: 'Star sword', icon: '', code: 'ITEM_CH_SWORD_01_A_RARE' });
+  f.Items.data.set(903, { name: 'Sun sword', icon: '', code: 'ITEM_CH_SWORD_01_C_RARE' });
+  const pick = ref => f.Stats.pickup({ ref, name: 'Sword', gold: false, petGid: 0, before: 0 });
+  f.Hunt.start(); pick(901); f.advance(1000); pick(903);
+  assert.deepEqual([f.Stats.soxList[0].tier, f.Stats.soxList[1].tier], [3, 1]);
+});
+test('the SoX session ring keeps only the last 10 pickups', () => {
+  const f = fixture();
+  f.Sound.play = () => true;
+  f.Items.data.set(901, { name: 'Star sword', icon: '', code: 'ITEM_CH_SWORD_01_A_RARE' });
+  f.Items.data.set(903, { name: 'Sun sword', icon: '', code: 'ITEM_CH_SWORD_01_C_RARE' });
+  const pick = ref => f.Stats.pickup({ ref, name: 'Sword', gold: false, petGid: 0, before: 0 });
+  f.Hunt.start();
+  for (let i = 0; i < 10; i++) { pick(901); f.advance(100); }
+  pick(903);
+  assert.equal(f.Stats.soxList.length, 10);
+  assert.equal(f.Stats.soxList[0].tier, 3);
+  assert.equal(f.Stats.soxList.at(-1).tier, 1);
+});
+test('resetting the session clears the SoX ring', () => {
+  const f = fixture();
+  f.Sound.play = () => true;
+  f.Items.data.set(901, { name: 'Star sword', icon: '', code: 'ITEM_CH_SWORD_01_A_RARE' });
+  const pick = ref => f.Stats.pickup({ ref, name: 'Sword', gold: false, petGid: 0, before: 0 });
+  f.Hunt.start(); pick(901);
+  assert.equal(f.Stats.soxList.length, 1);
+  f.Stats.reset();
+  assert.equal(f.Stats.soxList.length, 0);
+});
 test('SoX chime can be kept for Moon and Sun, or Sun only, while every pickup still counts', () => {
   const f = fixture(); let chimes = 0;
   f.Sound.play = kind => { if (kind === 'sox') chimes++; return true; };
@@ -5678,6 +5721,56 @@ test('party members and their pets do not make a monster another player\'s targe
   const stamp = f.World.hitByOthers.get(30); f.advance(1000); cast(5); assert.equal(f.World.hitByOthers.get(30), stamp, 'a member does not refresh a stranger\'s mark');
   f.Hunt.running = true; f.Hunt.state = 'search'; f.World.hitByOthers.clear(); cast(5);
   assert.equal(f.Hunt.chooseTarget()?.gid, 30, 'the monster the party is fighting can be chosen');
+});
+function nearbyFixture() {
+  const f = fixture();
+  f.World.gp.social = { localName: 'Me', members: [{ id: 5, name: 'Mate' }, { id: 1, name: 'Me' }] };
+  const player = (gid, name, x) => f.World.ents.set(gid, { gid, kind: 'player', name, regionId: 1, x, y: 0, z: 100 });
+  player(5, 'Mate', 110);
+  f.World.ents.set(30, { gid: 30, kind: 'monster', name: 'Wolf', regionId: 1, x: 120, y: 0, z: 100, attackFlags: 16, appearanceState: [0] });
+  f.Nearby.init();
+  return { f, player };
+}
+test('nearby lists the nearest non-party players within the alert radius', () => {
+  const { f, player } = nearbyFixture(); player(6, 'Near', 130); player(7, 'Far', 200); player(8, 'Out', 400);
+  const s = f.Nearby.snapshot();
+  assert.equal(s.total, 2);
+  assert.deepEqual(JSON.parse(JSON.stringify(s.players)), [{ name: 'Near', m: 3 }, { name: 'Far', m: 10 }]);
+  assert.equal(s.attacker, null);
+});
+test('nearby names a stranger fighting the current target', () => {
+  const { f, player } = nearbyFixture(); f.World.gp.target = 30; player(6, 'Stranger', 150);
+  f.World.onCast({ caster: 6, target: 30, results: [{ target: 30 }] });
+  assert.equal(f.Nearby.snapshot().attacker, 'Stranger');
+});
+test('nearby does not name a party member fighting the current target', () => {
+  const { f } = nearbyFixture(); f.World.gp.target = 30;
+  f.World.onCast({ caster: 5, target: 30, results: [{ target: 30 }] });
+  assert.equal(f.Nearby.snapshot().attacker, null);
+});
+test('nearby forgets an attacker older than eight seconds', () => {
+  const { f, player } = nearbyFixture(); f.World.gp.target = 30; player(6, 'Stranger', 150);
+  f.World.onCast({ caster: 6, target: 30, results: [{ target: 30 }] });
+  assert.equal(f.Nearby.snapshot().attacker, 'Stranger');
+  f.advance(9000);
+  assert.equal(f.Nearby.snapshot().attacker, null);
+});
+test('nearby clears every attacker on a world reset', () => {
+  const { f, player } = nearbyFixture(); f.World.gp.target = 30; player(6, 'Stranger', 150);
+  f.World.onCast({ caster: 6, target: 30, results: [{ target: 30 }] });
+  f.bus.emit('reset');
+  assert.equal(f.Nearby.snapshot().attacker, null);
+});
+test('nearby reports no attacker when nothing is targeted', () => {
+  const { f, player } = nearbyFixture(); player(6, 'Stranger', 150);
+  f.World.onCast({ caster: 6, target: 30, results: [{ target: 30 }] });
+  assert.equal(f.World.target(), null);
+  assert.equal(f.Nearby.snapshot().attacker, null);
+});
+test('nearby tolerates a missing pose', () => {
+  const { f, player } = nearbyFixture(); player(6, 'Stranger', 150);
+  f.World.pose = () => null;
+  assert.deepEqual(JSON.parse(JSON.stringify(f.Nearby.snapshot())), { total: 0, players: [], attacker: null });
 });
 test('the anti-KS scope can spare every monster but normal and champion', () => {
   const f = fixture();
@@ -9560,6 +9653,23 @@ async function updateTests() {
     assert.deepEqual(plain(f.Live.snapshot().hunt), { region: 25000, x: 10, z: -4, radius: f.Settings.profile.hunt.radius });
     f.World.target = () => ({ name: 'Yeti' });
     assert.equal(f.Live.snapshot().target, 'Yeti');
+  });
+
+  test('a live snapshot carries the SoX ring and the nearby players', () => {
+    const f = liveFixture();
+    f.Sound.play = () => true;
+    f.Items.data.set(901, { name: 'Star sword', icon: '', code: 'ITEM_CH_SWORD_01_A_RARE' });
+    f.Hunt.start();
+    f.Stats.pickup({ ref: 901, name: 'Sword', gold: false, petGid: 0, before: 0 });
+    f.World.ents.set(6, { gid: 6, kind: 'player', name: 'Stranger', regionId: 1, x: 130, y: 0, z: 100 });
+    const snap = f.Live.snapshot();
+    assert.equal(Array.isArray(snap.sox), true);
+    assert.deepEqual(plain(snap.sox[0]), { name: 'Sword', tier: 1, at: f.Stats.soxList[0].at });
+    assert.equal(typeof snap.nearby, 'object');
+    assert.equal(typeof snap.nearby.total, 'number');
+    assert.equal(Array.isArray(snap.nearby.players), true);
+    assert.ok(snap.nearby.attacker === null || typeof snap.nearby.attacker === 'string');
+    assert.deepEqual(plain(snap.nearby.players), [{ name: 'Stranger', m: 3 }]);
   });
 
   test('a live snapshot uses the bot wording, drops routine targeting, marks repeats and keeps twelve lines', () => {

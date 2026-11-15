@@ -65,3 +65,16 @@ console.log('ok');
   assert.deepEqual(feed.log.map(e => e.text), ['Picked up.']);
 }
 console.log('reporter feed and gauge tests passed');
+
+// SoX pickups and nearby players travel only when the bot exposes them; older bots still produce a valid report.
+{
+  const stats = { soxList: [{ name: 'Sword', tier: 1, at: 123 }], levels: { 42: { expRequired: '1000' } }, display: () => ({}) };
+  const nearby = { snapshot: () => ({ total: 1, players: [{ name: 'Stranger', m: 12 }], attacker: null }) };
+  const withSources = snapshot(bot({ top: { stats, nearby } }));
+  assert.deepEqual(withSources.sox, [{ name: 'Sword', tier: 1, at: 123 }]);
+  assert.deepEqual(withSources.nearby, { total: 1, players: [{ name: 'Stranger', m: 12 }], attacker: null });
+  const old = snapshot(bot());
+  assert.deepEqual(old.sox, []);
+  assert.equal(old.nearby, null);
+}
+console.log('reporter sox and nearby tests passed');

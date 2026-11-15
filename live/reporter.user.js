@@ -31,6 +31,8 @@ function snapshot(B) {
     note: String(B.reconnect?.message || '').slice(0, 120),
     pos: pose ? { region: pose.regionId, x: Math.round(pose.x), z: Math.round(pose.z) } : null,
     stats: B.stats.display(),
+    sox: (B.stats && Array.isArray(B.stats.soxList) ? B.stats.soxList : []).slice(0, 10),
+    nearby: (B.nearby && typeof B.nearby.snapshot === 'function' ? B.nearby.snapshot() : null),
     log: B.log.lines.filter(feedEntry).slice(-12)
       .map(e => ({ at: e.lastAt || e.at, level: e.level, text: say(B, e).slice(0, 200) + (e.repeatCount > 1 ? ' ×' + e.repeatCount : '') })),
   };

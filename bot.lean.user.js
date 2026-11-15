@@ -6597,6 +6597,7 @@ const Loot = {
 const Stats = {
   values: { loot: 0, casts: 0, potions: 0, deaths: 0 },
   session: { ms: 0, xp: 0n, gold: 0n, kills: 0, deaths: 0, potions: 0, items: 0, sox: 0, star: 0, moon: 0, sun: 0 },
+  soxList: [],
   active: false, lastAt: null, baseline: null, dead: false, character: null, started: false,
   levels: null, loading: null, retryAt: 0, pendingXP: [], xpPartial: false, xpKnown: false, goldKnown: false,
   killed: new Set(), potions: [], potionTotals: new Map(), fields: {},
@@ -6621,6 +6622,7 @@ const Stats = {
   reset() {
     this.values = { loot: 0, casts: 0, potions: 0, deaths: 0 };
     this.session = { ms: 0, xp: 0n, gold: 0n, kills: 0, deaths: 0, potions: 0, items: 0, sox: 0, star: 0, moon: 0, sun: 0 };
+    this.soxList = [];
     this.lastAt = now(); this.active = false; this.baseline = null; this.startedAt = null;
     this.dead = World.isDead(); this.pendingXP = []; this.xpPartial = this.xpKnown = this.goldKnown = false;
     this.potions = []; this.potionTotals.clear();
@@ -6640,6 +6642,8 @@ const Stats = {
   // A confirmed bot pickup of Star/Moon/Sun gear. Unknown items (catalogue not loaded) are not announced.
   soxFound(a, tier) {
     const name = a.name || Items.name(a.ref), label = ['Star', 'Moon', 'Sun'][tier - 1];
+    this.soxList.unshift({ name, tier, at: now() });
+    if (this.soxList.length > 10) this.soxList.pop();
     this.session.sox++; this.session[label.toLowerCase()]++;
     const P = Hunt.cfg().pickup;
     // The notice and sound can be kept for the rarer tiers only (e.g. Sun only); every pickup still counts.
@@ -17724,6 +17728,49 @@ const Reporter = {
 bus.on('reset', () => Reporter.reset());
 
 
+// Nearby players and who is fighting the local target, for the phone dashboard. Read-only: nothing here sends commands.
+// Deliberate simplification: a pet's hit is not named in `attacker` (its owner still appears in `players`); only player
+// casts are remembered. Party members are matched by name, the same way Hunt.playerCheck does.
+const Nearby = {
+  attackers: new Map(), // monster gid -> { name, at } of the last non-party player who hit it
+  init() { bus.on('cast', cast => this.observe(cast)); bus.on('reset', () => this.attackers.clear()); },
+  // Record a stranger's hit on every monster the cast touched. The character and party members are never named.
+  observe(cast) {
+    const caster = World.ents.get(cast.caster);
+    if (!caster || caster.kind !== 'player' || caster.gid === World.localGid()) return;
+    if (new Set((World.gp?.social?.members || []).map(m => m.name)).has(caster.name)) return;
+    const at = World.simNow() ?? now();
+    const targets = new Set([cast.target, ...(cast.results || []).map(r => r?.target)].filter(Boolean));
+    for (const gid of targets) {
+      const target = World.ents.get(gid);
+      if (target?.kind === 'monster') this.attackers.set(gid, { name: caster.name, at });
+    }
+  },
+  // The same 8 s window the anti-KS `ksAvoids` check uses; entries that old are dropped here.
+  attacker() {
+    const sim = World.simNow() ?? now(), target = World.target();
+    let name = null;
+    for (const [gid, hit] of this.attackers) {
+      if (sim - hit.at > 8000) this.attackers.delete(gid);
+      else if (target && gid === target.gid) name = hit.name;
+    }
+    return name;
+  },
+  // Non-party players within the alert radius, nearest five first. The radius applies even while the alert is off.
+  snapshot() {
+    const pose = World.pose(), radius = Settings.profile.hunt.playerAlert.radius, party = new Set((World.gp?.social?.members || []).map(m => m.name));
+    const near = [];
+    if (pose) for (const e of World.ents.values()) {
+      if (e.kind !== 'player' || e.gid === World.localGid() || party.has(e.name)) continue;
+      const d = dist2D(pose, e);
+      if (d <= radius) near.push({ e, d });
+    }
+    near.sort((a, b) => a.d - b.d);
+    return { total: near.length, players: near.slice(0, 5).map(({ e, d }) => ({ name: e.name, m: Math.round(d / 10) })), attacker: this.attacker() };
+  },
+};
+
+
 // Live dashboard: the bot posts a small snapshot of itself to the user's own hub every few seconds, so a phone can watch it.
 // The hub is live/worker (a Cloudflare Worker on the user's own account) or live/hub.js behind an HTTPS tunnel. The data
 // goes nowhere else. The address and code are a secret: they live in this browser's storage (Store key liveChannel), not in
@@ -17841,6 +17888,8 @@ const Live = {
       note: String(Reconnect.message || '').slice(0, 120),
       pos: pose ? { region: pose.regionId, x: Math.round(pose.x), z: Math.round(pose.z) } : null,
       stats, session,
+      sox: (Stats.soxList || []).slice(0, 10),
+      nearby: (() => { try { return Nearby.snapshot(); } catch { return null; } })(),
       target: target?.name ? String(target.name).slice(0, 60) : null,
       hunt: spot ? { region: spot.regionId ?? null, x: Math.round(spot.x), z: Math.round(spot.z), radius: Number(Settings.profile.hunt.radius) || null } : null,
       log: Log.lines.filter(e => this.feedEntry(e)).slice(-LIVE_LOG_LINES)
@@ -21230,7 +21279,7 @@ function boot() {
   }, true);
   // Scrolling the panel must not also zoom or move the game camera underneath it.
   W.addEventListener('wheel', e => { if (e.composedPath().includes(UI.root?.host)) e.stopImmediatePropagation(); }, { capture: true, passive: true });
-  Combat.init(); Loot.init(); Alchemy.init(); BuffGear.init(); Stall.init();
+  Combat.init(); Loot.init(); Alchemy.init(); BuffGear.init(); Stall.init(); Nearby.init();
   bus.on('character', name => {
     const key = name ? 'profile:' + name : 'profile:default';
     if (key !== Settings.profileKey) { Town.lastScrollPoint = null; Town.deathPoint = null; stopAll(); Settings.useCharacter(name); }
@@ -21282,7 +21331,7 @@ function boot() {
   Live.startTimer();
   Live.begin();
   W.addEventListener('hashchange', () => Live.begin());
-  W.SROLean = { version: VERSION, stats: Stats, updates: Updates, diagnostics: Diagnostics, reports: Reports, alchemy: Alchemy, buffGear: BuffGear, world: World, settings: Settings, hunt: Hunt, loot: Loot, speedScroll: SpeedScroll, repairHammer: RepairHammer, resurrect: Resurrect, stall: Stall, quest: Quest,
+  W.SROLean = { version: VERSION, stats: Stats, updates: Updates, diagnostics: Diagnostics, reports: Reports, alchemy: Alchemy, buffGear: BuffGear, world: World, settings: Settings, hunt: Hunt, loot: Loot, speedScroll: SpeedScroll, repairHammer: RepairHammer, resurrect: Resurrect, stall: Stall, quest: Quest, nearby: Nearby,
     restock: Restock, town: Town, walkBack: WalkBack, travel: Travel, antiStuck: AntiStuck, chase: Chase, trap: Trap, autoMastery: AutoMastery, statPoints: StatPoints, share: ProfileShare, trace: Trace, setup: Setup, reconnect: Reconnect, petPotion: PetPotion, petAttack: PetAttack, mall: MallProbe, mallBuyer: MallBuyer, scrolls: ScrollBuff, navigation: Navigation, route: Route, wardrobe: Wardrobe, wardrobeData: WdData, learned: Learned, controller: Controller, ui: UI, activity: Activity, map: LeanMap, render: RenderControl, support: Support, items: ItemRules, stop: stopAll, log: Log };
   Log.info('NIX ready. F8 starts/stops; F7 folds; F6 or the × minimises and restores; Shift+F7 hides/shows the window.');
 }

@@ -96,6 +96,10 @@
   .minis span { padding:2px 9px; border-radius:999px; border:1px solid var(--line); color:var(--dim); font-variant-numeric:tabular-nums; }
   .minis b { color:var(--text); }
   .minis .rare { border-color:var(--rare); } .minis .rare b { color:var(--rare); }
+  .soxline { font-size:13px; font-weight:600; color:var(--rare); }
+  .nearline { font-size:13px; color:var(--dim); }
+  .ksline { font-size:13px; font-weight:600; color:var(--bad-fg); }
+  .facts dd.bad { color:var(--bad-fg); }
   .logbox { border-top:1px solid var(--line); padding-top:8px; }
 
   /* list view: divs, so a character's row and its detail share one keyed group */
@@ -234,6 +238,9 @@
     </dl>
     <div class="minis"><span>Deaths <b data-k="deaths"></b></span><span>Potions <b data-k="potions"></b></span><span>Items <b data-k="items"></b></span>
       <span class="rare">Sun <b data-k="sun"></b></span><span class="rare">Moon <b data-k="moon"></b></span><span class="rare">Star <b data-k="star"></b></span></div>
+    <div class="soxline" data-k="soxline" hidden></div>
+    <div class="nearline" data-k="nearline" hidden></div>
+    <div class="ksline" data-k="ksline" hidden></div>
     <div class="seen" data-k="seen"></div>
     <div class="logbox" data-k="log"></div>
   </article>
@@ -263,6 +270,9 @@
         <div><dt>Net gold</dt><dd data-k="gold2"></dd></div><div><dt>Kills</dt><dd data-k="kills"></dd></div>
         <div><dt>Deaths</dt><dd data-k="deaths"></dd></div><div><dt>Potions</dt><dd data-k="potions"></dd></div>
         <div><dt>Items</dt><dd data-k="items"></dd></div><div><dt>Sun / Moon / Star</dt><dd data-k="sox"></dd></div>
+        <div class="wide"><dt>SoX this session</dt><dd data-k="soxlist"></dd></div>
+        <div class="wide"><dt>Nearby</dt><dd data-k="near"></dd></div>
+        <div class="wide"><dt>KS</dt><dd data-k="ks"></dd></div>
         <div class="wide"><dt>Target</dt><dd data-k="target"></dd></div>
         <div class="wide"><dt>Position / spot</dt><dd data-k="pos"></dd></div>
         <div class="wide"><dt>Bot / last report</dt><dd data-k="seenl"></dd></div>
@@ -352,6 +362,13 @@ function derive(s) {
   const xpph = num(ses.xpPerHour, parseNum(st.rate)), goldph = gold != null && secs != null && secs >= 30 ? gold * 3600 / secs : null;
   const hpNow = num(s.hpNow, null), hpMax = num(s.hpMax, null), mpNow = num(s.mpNow, null), mpMax = num(s.mpMax, null);
   const pctOf = (now, max, old) => now != null && max > 0 ? clampPct(now / max * 100) : old == null ? null : clampPct(old);
+  const SEAL = ['Star', 'Moon', 'Sun'];
+  const soxList = Array.isArray(s.sox) ? s.sox : [];
+  const nearby = s.nearby || null;
+  const soxText = soxList.map(x => (x && x.name ? x.name : '') + (x && x.tier ? ' (' + SEAL[x.tier - 1] + ')' : '')).filter(Boolean).join(', ');
+  const nearText = nearby && nearby.total ? nearby.total + ' player' + (nearby.total > 1 ? 's' : '') + ' near' : '';
+  const nearNames = nearby && Array.isArray(nearby.players) ? nearby.players.map(p => p ? p.name + ' ' + p.m + ' m' : '').filter(Boolean).join(', ') : '';
+  const ksText = nearby && nearby.attacker ? nearby.attacker + ' is fighting your target' : '';
   return {
     name: s.name, bot: s.bot || '', level: s.level, kind, label, state, note, dead: !!s.dead,
     age, late, stale, seenAt: s.at,
@@ -363,6 +380,7 @@ function derive(s) {
     hpNow, hpMax, mpNow, mpMax, target: s.target || '',
     hunt: s.hunt ? 'Spot: region ' + s.hunt.region + ' (' + s.hunt.x + ', ' + s.hunt.z + '), radius ' + s.hunt.radius : '',
     sun: parseNum(st.sun), moon: parseNum(st.moon), star: parseNum(st.star),
+    soxText, nearText, nearNames, ksText, nearby,
     log: (Array.isArray(s.log) ? s.log : []).slice().reverse().map(e => Object.assign({ at: e.at, text: String(e.text || ''), level: e.level }, classify(e))), // newest first
   };
 }
@@ -520,9 +538,15 @@ function renderCard(el, b) {
     hp: pair(b.hpNow, b.hpMax) || (b.hp == null ? '—' : Math.round(b.hp) + '%'), mp: pair(b.mpNow, b.mpMax) || (b.mp == null ? '—' : Math.round(b.mp) + '%'), xp: b.xpPct == null ? '—' : b.xpPct.toFixed(1) + '%',
     rate: compact(b.xpph), gold: signed(b.gold), kills: full(b.kills), time: b.time || '—', deaths: full(b.deaths), potions: full(b.potions), items: full(b.items),
     sun: full(b.sun), moon: full(b.moon), star: full(b.star),
+    soxline: b.soxText ? '★ SoX: ' + b.soxText : '',
+    nearline: b.nearText ? '● ' + b.nearText + (b.nearNames ? ' · ' + b.nearNames : '') : '',
+    ksline: b.ksText ? '⚔ ' + b.ksText : '',
     seen: off ? 'Last report ' + rel(b.age) + '. Numbers are from then.' : b.late ? 'Report is ' + rel(b.age) + ' old' : 'Updated ' + rel(b.age),
   });
   el.querySelector('.badge').title = b.label + (b.state ? ' (' + b.state + ')' : '');
+  el.querySelector('[data-k=soxline]').hidden = !b.soxText;
+  el.querySelector('[data-k=nearline]').hidden = !b.nearText;
+  el.querySelector('[data-k=ksline]').hidden = !b.ksText;
   el.querySelector('[data-k=seen]').className = 'seen' + (off || b.late ? ' old' : '');
   setBar(el, 'hpBar', off ? 0 : b.hp); setBar(el, 'mpBar', off ? 0 : b.mp); setBar(el, 'xpBar', b.xpPct);
   renderLog(el.querySelector('[data-k=log]'), b, LOG_SHOWN_CARD);
@@ -574,11 +598,13 @@ function updateRow(el, b) {
     doing: off ? 'Offline, last report ' + rel(b.age) : [b.label, b.kind === 'running' ? b.state : '', b.note].filter(Boolean).join(' · '),
     xpg: full(b.xp), time: b.time || '—', gold2: signed(b.gold), kills: full(b.kills), deaths: full(b.deaths), potions: full(b.potions), items: full(b.items),
     sox: [b.sun, b.moon, b.star].map(full).join(' / '), pos: [b.pos, b.hunt].filter(Boolean).join(' · ') || '—',
+    soxlist: b.soxText || '—', near: (b.nearText + (b.nearNames ? ' · ' + b.nearNames : '')) || '—', ks: b.ksText || '—',
     hpt: pair(b.hpNow, b.hpMax) || (b.hp == null ? '—' : Math.round(b.hp) + '%'), mpt: pair(b.mpNow, b.mpMax) || (b.mp == null ? '—' : Math.round(b.mp) + '%'),
     xpt: b.xpPct == null ? '—' : b.xpPct.toFixed(1) + '%', goldph2: b.goldph == null ? '—' : signed(b.goldph), target: b.target || '—',
     seenl: [b.bot && 'bot ' + b.bot, 'report ' + rel(b.age)].filter(Boolean).join(' · '),
   });
   el.querySelector('.badge').title = b.label + (b.state ? ' (' + b.state + ')' : '');
+  el.querySelector('[data-k=ks]').classList.toggle('bad', !!b.ksText);
   el.querySelector('.c-seen').classList.toggle('old', off || b.late);
   setBar(el, 'hpBar', off ? 0 : b.hp); setBar(el, 'mpBar', off ? 0 : b.mp); setBar(el, 'xpBar', b.xpPct);
   if (open) renderLog(el.querySelector('[data-k=log]'), b, LOG_SHOWN_ROW);
