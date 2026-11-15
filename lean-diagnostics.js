@@ -107,27 +107,41 @@ const Diagnostics = {
     const t = Town.trip ? { why: Town.trip.why, at: Town.trip.started } : Town.lastTrip;
     return t ? String(t.why || '').replace(/\s*\(.*\)/, '') + ' (' + Math.round((now() - t.at) / 1000) + ' s ago)' : '';
   },
+  // The hunt-area sweep is on and this is its search state: the bot is already walking the area, so telling the
+  // player to move and save a new hunting spot would be wrong.
+  searching() { return Hunt.state === 'search' && Search.on(Hunt.cfg()); },
+  // Live monsters in the game's entity list, whether or not the hunt may attack them. A report with no count
+  // cannot tell an empty area from a monster the bot refused.
+  monsterCount() {
+    let n = 0;
+    for (const e of World.ents.values()) if (e.kind === 'monster' && World.isAlive(e)) n++;
+    return n;
+  },
   // Why no monster is being attacked, counted from the monsters in view with the same checks the hunt uses.
   // Counts only, no names. Short plain sentences, because the panel and bug reports are read by many languages.
   noTarget() {
     const H = Hunt.cfg(), pose = World.pose();
     if (!pose) return '';
     const sim = World.simNow() ?? 0, include = splitList(H.include), exclude = splitList(H.exclude);
-    const why = { banned: 0, kind: 0, level: 0, name: 0, far: 0, others: 0 };
+    const why = { banned: 0, ignore: 0, kind: 0, level: 0, name: 0, far: 0, others: 0 };
     let seen = 0;
     for (const e of World.ents.values()) {
-      if (!isAttackableMob(e)) continue;
+      // Live monsters count as in view even when the game will not let the bot attack them. Counting only
+      // attackable ones made the panel say "No monsters in view" beside a monster the player could see.
+      if (e.kind !== 'monster' || !World.isAlive(e)) continue;
       seen++;
       const name = (e.name || '').toLowerCase(), level = e.level ?? 0;
-      if (Hunt.banned(Hunt.ban, e.gid)) why.banned++;
+      if (!isAttackableMob(e)) why.ignore++;
+      else if (Hunt.banned(Hunt.ban, e.gid)) why.banned++;
       else if (!Hunt.classAllowed(e)) why.kind++;
       else if (H.levelMin && level < H.levelMin || H.levelMax && level > H.levelMax) why.level++;
       else if (include.length && !include.some(s => name.includes(s)) || exclude.some(s => name.includes(s))) why.name++;
       else if (!Hunt.inArea(e) || dist2D(pose, e) > H.chase) why.far++;
       else if (Hunt.ksAvoids(e, sim)) why.others++;
     }
-    if (!seen) return 'No monsters in view. Move to a place with monsters and press "Set hunting spot here".';
+    if (!seen) return 'No monsters in view.' + (this.searching() ? '' : ' Move to a place with monsters and press "Set hunting spot here".');
     const parts = [
+      [why.ignore, 'the game will not let it be attacked (not selectable right now)'],
       [why.kind, 'monster type is switched off (Combat > Hunt area > Monster classes)'],
       [why.level, 'level is outside your minimum or maximum level'],
       [why.name, 'name is not in "Only these mobs" or is in "Skip these mobs"'],
@@ -167,7 +181,7 @@ const Diagnostics = {
     if (World.isCasting()) return 'Combat: waiting for the current cast.';
     if (Hunt.state === 'fight' && Combat.fallbackNote()) return 'Combat: normal attack (' + Combat.fallbackNote() + ').';
     if (Hunt.targetGid) return 'Combat: approaching or attacking the target.';
-    return 'Hunting: searching for an eligible target. ' + this.noTarget();
+    return (this.searching() ? 'Hunting: searching the hunting area for monsters. ' : 'Hunting: searching for an eligible target. ') + this.noTarget();
   },
   snapshot() {
     const gp = World.gp, c = Settings.profile, pet = Loot.pet(), social = gp?.social, matching = gp?.partyMatching;
@@ -184,7 +198,7 @@ const Diagnostics = {
       nativeAlchemyMode: ['reinforce', 'attribute', 'magic', 'compound', 'advanced', 'dissolve'].includes(gp?.alchemy?.mode) ? gp.alchemy.mode : null,
       movementPending: !!gp?.pendingMoves, returnScrollActive: !!gp?.returnScroll,
       running: !!Hunt.running, inWorld: World.inWorld(), dead: World.isDead(),
-      inventoryPending: !!gp?.inventoryPending, casting: World.isCasting(),
+      inventoryPending: !!gp?.inventoryPending, casting: World.isCasting(), monstersInView: this.monsterCount(),
       curePills: Restock.count(58), freeBagSlots: this.number(World.freeBagSlots()), hpPotions: Potion.count('hp'), mpPotions: Potion.count('mp'),
       petFreeSlots: pet ? this.number(pet.rec.status - pet.rec.inventory.length) : null,
       pickupPending: !!Loot.active, pickupRetry: !!Loot.active?.retryAt, pickupAttempts: this.number(Loot.active?.attempts),
@@ -208,14 +222,16 @@ const Diagnostics = {
         buyCure: !!Restock.cfg().cure.on, cureTarget: this.number(Restock.cfg().cure.target), cureLow: this.number(Restock.cfg().cure.low),
         hpLow: this.number(Restock.cfg().hp.low), mpLow: this.number(Restock.cfg().mp.low),
         collectDrops: !!c.hunt.pickup.enabled, petCollector: Loot.petMode(), follow: Settings.profile.trace.enabled ? Trace.code : '', autoStatPoints: Settings.profile.statPoints.enabled ? String(StatPoints.status()).slice(0, 200) : '', autoMastery: AutoMastery.active() ? String(AutoMastery.message).slice(0, 600) : '', trapStage: Trap.stage, trapTile: Trap.stage ? Trap.tile : '', characterCollects: Loot.categories.some(k => c.hunt.pickup[k] && Loot.collectorFor(k) === 'character'), pickupRadius: this.number(c.hunt.pickup.radius / 10),
-        finishFight: !!c.hunt.pickup.afterKillOnly, speedScroll: !!c.potion.speedScroll, autoStart: !!c.hunt.autoStart, retry: !!c.hunt.retry }
+        finishFight: !!c.hunt.pickup.afterKillOnly, speedScroll: !!c.potion.speedScroll, autoStart: !!c.hunt.autoStart, retry: !!c.hunt.retry,
+        searchArea: !!c.hunt.search?.enabled }
     };
   },
   sample() {
     try {
       const state = this.snapshot();
-      // Deadline countdown alone is not a new state transition.
-      const key = JSON.stringify({ ...state, requestRemainingMs: null });
+      // Deadline countdown and the live monster count alone are not state transitions: monsters entering or
+      // leaving view would otherwise crowd the short history with near-identical entries.
+      const key = JSON.stringify({ ...state, requestRemainingMs: null, monstersInView: null });
       if (key !== this.last) { this.last = key; this.history.push({ at: now(), state }); }
       if (this.history.length > 30) this.history.shift();
       return state;

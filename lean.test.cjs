@@ -5822,6 +5822,42 @@ test('the searching status says why no monster is eligible', () => {
   assert.match(f.Diagnostics.main(), /1: name is not in/);
   f.Hunt.ban.set(32, 1e12); assert.match(f.Diagnostics.main(), /1: recently given up/);
 });
+test('the searching status counts monsters the game will not let the bot attack', () => {
+  const f = fixture(), mob = (gid, extra = {}) => f.World.ents.set(gid, { gid, kind: 'monster', name: 'Wolf', level: 40, regionId: 1, x: 120, y: 0, z: 100, attackFlags: 16, appearanceState: [0], ...extra });
+  f.Hunt.running = true; f.Hunt.state = 'search';
+  mob(30, { attackFlags: 0 });       // the game marks this one as not attackable
+  mob(31, { appearanceState: [4] }); // still appearing / not selectable
+  mob(32, { appearanceState: [2] }); // a corpse is not a monster in view
+  const text = f.Diagnostics.main();
+  assert.match(text, /searching for an eligible target\. Monsters in view: 2\./);
+  assert.match(text, /2: the game will not let it be attacked/);
+  assert.doesNotMatch(text, /No monsters in view/, 'a monster the player can see is never "no monsters in view"');
+  assert.doesNotMatch(text, /Set hunting spot here/, 'moving would not make a monster selectable');
+});
+test('the searching status says the bot is searching the area while the sweep is on', () => {
+  const f = fixture();
+  f.Settings.profile.hunt.center = { regionId: 1, x: 500, y: 0, z: 500 };
+  f.Settings.profile.hunt.search.enabled = true;
+  f.Hunt.running = true; f.Hunt.state = 'search';
+  const text = f.Diagnostics.main();
+  assert.match(text, /searching the hunting area for monsters\. No monsters in view\./);
+  assert.doesNotMatch(text, /Set hunting spot here/, 'the bot is already walking the area');
+  f.Settings.profile.hunt.search.enabled = false;
+  assert.match(f.Diagnostics.main(), /Move to a place with monsters and press "Set hunting spot here"/, 'a still bot still gives the move advice');
+});
+test('the report shows the live monster count and whether the hunt-area search is on', () => {
+  const f = fixture(), mob = (gid, extra = {}) => f.World.ents.set(gid, { gid, kind: 'monster', name: 'Wolf', level: 40, regionId: 1, x: 120, y: 0, z: 100, attackFlags: 16, appearanceState: [0], ...extra });
+  assert.equal(f.Diagnostics.snapshot().monstersInView, 0);
+  assert.equal(f.Diagnostics.snapshot().settings.searchArea, false);
+  mob(30, { attackFlags: 0 }); mob(31, { appearanceState: [2] });
+  f.Settings.profile.hunt.search.enabled = true;
+  const snap = f.Diagnostics.snapshot();
+  assert.equal(snap.monstersInView, 1, 'live monsters count even when the game will not let the bot attack them; corpses do not');
+  assert.equal(snap.settings.searchArea, true);
+  f.Diagnostics.sample(); const entries = f.Diagnostics.history.length;
+  mob(32); f.Diagnostics.sample();
+  assert.equal(f.Diagnostics.history.length, entries, 'monsters entering view alone do not crowd the history');
+});
 test('magic and attribute stones are stored in the warehouse, never sold, and have their own pickup switches', () => {
   const f = townFixture(), magic = { slot: 5, refObjId: 1010, typeFlags: 108 | (11 << 7) | (1 << 11), quantity: 4, name: 'Magic stone' };
   const astral = { slot: 6, refObjId: 1011, typeFlags: 108 | (11 << 7) | (7 << 11), quantity: 1, name: 'Astral stone' };
