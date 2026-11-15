@@ -278,6 +278,11 @@ Town.revive defaults true (effective only with the town cycle enabled), overridi
 After the 1.2.25 push was blocked by automatic approval review, the user explicitly instructed: "always publish tog github." Publish completed bot updates to https://github.com/nixxane/opensro-bot-lean as part of the release workflow, including the prepared 1.2.25 release. This is standing authorization for this bot repository.
 
 
+## Standing Discord release preference (2026-11-15)
+
+The user instructed: "always do a release on discord." Every bot release is also announced on the project's Discord: creating the GitHub release fires the `release` event that runs `.github/workflows/discord-release.yml`, which posts the release notes to the `DISCORD_WEBHOOK` secret. A manual release must therefore create the GitHub release (e.g. `gh release create v<version> --notes-file notes/<version>.md`), not just push the commit. The automated `release.yml` workflow already does this for merged PRs.
+
+
 ## Toggle-required departure stall: 1.2.26
 
 User clarified that on the latest version the bot only notices low potions/full inventory and recalls after toggling off/on. Status text was unavailable. Reproduced a matching failure in 1.2.25: Town.begin ignored a false Cmd.move result when a hunting move had just used the 550 ms rate limit. The worker could continue its combat loop while Town waited for combat to settle; toggle sends another stop. Town now tracks successful halt dispatch, retries rejected stops through normal Cmd.move guards, and allows at most three successful stop sends spaced by 1.5 seconds while casting continues. The existing 30-second departure limit remains; no repeated scroll dispatch is introduced.

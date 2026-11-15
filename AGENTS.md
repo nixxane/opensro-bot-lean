@@ -53,7 +53,9 @@ Merged PRs are released automatically by `.github/workflows/release.yml` (next p
 2. Add `notes/<version>.md` (short, plain language; state what was only tested in simulation).
 3. Run build, `node --check`, `node lean.test.cjs`, `git diff --check`. Confirm both generated headers and runtime `VERSION` agree.
 4. Commit source, tests, docs AND both generated files together with explicit `git add <paths>` (never `git add -A`).
-5. Do NOT push unless the user says to. Documentation-only changes need no version bump or rebuild.
+5. Do NOT push unless the user says to.
+6. Always announce the release on Discord. After pushing, create the GitHub release — `gh release create v<version> --title "<version> · <title>" --notes-file notes/<version>.md` — and its `release` event runs `.github/workflows/discord-release.yml`, which posts the notes to the Discord webhook. (The automated workflow already does this for merged PRs.)
+Documentation-only changes need no version bump or rebuild.
 
 ## Never
 - Commit browser profiles (`browser-test-profile/`), screenshots (`lean-*.png`), `*settings.json`, `.env*`, `*.before-*.js` backups, or personal data.
