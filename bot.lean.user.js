@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         nixxane bot
 // @namespace    https://opensro.online/
-// @version      1.2.268
+// @version      1.2.269
 // @updateURL    https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.meta.js
 // @downloadURL  https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -22,7 +22,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[NIX] Another SRO assistant is active. Disable it and reload to use NIX.');
   return;
 }
-const VERSION = '1.2.268';
+const VERSION = '1.2.269';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -239,7 +239,7 @@ const DEFAULT_PROFILE = {
   },
   hunt: {
     levelSpots: { on: false, list: [] },
-    center: null, radius: 400, chase: 700, returnToCenter: true, travel: true, attack: true,
+    center: null, radius: 400, chase: 700, returnToCenter: true, search: { enabled: false, range: 90 }, travel: true, attack: true,
     classes: { normal: true, champion: true, giant: true, giantParty: true, party: false, elite: false, unique: false, titan: false },
     levelMin: 0, levelMax: 0, include: '', exclude: '', priority: 'attackers', avoidKs: true, avoidKsScope: 'all', avoidKsBelow: 50,
     targetTimeoutS: 25,
@@ -10894,6 +10894,72 @@ const Lure = {
 };
 
 
+// Active hunt-area search: with no monster in view, walk the hunting area in a star sweep
+// (north, centre, east, centre, west, centre, south, centre) so spawns beyond the view distance are
+// found instead of the bot idling at the centre. Opt-in (Combat > Hunting area > Search the hunting
+// area); off by default. It runs only while hunting with a saved spot and no target, and combat, loot
+// and party support always take over first. The plain return-to-centre behaviour stays when it is off.
+const SEARCH_CARDINALS = [[0, 1], [1, 0], [-1, 0], [0, -1]]; // (dx, dz): north, east, west, south
+// A point offset from p in world space, keeping it inside the world. Dungeons use plain local
+// coordinates; outdoors a waypoint past a sector edge moves into the neighbouring region.
+function searchOffset(p, dx, dz) {
+  if (!p) return null;
+  if (p.regionId & DUNGEON) return { regionId: p.regionId, x: p.x + dx, z: p.z + dz, y: p.y };
+  let X = (p.regionId & 255) * SECTOR + p.x + dx;
+  let Z = (p.regionId >>> 8) * SECTOR + p.z + dz;
+  X = clamp(X, 0, 255 * SECTOR + SECTOR - 1);
+  Z = clamp(Z, 0, 127 * SECTOR + SECTOR - 1);
+  const rx = Math.floor(X / SECTOR), rz = Math.floor(Z / SECTOR);
+  return { regionId: (rz << 8) | rx, x: X - rx * SECTOR, z: Z - rz * SECTOR, y: p.y };
+}
+const Search = {
+  step: 0,        // 0..7: N, C, E, C, W, C, S, C
+  waypoint: null, // the current destination, cached once per step
+  reset() { this.step = 0; this.waypoint = null; },
+  on(H) { return !!H.search?.enabled && H.attack !== false && !!H.center; },
+  // How close is "arrived": large enough not to chase a rounding error, small enough to actually
+  // cover the edges, and never larger than a fifth of the hunt radius.
+  arrival(H) { return Math.max(40, Math.min(300, H.radius * 0.2)); },
+  range(H) { return H.radius * clamp(H.search?.range ?? 90, 20, 100) / 100; },
+  dest(H) {
+    if (!H.center) return null;
+    const out = this.step % 2 === 0, [dx, dz] = SEARCH_CARDINALS[this.step >> 1];
+    const d = out ? this.range(H) : 0;
+    return searchOffset(H.center, dx * d, dz * d);
+  },
+  // Called from Hunt.tick when there is no target. Moves toward the current sweep waypoint, or hands
+  // back to the plain return-to-centre behaviour when the sweep is off.
+  tick(hunt) {
+    const H = hunt.cfg(), pose = World.pose(), center = H.center;
+    if (!pose || !center) return;
+    const dC = dist2D(pose, center);
+    let dest = null;
+    if (this.on(H)) {
+      if (!this.waypoint) this.waypoint = this.dest(H);
+      const wp = this.waypoint;
+      if (!wp) return;
+      if (dist2D(pose, wp) <= this.arrival(H)) {
+        // Reached a sweep leg: real movement progress, so the anti-stuck watchdog starts afresh.
+        AntiStuck.idleMs = 0;
+        this.step = (this.step + 1) % 8;
+        this.waypoint = this.dest(H);
+        return;
+      }
+      dest = wp;
+    } else if (H.returnToCenter && dC > Math.max(40, H.radius * 0.5)) {
+      dest = center;
+    }
+    if (!dest) return;
+    // A character far outside the hunting area (dead at login, woke in town): the town cycle's own
+    // trip (services, then reverse or walk) returns it instead of a blind walk across the map.
+    if (dC > Math.max(H.radius * 1.5, 600) && Controller.townReturn()) return;
+    if (!Number.isFinite(dC)) return hunt.stop('hunt area is in another region');
+    if (Cmd.move(dest)) hunt.lastMoveAt = now();
+    if (!this.on(H)) hunt.state = 'return'; // the sweep keeps the caller's 'search' state
+  },
+};
+
+
 // Single owner for movement/combat/pickup. Potion use remains a separate emergency lane.
 const startHunting = Hunt.start;
 Hunt.start = function (...args) {
@@ -10906,6 +10972,7 @@ Hunt.start = function (...args) {
   if (Quest.trip) return UI.toast('Wait for the quest visit to finish (or stop the bot).', 'warn');
   if (World.gp?.stall?.phase && World.gp.stall.phase !== 'none') return UI.toast('Close the stall before hunting.', 'warn');
   Lure.reset();
+  Search.reset();
   return startHunting.apply(this, args);
 };
 Hunt.lootAllowed = e => Loot.allowed(e);
@@ -11034,13 +11101,7 @@ Hunt.tick = function () {
   const target = attack ? this.threat(current) || current || this.chooseTarget() : null;
   if (target) { this.engage(target); return; }
   this.targetGid = 0; this.state = !attack ? 'support only' : Loot.active?.petGid ? 'loot' : 'search';
-  if (H.returnToCenter && H.center && dist2D(World.pose(), H.center) > Math.max(40, H.radius * 0.5) && now() - this.lastMoveAt > 2500) {
-    // Hunting from town (dead at login and woken in town): the town cycle's own trip (services, then reverse or walk).
-    if (!(dist2D(World.pose(), H.center) <= Math.max(H.radius * 1.5, 600)) && Controller.townReturn()) return;
-    if (!Number.isFinite(dist2D(World.pose(), H.center))) return this.stop('hunt area is in another region');
-    if (Cmd.move(H.center)) this.lastMoveAt = now();
-    this.state = 'return';
-  }
+  if (H.center && now() - this.lastMoveAt > 2500) Search.tick(this);
 };
 
 // Stops everything, for the player and for the bot itself. A pending auto-start survives it: only the player's own
@@ -17030,7 +17091,7 @@ const Alchemy = {
 };
 
 
-const RELEASE_NOTES = [{"version": "1.2.268", "title": "Alchemy sound only at the target +", "items": ["The alchemy sound now plays once, when a confirmed success reaches the target + you set. Successes below the target, failures and stone fusions stay silent.", "The option is renamed to \"Play a sound when the target + is reached\"; your saved switch and custom MP3 are kept."], "note": "Tested in simulation only, not in a live browser or game."}, {"version": "1.2.267", "title": "Lower CPU and memory while the bot runs", "items": ["The bot now rebuilds its skill list only when the game sends a new one, instead of on every update, so hunting uses less CPU and memory. Skills, buffs, potions and looting behave the same."], "note": "Contributed by NiftyOps (#101). Tested in simulation, plus one live run that checked hunting, a town trip and reconnect."}, {"version": "1.2.266", "title": "Alchemy success sound with a custom MP3", "items": ["New on the Alchemy page: turn on a sound for a confirmed enhancement success (off by default). Failures, destroyed items, stone fusions and attribute-stone fusions stay silent.", "Pick an MP3, WAV, OGG or M4A under \"Custom alchemy sound...\" (up to 1 MB, kept in this browser); choosing a file turns the sound on. \"Use built-in chime\" returns to the short built-in chime and \"Test alchemy sound\" previews it.", "The sound also plays when the target + is reached, and a new hit restarts the clip instead of stacking it."], "note": "Tested in simulation only, not in a live browser or game."}, {"version": "1.2.265", "title": "Cave fixes: party follow and Jangan Cave giants", "items": ["Follow a party member now works inside caves: the bot walks to the member in the cave instead of sending a move to the wrong place. It still does not follow through a cave entrance or a teleport.", "Giants that spawn as party monsters (as in Jangan Cave) are hunted again. Before, they counted as Party monsters, which are off by default, so the bot ignored them. They now have their own \"Giant party\" switch under Monster classes, on by default; old settings follow your Giants switch."], "note": "Tested in simulation only; not yet tried in a real cave."}, {"version": "1.2.264", "title": "Live dashboard inside the bot", "items": ["New in Settings: Live dashboard. The bot sends a small snapshot of itself (level, HP/MP/XP, state, position, session totals, recent activity) to your own hub every 3 to 60 seconds, default 10, so a phone can watch it.", "Your hub can be a Cloudflare Worker on your own Cloudflare account (free plan is enough) or the live/hub.js program behind an HTTPS tunnel. Nothing goes through nixxane bot servers.", "Setting up the Worker needs no install: press \"Set up free on Cloudflare\" in Settings, Live dashboard (or the Deploy to Cloudflare button in live/README.md), open your new hub, press \"Create my private link\", then \"Pair NIX in this browser\" (on the computer where you play). Scan the QR code on that page to open the dashboard on your phone.", "Pairing: the hub gives you a pair link. Opening it in the game browser asks you to confirm in the NIX window; nothing is saved or sent until you press Pair.", "Off by default. A hub that refuses the code switches it off instead of retrying forever, and a rate limit is waited out.", "The hub address and code are kept in this browser only; they are not part of shared settings, backups, bug reports or the log.", "The live feed shows what the bot did (kills, loot, potions, deaths, town trips, reconnects) and leaves out asset warnings and the window's own messages. HP and MP never read above 100 %, and the report now also carries HP/MP values, session totals, the current target and the hunting spot. Totals read 0 before the first hunt instead of a dash.", "New dashboard look, made for phones: Cards or List view (switch at the top), a summary of bots online and total XP and gold per hour, and clear Hunting, In town, Walking back, Dead, Stopped and Offline states.", "The Cloudflare button needs a free Cloudflare account and a free GitHub (or GitLab) account.", "The separate NIX live reporter script still works for a hub on the same PC."], "note": "Tested with one character on a real Cloudflare deploy (Deploy button, pairing, reports). The new dashboard design, the HP/MP fix and the feed filter were tested in simulation and on a local hub, not yet on the real game."}, {"version": "1.2.263", "title": "Live dashboard on your phone", "items": ["New optional companion in the `live` folder: a page for your phone with each character's status, HP and MP, XP and XP per hour, gold, kills and the recent activity log.", "It runs on your own machine with Node.js and needs its own small userscript; setup, the phone link and troubleshooting are in `live/README.md`. Nothing in the bot itself changes in this version.", "The phone link is private: keep the link and its `.code` file to yourself, and close the hub window to stop it."], "note": "Optional companion only. Tested on macOS with one character; not tested on Windows, Firefox or Safari."}, {"version": "1.2.262", "title": "Discord session reports", "items": ["Post the current hunting-session totals to your own Discord webhook every 1 to 60 minutes.", "Off by default, and it needs your own Discord webhook address saved; a shared settings code never carries the address.", "The report keeps coming while the bot is stopped, dead or out of the game, and says which state it is in.", "Send a test report from Settings, and see when the next one is due or why the last one failed.", "A webhook Discord refuses switches reports off instead of retrying forever.", "The webhook address is kept in this browser only; it is not part of shared settings or backups and is never logged."], "note": "Only tested in simulation: no live Discord message was sent by the tests."}, {"version": "1.2.261", "title": "Session stats count Sun, Moon and Star", "items": ["The Session panel and Session window now show Seal of Sun, Seal of Moon and Seal of Star counts under SoX found.", "When hunting stops, the log line now lists the session totals: time, kills, items, SoX per seal, XP and gold."], "note": "Tested in simulation."}];
+const RELEASE_NOTES = [{"version": "1.2.269", "title": "Optional hunt-area search sweep", "items": ["New \"Search the hunting area\" switch under Combat > Hunting area. With no monster in view, the bot walks the area in a north–centre–east–centre–west–centre–south sweep so spawns beyond the view distance are found instead of waiting at the centre.", "Off by default; the existing \"Return when idle\" behaviour stays. Only active while hunting a saved spot with no target, and combat, loot and party support always take over first.", "Works in dungeons like Jangan Cave, where the hunt area can be larger than the view distance."], "note": "Tested in simulation only, not in a live browser or game."}, {"version": "1.2.268", "title": "Alchemy sound only at the target +", "items": ["The alchemy sound now plays once, when a confirmed success reaches the target + you set. Successes below the target, failures and stone fusions stay silent.", "The option is renamed to \"Play a sound when the target + is reached\"; your saved switch and custom MP3 are kept."], "note": "Tested in simulation only, not in a live browser or game."}, {"version": "1.2.267", "title": "Lower CPU and memory while the bot runs", "items": ["The bot now rebuilds its skill list only when the game sends a new one, instead of on every update, so hunting uses less CPU and memory. Skills, buffs, potions and looting behave the same."], "note": "Contributed by NiftyOps (#101). Tested in simulation, plus one live run that checked hunting, a town trip and reconnect."}, {"version": "1.2.266", "title": "Alchemy success sound with a custom MP3", "items": ["New on the Alchemy page: turn on a sound for a confirmed enhancement success (off by default). Failures, destroyed items, stone fusions and attribute-stone fusions stay silent.", "Pick an MP3, WAV, OGG or M4A under \"Custom alchemy sound...\" (up to 1 MB, kept in this browser); choosing a file turns the sound on. \"Use built-in chime\" returns to the short built-in chime and \"Test alchemy sound\" previews it.", "The sound also plays when the target + is reached, and a new hit restarts the clip instead of stacking it."], "note": "Tested in simulation only, not in a live browser or game."}, {"version": "1.2.265", "title": "Cave fixes: party follow and Jangan Cave giants", "items": ["Follow a party member now works inside caves: the bot walks to the member in the cave instead of sending a move to the wrong place. It still does not follow through a cave entrance or a teleport.", "Giants that spawn as party monsters (as in Jangan Cave) are hunted again. Before, they counted as Party monsters, which are off by default, so the bot ignored them. They now have their own \"Giant party\" switch under Monster classes, on by default; old settings follow your Giants switch."], "note": "Tested in simulation only; not yet tried in a real cave."}, {"version": "1.2.264", "title": "Live dashboard inside the bot", "items": ["New in Settings: Live dashboard. The bot sends a small snapshot of itself (level, HP/MP/XP, state, position, session totals, recent activity) to your own hub every 3 to 60 seconds, default 10, so a phone can watch it.", "Your hub can be a Cloudflare Worker on your own Cloudflare account (free plan is enough) or the live/hub.js program behind an HTTPS tunnel. Nothing goes through nixxane bot servers.", "Setting up the Worker needs no install: press \"Set up free on Cloudflare\" in Settings, Live dashboard (or the Deploy to Cloudflare button in live/README.md), open your new hub, press \"Create my private link\", then \"Pair NIX in this browser\" (on the computer where you play). Scan the QR code on that page to open the dashboard on your phone.", "Pairing: the hub gives you a pair link. Opening it in the game browser asks you to confirm in the NIX window; nothing is saved or sent until you press Pair.", "Off by default. A hub that refuses the code switches it off instead of retrying forever, and a rate limit is waited out.", "The hub address and code are kept in this browser only; they are not part of shared settings, backups, bug reports or the log.", "The live feed shows what the bot did (kills, loot, potions, deaths, town trips, reconnects) and leaves out asset warnings and the window's own messages. HP and MP never read above 100 %, and the report now also carries HP/MP values, session totals, the current target and the hunting spot. Totals read 0 before the first hunt instead of a dash.", "New dashboard look, made for phones: Cards or List view (switch at the top), a summary of bots online and total XP and gold per hour, and clear Hunting, In town, Walking back, Dead, Stopped and Offline states.", "The Cloudflare button needs a free Cloudflare account and a free GitHub (or GitLab) account.", "The separate NIX live reporter script still works for a hub on the same PC."], "note": "Tested with one character on a real Cloudflare deploy (Deploy button, pairing, reports). The new dashboard design, the HP/MP fix and the feed filter were tested in simulation and on a local hub, not yet on the real game."}, {"version": "1.2.263", "title": "Live dashboard on your phone", "items": ["New optional companion in the `live` folder: a page for your phone with each character's status, HP and MP, XP and XP per hour, gold, kills and the recent activity log.", "It runs on your own machine with Node.js and needs its own small userscript; setup, the phone link and troubleshooting are in `live/README.md`. Nothing in the bot itself changes in this version.", "The phone link is private: keep the link and its `.code` file to yourself, and close the hub window to stop it."], "note": "Optional companion only. Tested on macOS with one character; not tested on Windows, Firefox or Safari."}, {"version": "1.2.262", "title": "Discord session reports", "items": ["Post the current hunting-session totals to your own Discord webhook every 1 to 60 minutes.", "Off by default, and it needs your own Discord webhook address saved; a shared settings code never carries the address.", "The report keeps coming while the bot is stopped, dead or out of the game, and says which state it is in.", "Send a test report from Settings, and see when the next one is due or why the last one failed.", "A webhook Discord refuses switches reports off instead of retrying forever.", "The webhook address is kept in this browser only; it is not part of shared settings or backups and is never logged."], "note": "Only tested in simulation: no live Discord message was sent by the tests."}];
 
 // Check trusted repository metadata; never execute downloaded update code.
 const Updates = {
@@ -19445,6 +19506,8 @@ const UI = {
         this.number('Hunt radius (m)', () => H().radius / 10, v => H().radius = v * 10, 5, 200),
         this.number('Chase distance (m)', () => H().chase / 10, v => H().chase = v * 10, 10, 300),
         this.check('Return when idle', () => H().returnToCenter, v => H().returnToCenter = v),
+        this.check('Search the hunting area', () => H().search.enabled, v => H().search.enabled = v),
+        el('p', 'With no monster in view, walk the area in a north–centre–east–centre–west–centre–south sweep so spawns beyond the view distance are found. Off keeps waiting at the hunting spot.', 'muted'),
         this.check('Walking back may use teleports and ferries (beta; pays their fee)', () => H().travel !== false, v => H().travel = v),
         el('p', 'Beta: a long walk back is first checked against the game map, and teleports and ferries are used where walking cannot get there. If a route looks wrong, send the log.', 'muted'),
         this.check('Avoid other players’ targets', () => H().avoidKs, v => H().avoidKs = v),

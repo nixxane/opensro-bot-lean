@@ -3,7 +3,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(__dirname + '/bot.lean.user.js', 'utf8');
 const isolated = source.slice(0, source.lastIndexOf('installWorkerHook();')) +
-  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Reporter, Live, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, Leveling, ScrollBuff, boot, Ticker, Sound, LeanMap};\n})();';
+  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Reporter, Live, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Search, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, Leveling, ScrollBuff, boot, Ticker, Sound, LeanMap};\n})();';
 function fixture(document, sharedStorage) {
   let time = 100000;
   const storage = sharedStorage || new Map(), commands = [], notices = [], intervals = [], timers = [];
@@ -2845,6 +2845,92 @@ test('anti-stuck can be switched off and does not run while hunting is stopped',
   assert.equal(f.AntiStuck.recoveries, 0); f.Settings.profile.hunt.antiStuck.enabled = true; f.Hunt.stop(); idleFor(f, 400000);
   assert.equal(f.AntiStuck.recoveries, 0);
 });
+test('the hunt-area search defaults off and survives profile import', () => {
+  const f = fixture();
+  assert.equal(f.Settings.profile.hunt.search.enabled, false);
+  assert.equal(f.Settings.profile.hunt.search.range, 90);
+  const saved = f.botProfile({ hunt: { search: { enabled: true, range: 70 } } });
+  assert.equal(saved.hunt.search.enabled, true); assert.equal(saved.hunt.search.range, 70);
+  const fresh = f.botProfile({}).hunt.search;
+  assert.equal(fresh.enabled, false); assert.equal(fresh.range, 90);
+});
+test('search waypoints reach the four hunt-area edges and return through the centre', () => {
+  const f = fixture();
+  const H = f.Settings.profile.hunt;
+  H.center = { regionId: 1, x: 500, y: 7, z: 500 }; H.radius = 400; H.search.range = 100;
+  f.Search.reset();
+  const steps = [];
+  for (let i = 0; i < 8; i++) { steps.push(f.Search.dest(H)); f.Search.step++; }
+  const xy = p => [p.x, p.z];
+  assert.deepEqual(steps.map(xy), [[500, 900], [500, 500], [900, 500], [500, 500], [100, 500], [500, 500], [500, 100], [500, 500]]);
+  assert.equal(steps[0].regionId, 1); assert.equal(steps[0].y, 7);
+});
+test('search waypoints stay in the dungeon region using local coordinates', () => {
+  const f = fixture();
+  const H = f.Settings.profile.hunt;
+  H.center = { regionId: 0x8001, x: 1000, y: 3, z: 1000 }; H.radius = 1000; H.search.range = 90;
+  f.Search.reset();
+  const north = f.Search.dest(H);
+  assert.equal(north.regionId, 0x8001);
+  assert.equal(north.x, 1000); assert.equal(north.z, 1900); assert.equal(north.y, 3);
+});
+test('search sweep walks north, centre, east, centre, west, centre, south, centre and repeats', () => {
+  const f = fixture();
+  const H = f.Settings.profile.hunt;
+  H.center = { regionId: 1, x: 500, y: 0, z: 500 };
+  f.World.gp.pose = { regionId: 1, x: 500, y: 0, z: 500 };
+  H.search.enabled = true;
+  f.Hunt.start();
+  const expected = [[500, 860], [500, 500], [860, 500], [500, 500], [140, 500], [500, 500], [500, 140], [500, 500]];
+  const seen = [];
+  for (let i = 0; i < 16; i++) {
+    f.advance(2600); f.commands.length = 0; f.Hunt.tick();
+    const move = f.commands.find(c => c.kind === 'move');
+    if (move) { seen.push([move.destination.x, move.destination.z]); f.World.gp.pose.x = move.destination.x; f.World.gp.pose.z = move.destination.z; }
+  }
+  assert.deepEqual(seen, expected);
+  f.advance(2600); f.commands.length = 0; f.Hunt.tick();
+  const again = f.commands.find(c => c.kind === 'move');
+  assert.deepEqual([again.destination.x, again.destination.z], [500, 860], 'repeats from the north after a full cycle');
+});
+test('with the search off, a distant hunter still returns to the centre', () => {
+  const f = fixture();
+  const H = f.Settings.profile.hunt;
+  H.center = { regionId: 1, x: 500, y: 0, z: 500 };
+  f.World.gp.pose = { regionId: 1, x: 1000, y: 0, z: 500 };
+  H.search.enabled = false; H.returnToCenter = true;
+  f.Hunt.start();
+  f.advance(2600); f.Hunt.tick();
+  const move = f.commands.find(c => c.kind === 'move');
+  assert.deepEqual([move.destination.x, move.destination.z], [500, 500]);
+  assert.equal(f.Hunt.state, 'return');
+});
+test('a support character does not sweep the area', () => {
+  const f = fixture();
+  const H = f.Settings.profile.hunt;
+  H.center = { regionId: 1, x: 500, y: 0, z: 500 };
+  f.World.gp.pose = { regionId: 1, x: 1000, y: 0, z: 500 };
+  H.search.enabled = true; H.attack = false;
+  f.Hunt.start();
+  f.advance(2600); f.Hunt.tick();
+  const move = f.commands.find(c => c.kind === 'move');
+  assert.deepEqual([move.destination.x, move.destination.z], [500, 500], 'returns to centre, never sweeps north');
+  assert.equal(f.Hunt.state, 'return');
+});
+test('reaching a sweep waypoint counts as progress for the anti-stuck watchdog', () => {
+  const f = fixture();
+  const H = f.Settings.profile.hunt;
+  H.center = { regionId: 1, x: 500, y: 0, z: 500 };
+  f.World.gp.pose = { regionId: 1, x: 500, y: 0, z: 500 };
+  H.search.enabled = true;
+  f.Search.reset();
+  f.AntiStuck.idleMs = 123000;
+  f.World.gp.pose.z = 860; // arrive at the first (north) waypoint
+  f.Search.tick(f.Hunt);
+  assert.equal(f.AntiStuck.idleMs, 0);
+  assert.equal(f.Search.step, 1, 'moved on to the centre leg');
+});
+
 test('SoX-only filters equipment to Star, Moon and Sun gear and leaves other categories alone', () => {
   const f = fixture(), P = f.Settings.profile.hunt.pickup; f.World.charName = 'Tester';
   const gear = (gid, ref) => { const e = f.drop(gid, 44); e.refObjId = ref; e.name = 'Sword'; return e; };

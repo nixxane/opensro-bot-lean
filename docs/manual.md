@@ -353,6 +353,10 @@ While chasing a mob the game walks the character straight at it, so a tree or wa
 
 Under **Settings → Anti-stuck**, the bot watches for progress while hunting: a confirmed kill, XP, gold, a pickup, or damage to your target. If nothing happens for the set time (default 3 minutes), it recovers in steps: first it drops the current target, then it walks back to the saved hunting spot and resumes, and after the set number of failed recoveries (default 3) it stops hunting. With **Go to town instead of stopping** on (it needs the town cycle) it makes a town trip instead and stays in town, rather than returning to the spot where nothing worked. Any confirmed gain clears the count. Resting, buffing, looting, shopping, town trips and manual control do not count as stuck.
 
+## Searching a large hunting area
+
+A hunting area bigger than your view distance can hold monsters you cannot see, so the bot would otherwise wait at the hunting spot. Tick **Search the hunting area** under **Combat → Hunting area** to walk the area in a north–centre–east–centre–west–centre–south sweep whenever no monster is in view, then repeat. It pauses for any monster, loot or party support and carries on afterwards, and reaching each leg counts as progress for the anti-stuck check. Off by default; the plain **Return when idle** behaviour stays when it is off. Useful in caves such as Jangan Cave, where monsters can spawn beyond the view distance.
+
 ## SoX alerts
 
 When the bot confirms a pickup of Star, Moon or Sun equipment, it shows the item name and tier and plays a short chime. Turn it off with **Chime and notice when a SoX item is picked up** in **Loot**; **Test SoX chime** previews the sound. The count also appears under Session stats. It needs the item catalogue, which loads automatically when hunting starts, and it only announces bot pickups.
