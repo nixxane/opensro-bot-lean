@@ -38,12 +38,12 @@ const UI = {
       this.reportDescription.addEventListener('input', () => Reports.describe(this.reportDescription.value));
       this.reportCapture = this.button('Add screenshot (optional)', () => { void Reports.capture(); });
       this.reportRemove = this.button('Remove screenshot', () => Reports.removeImage());
-      this.reportSend = this.button('Send to developer', () => { void Reports.send(); });
+      this.reportSend = this.button('Send to GitHub', () => { void Reports.send(); });
       this.reportClose = this.button('Close', () => Reports.close());
       this.reportImage = el('img'); this.reportImage.alt = 'Screenshot preview'; this.reportImage.className = 'report-image'; this.reportImage.hidden = true;
       this.reportStatus = el('p', '', 'muted'); this.reportStatus.setAttribute('role', 'status');
       this.reportBox = this.windowFrame('Bug report', () => Reports.close(),
-        el('p', 'Only Send to developer uploads this preview through Cloudflare to the developer’s Discord. Diagnostics omit names, chat and locations. Your explanation and screenshot may show private details; check them first. Nothing is sent automatically.', 'muted'),
+        el('p', 'Only Send to GitHub uploads this preview through Cloudflare to a public issue in nixxane/opensro-bot-lean. Diagnostics omit names, chat and locations. Your explanation and screenshot may show private details; check them first. Nothing is sent automatically.', 'muted'),
         this.field('What happened? (optional)', this.reportDescription), this.reportText,
         this.row(this.reportCapture, this.reportRemove), this.reportImage, this.reportStatus,
         this.row(this.reportSend, this.reportClose));

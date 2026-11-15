@@ -1046,16 +1046,16 @@ const server = http.createServer((req, res) => {
     await page.screenshot({path:__dirname+'/lean-report-desktop.png',fullPage:true});
     await page.setViewportSize({width:390,height:844});
     assert.equal(await page.evaluate(()=>{const r=document.querySelector('#sro-bot-lean').getBoundingClientRect();return r.left>=0&&r.right<=innerWidth;}),true);
-    await page.getByRole('button',{name:'Send to developer',exact:true}).scrollIntoViewIfNeeded();
-    const sendBounds=await page.getByRole('button',{name:'Send to developer',exact:true}).boundingBox();
+    await page.getByRole('button',{name:'Send to GitHub',exact:true}).scrollIntoViewIfNeeded();
+    const sendBounds=await page.getByRole('button',{name:'Send to GitHub',exact:true}).boundingBox();
     assert.ok(sendBounds.x>=0&&sendBounds.x+sendBounds.width<=390&&sendBounds.y+sendBounds.height<=844);
     await page.screenshot({path:__dirname+'/lean-report-mobile.png',fullPage:true});
     // The once-per-version patch notes open 5 s after a load and, being newer, sit above the report; close them.
     const notesClose = page.locator('.patch-notes header .fold');
     if (await notesClose.isVisible()) await notesClose.click();
     await page.getByRole('button',{name:'Remove screenshot',exact:true}).click(); await imagePreview.waitFor({state:'hidden'});
-    await page.getByRole('button',{name:'Send to developer',exact:true}).click();
-    await page.getByText('Report sent to the developer’s Discord. Thank you.',{exact:true}).waitFor();
+    await page.getByRole('button',{name:'Send to GitHub',exact:true}).click();
+    await page.getByText('Report filed as a GitHub issue. Thank you.',{exact:true}).waitFor();
     assert.equal(reportRequests.length,1); assert.ok(!reportRequests[0].includes('name="screenshot"'));
     assert.ok(reportRequests[0].includes('Movement stopped after alchemy.'));
     await page.getByRole('button',{name:'Close',exact:true}).click();
@@ -1066,13 +1066,13 @@ const server = http.createServer((req, res) => {
     await imagePreview.waitFor(); await page.waitForFunction(()=>!SROLean.reports.capturing);
     await page.evaluate(()=>clearInterval(reportPaintTimer));
     assert.equal(await page.evaluate(()=>reportTestStream.getTracks().every(t=>t.readyState==='ended')),true);
-    await page.getByRole('button',{name:'Send to developer',exact:true}).click();
-    await page.getByText('Report sent to the developer’s Discord. Thank you.',{exact:true}).waitFor();
+    await page.getByRole('button',{name:'Send to GitHub',exact:true}).click();
+    await page.getByText('Report filed as a GitHub issue. Thank you.',{exact:true}).waitFor();
     assert.equal(reportRequests.length,2); assert.ok(reportRequests[1].includes('name="screenshot"; filename="screenshot.jpg"'));
     assert.ok(reportRequests[1].includes('Content-Type: image/jpeg'));
     await page.getByRole('button',{name:'Close',exact:true}).click();
     await page.getByRole('button',{name:'Send bug report',exact:true}).click(); reportStatus=429;
-    await page.getByRole('button',{name:'Send to developer',exact:true}).click();
+    await page.getByRole('button',{name:'Send to GitHub',exact:true}).click();
     await page.getByText('Too many reports. Wait before trying again.',{exact:true}).waitFor();
     assert.equal(await page.getByRole('button',{name:/^Wait \d+s$/}).isDisabled(),true); assert.equal(reportRequests.length,3);
     await page.getByRole('button',{name:'Close',exact:true}).click();

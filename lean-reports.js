@@ -28,7 +28,7 @@ const Reports = {
     UI.reportCapture.disabled = this.sending || this.capturing || this.draft.sent;
     UI.reportRemove.disabled = this.sending || this.capturing || !this.draft.image || this.draft.sent;
     UI.reportSend.disabled = this.sending || this.capturing || this.draft.sent || now() < this.cooldownUntil;
-    UI.reportSend.textContent = this.sending ? 'Sending…' : this.draft.sent ? 'Report sent' : now() < this.cooldownUntil ? 'Wait ' + Math.ceil((this.cooldownUntil - now()) / 1000) + 's' : 'Send to developer';
+    UI.reportSend.textContent = this.sending ? 'Sending…' : this.draft.sent ? 'Report sent' : now() < this.cooldownUntil ? 'Wait ' + Math.ceil((this.cooldownUntil - now()) / 1000) + 's' : 'Send to GitHub';
     UI.reportClose.disabled = this.sending;
     UI.reportImage.hidden = !this.draft.url;
     if (this.draft.url) UI.reportImage.src = this.draft.url;
@@ -121,7 +121,7 @@ const Reports = {
         this.draft.sent = true;
         if (this.draft.url) URL.revokeObjectURL(this.draft.url);
         this.draft.image = null; this.draft.url = '';
-        this.notice('Report sent to the developer’s Discord. Thank you.');
+        this.notice('Report filed as a GitHub issue. Thank you.');
       } else if (response.status === 400 || response.status === 413) {
         this.notice('Report rejected. Remove the screenshot and try again.');
       } else if (response.status === 403 || response.status === 503) {
