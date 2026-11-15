@@ -61,8 +61,16 @@ jobs:
         if: env.skip != 'true'
         # The steps below go by .issue/result.md, so going over the turn limit is not fatal.
         continue-on-error: true
+        # DeepSeek through its Anthropic-compatible API (key from platform.deepseek.com).
+        env:
+          ANTHROPIC_BASE_URL: https://api.deepseek.com/anthropic
+          ANTHROPIC_MODEL: deepseek-flash
+          ANTHROPIC_DEFAULT_OPUS_MODEL: deepseek-flash
+          ANTHROPIC_DEFAULT_SONNET_MODEL: deepseek-flash
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: deepseek-flash
+          CLAUDE_CODE_SUBAGENT_MODEL: deepseek-flash
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.DEEPSEEK_API_KEY }}
           allowed_non_write_users: "*"
           claude_args: |
             --max-turns 120

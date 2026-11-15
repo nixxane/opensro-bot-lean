@@ -65,8 +65,16 @@ jobs:
         uses: anthropics/claude-code-action@v1
         # Going over the turn limit fails this step even when the notes are written; the next step checks them.
         continue-on-error: true
+        # DeepSeek through its Anthropic-compatible API (key from platform.deepseek.com).
+        env:
+          ANTHROPIC_BASE_URL: https://api.deepseek.com/anthropic
+          ANTHROPIC_MODEL: deepseek-flash
+          ANTHROPIC_DEFAULT_OPUS_MODEL: deepseek-flash
+          ANTHROPIC_DEFAULT_SONNET_MODEL: deepseek-flash
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: deepseek-flash
+          CLAUDE_CODE_SUBAGENT_MODEL: deepseek-flash
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.DEEPSEEK_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           # claude-merge.yml starts this run as github-actions after an automatic merge.
           allowed_bots: "github-actions"
