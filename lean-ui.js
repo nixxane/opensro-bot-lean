@@ -1152,7 +1152,13 @@ const UI = {
         this.select('Group heal skill', skillOptions(() => Support.areaSkills()), () => Support.skillOf(S().group) || 0, pick(() => S().group)),
         this.number('Group heal below (%)', () => S().group.pct, v => S().group.pct = v, 10, 95),
         this.number('Group heal when this many are low', () => S().group.count, v => S().group.count = v, 2, 8),
-        el('p', 'Casts only on members you can see within the support range; it never walks to them. Order: group heal, then a heal on the lowest member, then missing buffs, one cast at a time. HP is exact for members in view. Your own potions still come first.', 'muted')));
+        this.select('MP heal skill', skillOptions(() => Support.friendlySkills()), () => Support.skillOf(S().mpHeal) || 0, pick(() => S().mpHeal)),
+        this.number('MP heal below (%)', () => S().mpHeal.pct, v => S().mpHeal.pct = v, 10, 95),
+        this.check('Heal my MP too', () => S().mpHeal.self, v => S().mpHeal.self = v),
+        this.select('Group MP heal skill', skillOptions(() => Support.areaSkills()), () => Support.skillOf(S().mpGroup) || 0, pick(() => S().mpGroup)),
+        this.number('Group MP heal below (%)', () => S().mpGroup.pct, v => S().mpGroup.pct = v, 10, 95),
+        this.number('Group MP heal when this many are low', () => S().mpGroup.count, v => S().mpGroup.count = v, 2, 8),
+        el('p', 'Casts only on members you can see within the support range; it never walks to them. Order: group heal, then a heal on the lowest member, then the MP heals, then missing buffs, one cast at a time. HP is exact for members in view; MP comes from the party window (steps of 10%, exact for yourself). Your own potions still come first.', 'muted')));
   },
   section_partyBuffs(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();

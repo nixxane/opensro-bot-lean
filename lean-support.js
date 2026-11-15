@@ -187,8 +187,9 @@ const Support = {
     if (World.isCasting() || World.isSitting() || World.local()?.mountedOn || World.gp.inventoryPending || World.gp.targetPending ||
       now() - Combat.lastCastAt < Settings.profile.macro.castGapMs) return false;
     const members = this.members(), party = members.filter(m => !m.self);
-    if (!party.length && !c.heal.self && !c.buffs.length) { this.message = 'Not in a party.'; return false; }
+    if (!party.length && !c.heal.self && !c.mpHeal.self && !c.buffs.length) { this.message = 'Not in a party.'; return false; }
     const living = members.filter(m => m.alive && m.inRange && (!m.self || c.heal.self));
+    const mpLiving = members.filter(m => m.alive && m.inRange && (!m.self || c.mpHeal.self));
     // 1. Group heal when enough members are low.
     const groupId = this.skillOf(c.group);
     if (groupId && this.castable(groupId)) {
@@ -201,7 +202,19 @@ const Support = {
       const low = living.filter(m => m.hpPct < c.heal.pct && !this.blockedFor(healId, m.gid)).sort((a, b) => a.hpPct - b.hpPct)[0];
       if (low) return this.cast(healId, low, `heal ${low.self ? 'myself' : low.name} (${Math.round(low.hpPct)}%)`);
     }
-    // 3. Buffs a member does not have yet. A cast that never shows on the member counts as a miss. A buff that needs
+    // 3. Group MP restore when enough members are low.
+    const mpGroupId = this.skillOf(c.mpGroup);
+    if (mpGroupId && this.castable(mpGroupId)) {
+      const low = mpLiving.filter(m => m.mpPct < c.mpGroup.pct), target = low.filter(m => !this.blockedFor(mpGroupId, m.gid)).sort((a, b) => a.mpPct - b.mpPct)[0];
+      if (low.length >= c.mpGroup.count && target) return this.cast(mpGroupId, target, `group MP heal (${low.length} below ${c.mpGroup.pct}%)`);
+    }
+    // 4. Restore the lowest member's MP below the threshold.
+    const mpHealId = this.skillOf(c.mpHeal);
+    if (mpHealId && this.castable(mpHealId)) {
+      const low = mpLiving.filter(m => m.mpPct < c.mpHeal.pct && !this.blockedFor(mpHealId, m.gid)).sort((a, b) => a.mpPct - b.mpPct)[0];
+      if (low) return this.cast(mpHealId, low, `restore MP ${low.self ? 'myself' : low.name} (${Math.round(low.mpPct)}%)`);
+    }
+    // 5. Buffs a member does not have yet. A cast that never shows on the member counts as a miss. A buff that needs
     // other gear (the weapon its skill needs, or the gear chosen for it) is cast in a weapon swap that comes back after.
     const t = now();
     let note = '';

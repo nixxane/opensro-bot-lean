@@ -2451,6 +2451,26 @@ test('party support group heal, self heal and the stopped switch', () => {
   f.Hunt.stop(); f.commands.length = 0; f.advance(2000); f.Controller.tick(); assert.deepEqual(casts(f), [], 'hunting stopped');
   c.whileStopped = true; f.advance(2000); f.Controller.tick(); assert.deepEqual(casts(f), ['skill 2001 1'], 'unless allowed while stopped');
 });
+test('party support MP heal, group MP heal and self MP restore', () => {
+  const f = fixture(), c = support(f);
+  c.enabled = true;
+  f.World.gp.social.members[1].status = 0x45; // Tank: HP 50%, MP 40%
+  c.mpHeal = { id: 2001, group: 900, pct: 60, self: false };
+  f.advance(1000); f.Controller.tick();
+  assert.deepEqual(casts(f), ['select 60', 'skill 2001 60'], 'Tank at 40% MP is restored first');
+  f.World.gp.social.members[2].status = 0x43; // Mage: MP 40%
+  c.mpHeal = { id: 0, group: 0, pct: 60, self: false };
+  c.mpGroup = { id: 2003, group: 902, pct: 60, count: 2 };
+  f.commands.length = 0; f.advance(2000); f.Controller.tick();
+  assert.deepEqual(casts(f), ['skill 2003 none'], 'two below 60% MP: the area MP restore, no target');
+  c.mpGroup = { id: 0, group: 0, pct: 60, count: 2 };
+  c.mpHeal = { id: 2001, group: 900, pct: 60, self: true };
+  f.World.gp.social.members[1].status = 0xa9; // Tank: HP 90%, MP 100%
+  f.World.gp.social.members[2].status = 0x99;
+  f.World.gp.vitals = [{ gid: 1, hp: 100, maxHp: 100, mp: 30, maxMp: 100 }];
+  f.commands.length = 0; f.advance(2000); f.Controller.tick();
+  assert.deepEqual(casts(f), ['skill 2001 1'], 'restore my own MP at 30%');
+});
 test('res travel defaults to 30m, approaches, casts and returns before resuming hunting', () => {
   const f = resurrectionTravel(); assert.equal(f.Settings.profile.party.resRadius, 300);
   f.Controller.tick(); assert.equal(f.Resurrect.trip.phase, 'approach'); assert.equal(f.commands.at(-1).kind, 'move');

@@ -209,7 +209,8 @@ const DEFAULT_PROFILE = {
   scroll: { damageInc: false, damageAbs: false },
   mall: { on: false, budgetSilk: 0, hp: { on: false, low: 10, target: 1000 }, mp: { on: false, low: 10, target: 1000 }, damageInc: { on: false, low: 5, target: 20 }, damageAbs: { on: false, low: 5, target: 20 }, reverse: { on: false, low: 1, target: 5 } },
   party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', leaveIfNotLeader: false, onlyWhileRunning: false, acceptNames: '', autoInvite: false, inviteNames: '', inviteAnyone: false, inviteRadius: 300, autoRes: false, acceptRes: false, reviveWaitS: 20, resRadius: 300, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
-    support: { enabled: false, whileStopped: false, range: 30, heal: { id: 0, group: 0, pct: 60, self: false }, group: { id: 0, group: 0, pct: 60, count: 2 }, buffs: [] } },
+    support: { enabled: false, whileStopped: false, range: 30, heal: { id: 0, group: 0, pct: 60, self: false }, group: { id: 0, group: 0, pct: 60, count: 2 },
+      mpHeal: { id: 0, group: 0, pct: 60, self: false }, mpGroup: { id: 0, group: 0, pct: 60, count: 2 }, buffs: [] } },
   wardrobe: { on: true, phantom: true, realAnim: true, hideAvatars: false,
     eq: {}, av: {}, pet: { atk: 0, pick: 0, mount: 0 }, presets: {}, undo: null },
   macro: {
@@ -10402,8 +10403,9 @@ const Support = {
     if (World.isCasting() || World.isSitting() || World.local()?.mountedOn || World.gp.inventoryPending || World.gp.targetPending ||
       now() - Combat.lastCastAt < Settings.profile.macro.castGapMs) return false;
     const members = this.members(), party = members.filter(m => !m.self);
-    if (!party.length && !c.heal.self && !c.buffs.length) { this.message = 'Not in a party.'; return false; }
+    if (!party.length && !c.heal.self && !c.mpHeal.self && !c.buffs.length) { this.message = 'Not in a party.'; return false; }
     const living = members.filter(m => m.alive && m.inRange && (!m.self || c.heal.self));
+    const mpLiving = members.filter(m => m.alive && m.inRange && (!m.self || c.mpHeal.self));
     // 1. Group heal when enough members are low.
     const groupId = this.skillOf(c.group);
     if (groupId && this.castable(groupId)) {
@@ -10416,7 +10418,19 @@ const Support = {
       const low = living.filter(m => m.hpPct < c.heal.pct && !this.blockedFor(healId, m.gid)).sort((a, b) => a.hpPct - b.hpPct)[0];
       if (low) return this.cast(healId, low, `heal ${low.self ? 'myself' : low.name} (${Math.round(low.hpPct)}%)`);
     }
-    // 3. Buffs a member does not have yet. A cast that never shows on the member counts as a miss. A buff that needs
+    // 3. Group MP restore when enough members are low.
+    const mpGroupId = this.skillOf(c.mpGroup);
+    if (mpGroupId && this.castable(mpGroupId)) {
+      const low = mpLiving.filter(m => m.mpPct < c.mpGroup.pct), target = low.filter(m => !this.blockedFor(mpGroupId, m.gid)).sort((a, b) => a.mpPct - b.mpPct)[0];
+      if (low.length >= c.mpGroup.count && target) return this.cast(mpGroupId, target, `group MP heal (${low.length} below ${c.mpGroup.pct}%)`);
+    }
+    // 4. Restore the lowest member's MP below the threshold.
+    const mpHealId = this.skillOf(c.mpHeal);
+    if (mpHealId && this.castable(mpHealId)) {
+      const low = mpLiving.filter(m => m.mpPct < c.mpHeal.pct && !this.blockedFor(mpHealId, m.gid)).sort((a, b) => a.mpPct - b.mpPct)[0];
+      if (low) return this.cast(mpHealId, low, `restore MP ${low.self ? 'myself' : low.name} (${Math.round(low.mpPct)}%)`);
+    }
+    // 5. Buffs a member does not have yet. A cast that never shows on the member counts as a miss. A buff that needs
     // other gear (the weapon its skill needs, or the gear chosen for it) is cast in a weapon swap that comes back after.
     const t = now();
     let note = '';
@@ -19970,7 +19984,13 @@ const UI = {
         this.select('Group heal skill', skillOptions(() => Support.areaSkills()), () => Support.skillOf(S().group) || 0, pick(() => S().group)),
         this.number('Group heal below (%)', () => S().group.pct, v => S().group.pct = v, 10, 95),
         this.number('Group heal when this many are low', () => S().group.count, v => S().group.count = v, 2, 8),
-        el('p', 'Casts only on members you can see within the support range; it never walks to them. Order: group heal, then a heal on the lowest member, then missing buffs, one cast at a time. HP is exact for members in view. Your own potions still come first.', 'muted')));
+        this.select('MP heal skill', skillOptions(() => Support.friendlySkills()), () => Support.skillOf(S().mpHeal) || 0, pick(() => S().mpHeal)),
+        this.number('MP heal below (%)', () => S().mpHeal.pct, v => S().mpHeal.pct = v, 10, 95),
+        this.check('Heal my MP too', () => S().mpHeal.self, v => S().mpHeal.self = v),
+        this.select('Group MP heal skill', skillOptions(() => Support.areaSkills()), () => Support.skillOf(S().mpGroup) || 0, pick(() => S().mpGroup)),
+        this.number('Group MP heal below (%)', () => S().mpGroup.pct, v => S().mpGroup.pct = v, 10, 95),
+        this.number('Group MP heal when this many are low', () => S().mpGroup.count, v => S().mpGroup.count = v, 2, 8),
+        el('p', 'Casts only on members you can see within the support range; it never walks to them. Order: group heal, then a heal on the lowest member, then the MP heals, then missing buffs, one cast at a time. HP is exact for members in view; MP comes from the party window (steps of 10%, exact for yourself). Your own potions still come first.', 'muted')));
   },
   section_partyBuffs(host) {
     const H = () => Settings.profile.hunt, M = () => Settings.profile.macro, P = () => Settings.profile.potion, C = () => Restock.cfg();

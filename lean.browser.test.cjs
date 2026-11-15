@@ -335,6 +335,7 @@ const server = http.createServer((req, res) => {
     await page.getByLabel('Only these members: Test heal', { exact: true }).dispatchEvent('change');
     assert.deepEqual(await page.evaluate(() => JSON.parse(JSON.stringify(SROLean.settings.profile.party.support))), {
       enabled: true, whileStopped: false, range: 30, heal: { id: 9, group: 9, pct: 70, self: false }, group: { id: 0, group: 0, pct: 60, count: 2 },
+      mpHeal: { id: 0, group: 0, pct: 60, self: false }, mpGroup: { id: 0, group: 0, pct: 60, count: 2 },
       buffs: [{ id: 9, group: 9, only: 'Mate' }] });
     assert.equal(await page.getByText('Not in a party.', { exact: true }).isVisible(), true);
     await page.evaluate(() => {
