@@ -1,15 +1,21 @@
 // Map page: the game's own minimap tiles on a canvas, with the hunting area, monsters, party and players.
-// Outdoors only: positions become absolute units (region x * 1920 + x, region z * 1920 + z; Z grows north, drawn up).
-// One minimap tile (minimap/<rx>x<rz>, 256 px) covers one 1920-unit region. Dungeons have no tiles here yet.
+// Outdoors: positions become absolute units (region x * 1920 + x, region z * 1920 + z; Z grows north, drawn up).
+// One minimap tile (minimap/<rx>x<rz>, 256 px) covers one 1920-unit region.
+// In a dungeon the current floor's own tiles (listed in mission-dungeon-minimap.json) are drawn in the
+// dungeon's coordinate space, shifted by 128 sectors like the game's own tile index; a point marked
+// there is saved as a hunting spot in that dungeon, as the game's own map does.
 // The live game ships tiles as .texture (NTX1: DXT-compressed, decoded here); older builds as .png.
 // It only reads game state; the one setting it changes is the hunting spot, and only when the player asks.
 const MAP_ART = '/assets/images/Media_extracted/';
+const MAP_DG_DATA = '/assets/data/mission-dungeon-minimap.json';
+const MAP_DG_SHIFT = 128 * SECTOR; // the client's dungeon tile index = floor(x / 1920) + 128
+const MAP_DG_RETRY = 15000;       // an unreadable dungeon map list is tried again this often
 // Monster class colours, as the game's own map window draws them.
 const MAP_CLASS_COLOR = { normal: '#e0e0e0', champion: '#7fb8ff', giant: '#ffd65a', party: '#ff9b4a', elite: '#c78bff', unique: '#ff5a5a', titan: '#ff3dd0' };
 const LeanMap = {
   upp: 5, // world units per screen pixel (10 units = 1 m)
   view: null, follow: true, picked: null, canvas: null, info: null, timer: 0,
-  tiles: new Map(), signs: new Map(),
+  tiles: new Map(), signs: new Map(), dungeonList: null, dungeonLoading: null, dungeonAt: 0, dungeonError: '',
   space(p) {
     const rid = Number(p?.regionId ?? p?.region);
     if (!isNum(rid) || !isNum(p.x) || !isNum(p.z) || rid & DUNGEON) return null;
@@ -19,6 +25,67 @@ const LeanMap = {
     const rx = Math.floor(X / SECTOR), rz = Math.floor(Z / SECTOR);
     if (rx < 0 || rx > 255 || rz < 0 || rz > 127) return null;
     return { regionId: (rz << 8) | rx, x: X - rx * SECTOR, z: Z - rz * SECTOR };
+  },
+  // A dungeon is its own space, keyed by region: its local x/z shifted so they line up with the tile
+  // indices the client uses for that dungeon (128 and up). Outdoors this is null.
+  dspace(p) {
+    const rid = Number(p?.regionId ?? p?.region);
+    if (!isNum(rid) || !isNum(p.x) || !isNum(p.z) || !(rid & DUNGEON)) return null;
+    return { rid: rid & 0xffff, X: p.x + MAP_DG_SHIFT, Z: p.z + MAP_DG_SHIFT };
+  },
+  // The game's list of dungeon floors and the minimap tiles that exist for each. Loaded once, then
+  // retried now and then while it is unavailable; never requested again on every frame.
+  loadDungeons() {
+    if (this.dungeonList || this.dungeonLoading) return;
+    if (this.dungeonAt && now() - this.dungeonAt < MAP_DG_RETRY) return;
+    this.dungeonLoading = Icons.request(MAP_DG_DATA, 'json').then(data => {
+      const list = new Map();
+      for (const d of Array.isArray(data?.dungeons) ? data.dungeons : []) {
+        if (d && isNum(d.sectorId)) list.set(Number(d.sectorId) & 0xffff, d);
+      }
+      this.dungeonList = list; this.dirty = true;
+    }, e => {
+      if (e?.message !== this.dungeonError) { this.dungeonError = e?.message; Log.warn('Dungeon map data: ' + (e?.message || 'unavailable')); }
+    }).then(() => { this.dungeonAt = now(); this.dungeonLoading = null; });
+  },
+  // Our floor in a dungeon. The game tells the current navigation floor; a single-floor dungeon needs
+  // no answer, and when several floors exist but the game gives none, no map is drawn rather than a
+  // wrong one. null when this dungeon or floor has no tiles.
+  dungeonFloor(rid) {
+    const floors = (this.dungeonList?.get(rid & 0xffff)?.floors || []).filter(f => f && typeof f === 'object');
+    const at = isNum(World.gp?.navigationFloor) ? floors.find(f => f.floorIndex === World.gp.navigationFloor) : null;
+    const floor = at || (floors.length === 1 ? floors[0] : null);
+    return floor && Array.isArray(floor.tiles) && floor.tiles.length ? floor : null;
+  },
+  // The tile paths of one floor, positioned in the dungeon space. Only names the game lists as tiles
+  // are used, so no missing picture is requested.
+  dungeonTiles(floor) {
+    const dir = String(floor?.directory ?? '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    const prefix = String(floor?.prefix ?? '');
+    if (!dir || !prefix || dir.split('/').includes('..') || prefix.includes('/') || prefix.includes('..')) return [];
+    const out = [];
+    for (const name of floor.tiles) {
+      const m = /^(\d+)x(\d+)$/.exec(String(name));
+      if (m) out.push({ path: MAP_ART + 'minimap_d/' + dir + '/' + prefix + '_' + name, X: Number(m[1]) * SECTOR, Z: Number(m[2]) * SECTOR });
+    }
+    return out;
+  },
+  // A party member shown from the party list is drawn on our dungeon floor only when the game confirms
+  // it (minimapFloors, keyed like the client's own minimap); an unknown floor is still shown, as before.
+  dungeonSameFloor(rid, m) {
+    const at = this.dspace(m);
+    if (!at || at.rid !== rid) return false;
+    const floors = World.gp?.minimapFloors, ours = World.gp?.navigationFloor;
+    if (!floors || !isNum(ours) || !isNum(m.x) || !isNum(m.z)) return true;
+    // The client's minimap floor key: region, then 16-unit x/z and 8-unit y cells (minimap-floor-key).
+    const key = [at.rid, Math.floor(m.x / 16), Math.floor((Number(m.y) || 0) / 8), Math.floor(m.z / 16)].join(':');
+    return floors[key] === undefined || floors[key] === ours;
+  },
+  // The marked point in the current map space: on the outdoor map, or in the dungeon we are in.
+  // A mark from another space (outdoors while in a dungeon, or another dungeon) is not one.
+  pickPoint(cave) {
+    const at = this.dspace(this.picked);
+    return cave ? (at && at.rid === cave.rid ? at : null) : this.space(this.picked);
   },
   // A tile or sign image, loaded once from the game's packs. Missing tiles (open sea) are remembered quietly.
   image(cache, path) {
@@ -152,7 +219,7 @@ const LeanMap = {
       const row = el('div', null, 'map-legend'), mark = el('i'); mark.dataset.sign = name;
       row.append(mark, el('span', label)); legend.append(row);
     }
-    legend.append(el('p', 'Yellow circle: hunt radius. Dashed ring: chase distance. Click the map to mark a point, drag to move it, use + and − to zoom.', 'muted'));
+    legend.append(el('p', 'Yellow circle: hunt radius. Dashed ring: chase distance. In a dungeon the current floor is drawn. Click the map to mark a point, drag to move it, use + and − to zoom.', 'muted'));
     parent.append(box, area, levelSpots, legend);
     for (const mark of legend.querySelectorAll('i[data-sign]')) this.paintSign(mark, mark.dataset.sign);
     this.bind(); this.dirty = true; this.render();
@@ -169,19 +236,23 @@ const LeanMap = {
       c.setPointerCapture(e.pointerId);
     });
     c.addEventListener('pointermove', e => {
-      const at = this.toWorld(e);
-      const local = at && this.local(at.X, at.Z), shown = local && displayCoords(local);
+      const at = this.toWorld(e), inDungeon = !!this.dspace(World.inWorld() ? World.pose() : null);
+      const local = at && !inDungeon && this.local(at.X, at.Z), shown = local && displayCoords(local);
       this.coords.textContent = shown ? `X ${shown.x} · Y ${shown.y}` : '';
       const d = this.drag;
       if (!d || !d.view) return;
       const dx = e.clientX - d.x, dy = e.clientY - d.y;
       if (Math.abs(dx) + Math.abs(dy) > 4) d.moved = true;
-      if (d.moved) { this.follow = false; this.view = { X: d.view.X - dx * this.upp, Z: d.view.Z + dy * this.upp }; this.dirty = true; }
+      if (d.moved) { this.follow = false; this.view = { X: d.view.X - dx * this.upp, Z: d.view.Z + dy * this.upp, sp: d.view.sp }; this.dirty = true; }
     });
     const up = e => {
       const d = this.drag; this.drag = null;
       if (!d || d.moved || e.type === 'pointercancel') return;
-      const at = this.toWorld(e), local = at && this.local(at.X, at.Z);
+      const at = this.toWorld(e);
+      if (!at) return;
+      const cave = this.dspace(World.inWorld() ? World.pose() : null);
+      // In a dungeon the view is already in its local (shifted) space, so undo the shift for the mark.
+      const local = cave ? { regionId: cave.rid, x: at.X - MAP_DG_SHIFT, z: at.Z - MAP_DG_SHIFT } : this.local(at.X, at.Z);
       if (local) { this.picked = local; this.dirty = true; this.render(); }
     };
     c.addEventListener('pointerup', up); c.addEventListener('pointercancel', up);
@@ -225,8 +296,8 @@ const LeanMap = {
     return true;
   },
   setCentre() {
-    const pt = this.picked, pose = World.pose();
-    if (!pt || !World.inWorld()) return;
+    const pt = this.picked, pose = World.pose(), cave = this.dspace(pose);
+    if (!pt || !World.inWorld() || !this.pickPoint(cave)) return;
     // The height of a map point is unknown; the character's current height is used, as the game's own map does.
     Settings.profile.hunt.center = { regionId: pt.regionId, x: Math.round(pt.x), y: Number(pose?.y) || 0, z: Math.round(pt.z) };
     Settings.saveProfile(); bus.emit('center');
@@ -250,25 +321,48 @@ const LeanMap = {
     if (c.width !== Math.round(w * ratio) || c.height !== Math.round(h * ratio)) { c.width = Math.round(w * ratio); c.height = Math.round(h * ratio); }
     const ctx = c.getContext('2d'); ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
     ctx.fillStyle = '#0b0d0a'; ctx.fillRect(0, 0, w, h);
-    const pose = World.inWorld() ? World.pose() : null, me = this.space(pose);
-    this.followButton.disabled = this.follow && !!me;
-    this.pickRow.hidden = !this.picked;
+    const pose = World.inWorld() ? World.pose() : null, me = this.space(pose), cave = this.dspace(pose);
+    const here = cave || me;
+    this.followButton.disabled = this.follow && !!here;
+    this.pickRow.hidden = !this.picked || !this.pickPoint(cave);
     if (!pose) { this.note(ctx, w, h, 'Waiting for the game…'); this.info.textContent = ''; return; }
-    if (!me) { this.note(ctx, w, h, 'There is no map for dungeons yet.'); this.info.textContent = ''; return; }
-    if (this.follow || !this.view) this.view = { X: me.X, Z: me.Z };
+    if (!here) { this.note(ctx, w, h, 'There is no map for this area.'); this.info.textContent = ''; return; }
+    if (cave) this.loadDungeons();
+    // A dungeon is a different space from the outdoor map; switching dungeon or floor re-centres even when not following.
+    const spaceId = cave ? cave.rid + ':' + (isNum(World.gp?.navigationFloor) ? World.gp.navigationFloor : '?') : 0;
+    if (this.follow || !this.view || this.view.sp !== spaceId) this.view = { X: here.X, Z: here.Z, sp: spaceId };
     const upp = this.upp, v = this.view;
     const sx = X => w / 2 + (X - v.X) / upp, sy = Z => h / 2 - (Z - v.Z) / upp;
-    // Minimap tiles under the visible box.
+    // Minimap tiles under the visible box; in a dungeon, the tiles of our own floor.
     const x0 = v.X - w / 2 * upp, x1 = v.X + w / 2 * upp, z0 = v.Z - h / 2 * upp, z1 = v.Z + h / 2 * upp;
-    for (let rx = Math.max(0, Math.floor(x0 / SECTOR)); rx <= Math.min(255, Math.floor(x1 / SECTOR)); rx++)
-      for (let rz = Math.max(0, Math.floor(z0 / SECTOR)); rz <= Math.min(127, Math.floor(z1 / SECTOR)); rz++) {
-        const img = this.image(this.tiles, `${MAP_ART}minimap/${rx}x${rz}`);
+    let floor = null;
+    if (cave) {
+      floor = this.dungeonFloor(cave.rid);
+      const tiles = floor ? this.dungeonTiles(floor) : [];
+      for (const t of tiles) {
+        if (t.X < x0 - SECTOR || t.X > x1 || t.Z < z0 - SECTOR || t.Z > z1) continue;
+        const img = this.image(this.tiles, t.path);
         if (!img) continue;
-        const l = Math.floor(sx(rx * SECTOR)), t = Math.floor(sy((rz + 1) * SECTOR));
-        ctx.drawImage(img, l, t, Math.ceil(sx((rx + 1) * SECTOR)) - l, Math.ceil(sy(rz * SECTOR)) - t);
+        const l = Math.floor(sx(t.X)), top = Math.floor(sy(t.Z + SECTOR));
+        ctx.drawImage(img, l, top, Math.ceil(sx(t.X + SECTOR)) - l, Math.ceil(sy(t.Z)) - top);
       }
-    // Hunting area: radius (filled) and chase distance (dashed).
-    const H = Settings.profile.hunt, centre = this.space(H.center);
+      if (!tiles.length) {
+        const entry = this.dungeonList?.get(cave.rid);
+        this.note(ctx, w, h, !this.dungeonList ? (this.dungeonError ? 'Dungeon map unavailable.' : 'Loading the dungeon map…')
+          : !entry ? 'The game has no map for this dungeon.' : 'Dungeon floor unknown; no map drawn.');
+      }
+    } else {
+      for (let rx = Math.max(0, Math.floor(x0 / SECTOR)); rx <= Math.min(255, Math.floor(x1 / SECTOR)); rx++)
+        for (let rz = Math.max(0, Math.floor(z0 / SECTOR)); rz <= Math.min(127, Math.floor(z1 / SECTOR)); rz++) {
+          const img = this.image(this.tiles, `${MAP_ART}minimap/${rx}x${rz}`);
+          if (!img) continue;
+          const l = Math.floor(sx(rx * SECTOR)), t = Math.floor(sy((rz + 1) * SECTOR));
+          ctx.drawImage(img, l, t, Math.ceil(sx((rx + 1) * SECTOR)) - l, Math.ceil(sy(rz * SECTOR)) - t);
+        }
+    }
+    // Hunting area: radius (filled) and chase distance (dashed), in whichever space the spot was saved.
+    const H = Settings.profile.hunt;
+    const centre = cave ? (this.dungeonSameFloor(cave.rid, H.center) ? this.dspace(H.center) : null) : this.space(H.center);
     if (centre) {
       const cx = sx(centre.X), cy = sy(centre.Z);
       ctx.save();
@@ -290,7 +384,7 @@ const LeanMap = {
     let monsters = 0, players = 0;
     for (const e of World.ents.values()) {
       if (!e || e.gid === local || e.kind === 'local-player') continue;
-      const s = this.space(e);
+      const at = this.dspace(e), s = cave ? (at?.rid === cave.rid ? at : null) : this.space(e);
       if (!s) continue;
       const x = sx(s.X), y = sy(s.Z);
       if (x < -10 || y < -10 || x > w + 10 || y > h + 10) continue;
@@ -313,17 +407,18 @@ const LeanMap = {
     }
     for (const m of social?.members || []) {
       if (!m || m.id === social.self || drawn.has(m.name) || m.name === social.localName) continue;
-      const s = this.space(m);
+      const s = cave ? (this.dungeonSameFloor(cave.rid, m) ? this.dspace(m) : null) : this.space(m);
       if (!s) continue;
       put('party', clamp(sx(s.X), 6, w - 6), clamp(sy(s.Z), 6, h - 6), 9, '#5aff7a');
     }
     // A marked point (click), then you on top. Heading 0 = east, counter-clockwise; the sign points east.
-    if (this.picked) {
-      const s = this.space(this.picked), x = sx(s.X), y = sy(s.Z);
+    const mark = this.pickPoint(cave);
+    if (mark) {
+      const x = sx(mark.X), y = sy(mark.Z);
       ctx.strokeStyle = '#6fc1ff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, 7, 0, Math.PI * 2); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(x - 11, y); ctx.lineTo(x + 11, y); ctx.moveTo(x, y - 11); ctx.lineTo(x, y + 11); ctx.stroke();
     }
-    const mx = clamp(sx(me.X), 8, w - 8), my = clamp(sy(me.Z), 8, h - 8), img = this.sign('character');
+    const mx = clamp(sx(here.X), 8, w - 8), my = clamp(sy(here.Z), 8, h - 8), img = this.sign('character');
     ctx.save(); ctx.translate(mx, my); ctx.rotate(-((Number(pose.angle) || 0) / 65535) * Math.PI * 2);
     if (img) ctx.drawImage(img, -8, -8, 16, 16); else { ctx.fillStyle = '#fff'; ctx.fillRect(-4, -4, 8, 8); }
     ctx.restore();
@@ -331,10 +426,15 @@ const LeanMap = {
     const metres = [10, 20, 50, 100, 200, 500].find(m => m * 10 / upp >= 60) || 500, bar = metres * 10 / upp;
     ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(w - bar - 18, h - 22, bar + 12, 16);
     ctx.fillStyle = '#efdaa4'; ctx.fillRect(w - bar - 12, h - 12, bar, 2); this.label(ctx, metres + ' m', w - bar - 12, h - 15, '#efdaa4');
-    const shown = displayCoords(pose), distance = H.center ? dist2D(pose, H.center) : Infinity;
-    const pick = this.picked && displayCoords(this.picked);
-    this.info.textContent = `You: X ${shown.x} · Y ${shown.y}. Hunting spot: ${Number.isFinite(distance) ? Math.round(distance / 10) + ' m away' : H.center ? 'another region' : 'not saved'}. In view: ${monsters} monsters, ${players} players.`
-      + (pick ? ` Marked point: X ${pick.x} · Y ${pick.y}.` : '');
+    if (cave) {
+      const distance = this.dungeonSameFloor(cave.rid, H.center) ? dist2D(pose, H.center) : Infinity;
+      this.info.textContent = `Dungeon: ${monsters} monsters, ${players} players in view. Hunting spot: ${Number.isFinite(distance) ? Math.round(distance / 10) + ' m away' : 'another area or floor'}.`;
+    } else {
+      const shown = displayCoords(pose), distance = H.center ? dist2D(pose, H.center) : Infinity;
+      const pick = this.picked && displayCoords(this.picked);
+      this.info.textContent = `You: X ${shown.x} · Y ${shown.y}. Hunting spot: ${Number.isFinite(distance) ? Math.round(distance / 10) + ' m away' : H.center ? 'another region' : 'not saved'}. In view: ${monsters} monsters, ${players} players.`
+        + (pick ? ` Marked point: X ${pick.x} · Y ${pick.y}.` : '');
+    }
   },
   label(ctx, text, x, y, color) {
     ctx.font = '11px Arial'; ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,.85)'; ctx.strokeText(text, x, y); ctx.fillStyle = color; ctx.fillText(text, x, y);

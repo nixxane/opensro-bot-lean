@@ -693,6 +693,64 @@ test('map coordinate actions refuse disconnected, missing, partial and dungeon p
     assert.equal(map.spotX.value, '1'); assert.equal(map.spotY.value, '2'); assert.equal(f.commands.length, 0);
   }
 });
+test('a dungeon map uses the floor the game reports and the tiles the game lists', () => {
+  const f = mapFixture(), map = f.LeanMap;
+  const floors = [
+    { floorIndex: 1, directory: 'qin_shi_tomb', prefix: 'qin_shi_tomb_1', tiles: ['128x128', '129x128', 'not-a-tile'] },
+    { floorIndex: 2, directory: 'qin_shi_tomb', prefix: 'qin_shi_tomb_2', tiles: ['128x129'] },
+  ];
+  map.dungeonList = new Map([[0x8010, { sectorId: 0x8010, floors }]]);
+  f.World.gp.navigationFloor = 2;
+  assert.equal(map.dungeonFloor(0x8010), floors[1]);
+  assert.equal(map.dungeonFloor(0x8011), null, 'another dungeon has no tiles');
+  assert.deepEqual(JSON.parse(JSON.stringify(map.dungeonTiles(floors[1]))), [
+    { path: '/assets/images/Media_extracted/minimap_d/qin_shi_tomb/qin_shi_tomb_2_128x129', X: 128 * 1920, Z: 129 * 1920 }]);
+  assert.equal(map.dungeonTiles({ directory: '../outside', prefix: 'x', tiles: ['1x1'] }).length, 0, 'a listed path stays inside the map folder');
+});
+test('a single-floor dungeon needs no floor report, a multi-floor one without one draws nothing', () => {
+  const f = mapFixture(), map = f.LeanMap;
+  const only = { floorIndex: 3, directory: 'd', prefix: 'p', tiles: ['128x128'] };
+  const other = { floorIndex: 4, directory: 'd', prefix: 'q', tiles: ['128x128'] };
+  map.dungeonList = new Map([[0x8010, { floors: [only] }]]);
+  delete f.World.gp.navigationFloor;
+  assert.equal(map.dungeonFloor(0x8010), only);
+  map.dungeonList.set(0x8010, { floors: [only, other] });
+  assert.equal(map.dungeonFloor(0x8010), null, 'no floor is guessed for a dungeon with several floors');
+  f.World.gp.navigationFloor = 4;
+  assert.equal(map.dungeonFloor(0x8010), other);
+  map.dungeonList.set(0x8010, { floors: [only, { floorIndex: 5, tiles: [] }] });
+  f.World.gp.navigationFloor = 5;
+  assert.equal(map.dungeonFloor(0x8010), null, 'a floor with no listed tiles draws nothing rather than another floor');
+});
+test('dungeon and outdoor positions are separate map spaces, and a mark is saved only in its own space', () => {
+  const f = mapFixture(), map = f.LeanMap;
+  const pose = { regionId: 0x8010, x: 120, y: 40, z: 340 };
+  assert.equal(map.space(pose), null, 'a dungeon has no outdoor coordinates');
+  assert.deepEqual(JSON.parse(JSON.stringify(map.dspace(pose))), { rid: 0x8010, X: 120 + 128 * 1920, Z: 340 + 128 * 1920 });
+  assert.equal(map.dspace(f.World.gp.pose), null);
+  map.picked = { regionId: 1, x: 20, z: 30 };
+  const centre = JSON.stringify(f.Settings.profile.hunt.center);
+  f.World.gp.pose = pose;
+  map.setCentre();
+  assert.equal(JSON.stringify(f.Settings.profile.hunt.center), centre, 'an outdoor mark is not saved from inside a dungeon');
+  assert.ok(map.picked, 'the mark is left alone');
+  map.picked = { regionId: 0x8010, x: 90, z: 70 };
+  map.setCentre();
+  assert.deepEqual(JSON.parse(JSON.stringify(f.Settings.profile.hunt.center)), { regionId: 0x8010, x: 90, y: 40, z: 70 },
+    'a mark in this dungeon is saved with the character height, as Set here does');
+  assert.equal(map.picked, null);
+});
+test('party members on another dungeon floor are left off our floor', () => {
+  const f = mapFixture(), map = f.LeanMap;
+  f.World.gp.navigationFloor = 2; f.World.gp.minimapFloors = {};
+  const member = { regionId: 0x8010, x: 128, y: 0, z: 128 };
+  assert.equal(map.dungeonSameFloor(0x8010, member), true, 'an unknown floor is still shown');
+  f.World.gp.minimapFloors[[0x8010, 8, 0, 8].join(':')] = 1;
+  assert.equal(map.dungeonSameFloor(0x8010, member), false);
+  f.World.gp.minimapFloors[[0x8010, 8, 0, 8].join(':')] = 2;
+  assert.equal(map.dungeonSameFloor(0x8010, member), true);
+  assert.equal(map.dungeonSameFloor(0x8010, { regionId: 0x8011, x: 128, y: 0, z: 128 }), false, 'another dungeon is another space');
+});
 test('filters foreign ownership and permits own/party claims', () => {
   const f = fixture(), d = f.drop(); d.groundItem.ownerJid = 2;
   assert.equal(f.Loot.choose(), null);
