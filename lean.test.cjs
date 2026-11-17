@@ -5170,6 +5170,19 @@ test('town needed but Revive in town off: the resurrection is accepted as before
     assert.equal(t.f.commands.filter(c => c.kind === 'rebirth').length, 0, mode + ': no revive in town');
   }
 });
+test('town needed while hunting, end to end: No, revive in town, then the town cycle starts as a revival trip', () => {
+  for (const mode of ['wait', 'stop', 'revive']) {
+    const t = townDeathFixture(mode), f = t.f; f.UI.mount = () => {}; f.UI.draw = () => {}; f.UI.update = () => {}; f.Ticker.start = () => {};
+    f.boot(); f.Settings.profileKey = 'profile:Me';
+    t.die(); assert.equal(f.Hunt.running, true, mode + ': Revive in town keeps hunting on at death');
+    t.offer(); f.advance(300); f.Controller.tick(); assert.deepEqual(consentAnswers(f), [false], mode);
+    f.World.gp.social = { ...f.World.gp.social, resurrection: undefined };
+    f.advance(6000); f.Controller.tick(); assert.equal(f.commands.filter(c => c.kind === 'rebirth').length, 1, mode + ': revived at the return point');
+    f.bus.emit('phase', 'entering-world'); assert.equal(f.Controller.resumeAfterRevive, true, mode);
+    f.bus.emit('character', 'Me'); t.live(); f.World.gp.pose.x = 5000; f.advance(300); f.Controller.tick();
+    assert.equal(f.Town.trip?.revival, true, mode + ': town services as after any death in the field');
+  }
+});
 test('a No the game does not take is given up after 8 s: the offer is accepted, nothing deadlocks', () => {
   const t = townDeathFixture('wait'); t.die(); t.offer(); t.f.advance(300); t.f.Controller.tick();
   assert.deepEqual(consentAnswers(t.f), [false]);
