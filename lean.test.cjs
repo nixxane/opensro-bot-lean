@@ -10055,6 +10055,28 @@ test('an expired world session skips the futile resume, enters afresh, then relo
   g.f.advance(205000); g.f.Controller.tick(); assert.equal(g.reloads(), 1); assert.equal(stored(g.f).reloads.count, 4);
 });
 
+test('a reconnect that hangs in a connecting phase with no answer ends in a page reload', () => {
+  const r = reloadFixture(), f = r.f;
+  r.lose('reconnecting'); f.advance(3000); f.Controller.tick();
+  f.World.phase = 'entering-world';
+  for (let i = 0; i < 17; i++) { f.advance(10000); f.Controller.tick(); }
+  assert.equal(r.reloads(), 0, 'gives the entry three minutes');
+  for (let i = 0; i < 3; i++) { f.advance(10000); f.Controller.tick(); }
+  assert.equal(r.reloads(), 1, 'still entering after three minutes: reload');
+  assert.equal(stored(f).pending.character, 'Tester'); assert.equal(stored(f).pending.hunting, true);
+  const g = reloadFixture(); g.lose('reconnecting'); g.f.World.phase = 'connecting';
+  for (let i = 0; i < 15; i++) { g.f.advance(10000); g.f.Controller.tick(); }
+  g.f.World.phase = 'character-select'; g.f.advance(1000); g.f.Controller.tick();
+  g.f.World.phase = 'connecting'; for (let i = 0; i < 15; i++) { g.f.advance(10000); g.f.Controller.tick(); }
+  assert.equal(g.reloads(), 0, 'progress to another phase starts the wait afresh');
+  const h = reloadFixture(); h.lose('reconnecting'); h.f.World.phase = 'connecting';
+  h.f.storage.set('sro-lean-reload', JSON.stringify({ reloads: { count: 2, first: Date.now(), last: Date.now() } }));
+  for (let i = 0; i < 60; i++) { h.f.advance(10000); h.f.Controller.tick(); }
+  assert.equal(h.reloads(), 0, 'the third reload in a row waits four times as long');
+  for (let i = 0; i < 20; i++) { h.f.advance(10000); h.f.Controller.tick(); }
+  assert.equal(h.reloads(), 1);
+});
+
 test('a plain "Disconnected from the server." that nothing recovers ends in a page reload, and reloads in a row wait longer, never stopping early', () => {
   const r = reloadFixture(), f = r.f; r.sent.length = 0;
   r.lose(); f.World.session = { phase: 'disconnected', disconnectMessage: '' };

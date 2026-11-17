@@ -11,7 +11,7 @@ const Reconnect = {
   intent: null, attempts: 0, nextAt: 0, waitUntil: 0, backAt: 0, message: '',
   DELAYS: [4000, 10000, 20000, 30000], GIVE_UP_MS: 12 * 3600 * 1000,
   STORE_KEY: 'sro-lean-reload', LOAD_WAIT_MS: 15000, RELOAD_MAX_MS: 30 * 60000, SNAP_MS: 30 * 60000, PENDING_MS: 10 * 60000, LOGIN_GRACE_MS: 60000,
-  restored: false, failedAt: 0, failedWait: 0, expiredAt: 0, expiredWait: 0, EXPIRED_WAIT_MS: 30000, snapAt: 0, gaveUp: false,
+  restored: false, failedAt: 0, failedWait: 0, expiredAt: 0, expiredWait: 0, EXPIRED_WAIT_MS: 30000, pendingAt: 0, pendingWait: 0, PENDING_WAIT_MS: 180000, snapAt: 0, gaveUp: false,
   // What survives a page reload: the last in-world snapshot, the reloads in a row and the one reload waiting to be resumed.
   load() { try { return JSON.parse(window.localStorage.getItem(this.STORE_KEY)) || {}; } catch { return {}; } },
   save(data) { try { window.localStorage.setItem(this.STORE_KEY, JSON.stringify(data)); } catch {} },
@@ -84,7 +84,7 @@ const Reconnect = {
   },
 
   active() { return !!this.intent; },
-  clear(message = '') { this.intent = null; this.attempts = 0; this.nextAt = this.waitUntil = this.backAt = this.expiredAt = 0; this.message = message; },
+  clear(message = '') { this.intent = null; this.attempts = 0; this.nextAt = this.waitUntil = this.backAt = this.expiredAt = this.pendingAt = 0; this.message = message; },
   // The player stopped the bot: a reconnect in progress, or a reload from the saved snapshot, must not bring hunting back.
   forgetHunting() {
     if (this.intent) this.intent.hunting = false;
@@ -119,7 +119,20 @@ const Reconnect = {
     if (World.inWorld()) return this.back(i);
     this.backAt = 0;
     const phase = World.phase, error = String(World.session?.error || '');
-    if (['connecting', 'entering-world', 'reconnecting'].includes(phase)) { this.message = 'Reconnecting…'; return; }
+    // A connect or world entry the server never answers leaves the page in one of these phases for good (seen after a
+    // stalled transport): no error, no retry. After a while, reload the page like an expired session; reloads in a row
+    // wait longer each time (reloadWait).
+    if (['connecting', 'entering-world', 'reconnecting'].includes(phase)) {
+      if (!this.pendingAt) { this.pendingAt = now(); this.pendingWait = this.reloadWait(this.PENDING_WAIT_MS); }
+      else if (now() - this.pendingAt > this.pendingWait && !this.gaveUp) {
+        Log.warn('Reconnecting has not finished after ' + this.waitText(now() - this.pendingAt) + '; reloading the page.');
+        this.message = 'Reconnecting did not finish; reloading the page.';
+        this.pendingAt = 0;
+        if (this.reloadPage()) return;
+      }
+      this.message = 'Reconnecting…'; return;
+    }
+    this.pendingAt = 0;
     if (['signed-out', 'listing-servers', 'loading-roster', 'authenticating'].includes(phase) || /authentication required/i.test(error)) {
       if (i.reloaded && now() - i.since < this.LOGIN_GRACE_MS) { this.message = 'The page was reloaded; waiting for the game to restore your login.'; return; }
       this.message = 'The login is gone (server restart?). Log in and enter your character again; the bot resumes when you are back.';
