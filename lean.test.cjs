@@ -10076,6 +10076,13 @@ test('a reconnect that hangs in a connecting phase with no answer ends in a page
   for (let i = 0; i < 20; i++) { h.f.advance(10000); h.f.Controller.tick(); }
   assert.equal(h.reloads(), 1);
 });
+test('a hanging reconnect that reaches the 12-hour reload limit keeps the give-up message', () => {
+  const r = reloadFixture(), f = r.f; r.lose('reconnecting'); f.World.phase = 'connecting';
+  f.storage.set('sro-lean-reload', JSON.stringify({ reloads: { count: 9, first: Date.now() - 13 * 3600000, last: Date.now() - 60000 } }));
+  for (let i = 0; i < 200; i++) { f.advance(10000); f.Controller.tick(); }
+  assert.equal(r.reloads(), 0); assert.equal(f.Reconnect.gaveUp, true);
+  assert.match(f.Reconnect.message, /over 12 hours without getting back in; not reloading again/);
+});
 
 test('a plain "Disconnected from the server." that nothing recovers ends in a page reload, and reloads in a row wait longer, never stopping early', () => {
   const r = reloadFixture(), f = r.f; r.sent.length = 0;

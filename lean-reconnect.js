@@ -130,7 +130,9 @@ const Reconnect = {
         this.pendingAt = 0;
         if (this.reloadPage()) return;
       }
-      this.message = 'Reconnecting…'; return;
+      // Once the 12-hour limit is reached, keep its message: it tells the player to reload by hand.
+      if (!this.gaveUp) this.message = 'Reconnecting…';
+      return;
     }
     this.pendingAt = 0;
     if (['signed-out', 'listing-servers', 'loading-roster', 'authenticating'].includes(phase) || /authentication required/i.test(error)) {
