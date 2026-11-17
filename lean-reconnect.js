@@ -89,11 +89,20 @@ const Reconnect = {
   // reload does. Only while the bot is working. Being back in the world clears the normal reload streak, so these
   // reloads keep their own count (NAV_KEY): each one in a row waits twice as long, up to 30 minutes, and the count
   // clears once collision data arrives.
-  NAV_KEY: 'sro-lean-reload-nav',
+  NAV_KEY: 'sro-lean-reload-nav', MISSING_STALE_MS: 30000, navStored: null,
   watchCollision() {
     const N = Navigation;
-    if (N.scene) { N.missingSince = 0; this.collisionWait = 0; try { window.localStorage.removeItem(this.NAV_KEY); } catch {} return; }
-    if (!N.missingSince || now() - N.missingAt > 5000 || !World.inWorld() || !this.busy()) { N.missingSince = 0; this.collisionWait = 0; return; }
+    if (N.scene) {
+      N.missingSince = 0; this.collisionWait = 0;
+      // Clear the count once (navStored: null = not known yet), not on every tick.
+      if (this.navStored !== false) { try { window.localStorage.removeItem(this.NAV_KEY); } catch {} this.navStored = false; }
+      return;
+    }
+    // The game did send collision data but the bot could not use it (Navigation.error): a reload sends the same data
+    // again, so it would not help. The walker shows the error instead.
+    // Walkers ask at their own pace (a town walk retries every 5 s); missingAt older than MISSING_STALE_MS means no
+    // walker is waiting any more.
+    if (N.error || !N.missingSince || now() - N.missingAt > this.MISSING_STALE_MS || !World.inWorld() || !this.busy()) { N.missingSince = 0; this.collisionWait = 0; return; }
     if (!this.collisionWait) {
       let n = 0; try { n = Number(JSON.parse(window.localStorage.getItem(this.NAV_KEY))?.count) || 0; } catch {}
       this.collisionWait = Math.round(Math.min(this.COLLISION_WAIT_MS * 2 ** n, this.RELOAD_MAX_MS) * (1 + this.jitter()));
@@ -103,7 +112,7 @@ const Reconnect = {
     Log.warn('No collision data from the game after ' + this.waitText(now() - N.missingSince) + '; the character cannot walk. Reloading the page.');
     this.message = 'No collision data from the game; reloading the page.';
     N.missingSince = 0; this.collisionWait = 0;
-    try { window.localStorage.setItem(this.NAV_KEY, JSON.stringify({ count: this.collisionCount + 1, at: Date.now() })); } catch {}
+    try { window.localStorage.setItem(this.NAV_KEY, JSON.stringify({ count: this.collisionCount + 1, at: Date.now() })); this.navStored = true; } catch {}
     this.reloadPage();
   },
   active() { return !!this.intent; },

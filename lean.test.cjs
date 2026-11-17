@@ -6304,21 +6304,23 @@ test('town movement waits for collision coverage without timing out or blindly c
   assert.ok(f.commands.filter(c => c.kind === 'move').length > moves);
 });
 test('a town walk that never gets collision data reloads the page, keeping hunting, and waits longer each time', () => {
-  const run = (f, ms) => { for (let i = 0; i < ms / 1000; i++) { f.advance(1000); f.Town.tick(); f.Controller.tick(); } };
-  const f = townFixture(); let reloads = 0; f.Reconnect.doReload = () => { reloads++; }; f.Reconnect.jitter = () => 0;
-  f.World.charName = f.Town.trip?.character || 'Tester'; f.Town.begin(); f.Town.enter('walk-storage'); f.Navigation.scene = null;
-  run(f, 170000); assert.equal(reloads, 0, 'waits three minutes first');
-  run(f, 15000); assert.equal(reloads, 1);
+  // Only Controller.tick(), as in the game: the collision watch runs before the town walker, which retries every 5 s.
+  const run = (f, ms) => { for (let i = 0; i < ms / 100; i++) { f.advance(100); f.Controller.tick(); } };
+  const setup = () => { const f = townFixture(); let reloads = 0; f.Reconnect.doReload = () => { reloads++; }; f.Reconnect.jitter = () => 0; f.World.charName = 'Tester'; f.Town.begin(); f.Town.enter('walk-storage'); f.Navigation.scene = null; return { f, reloads: () => reloads }; };
+  const { f, reloads } = setup();
+  run(f, 170000); assert.ok(f.Town.trip, 'the town walk is still waiting'); assert.equal(reloads(), 0, 'waits three minutes first');
+  run(f, 15000); assert.equal(reloads(), 1);
   const saved = JSON.parse(f.storage.get('sro-lean-reload'));
   assert.equal(saved.pending.character, f.World.charName); assert.equal(saved.pending.hunting, true);
   f.Reconnect.snapshot(); f.Town.enter('walk-storage');
-  run(f, 300000); assert.equal(reloads, 1, 'the second reload in a row waits six minutes');
-  run(f, 70000); assert.equal(reloads, 2);
+  run(f, 300000); assert.equal(reloads(), 1, 'the second reload in a row waits six minutes');
+  run(f, 70000); assert.equal(reloads(), 2);
   f.Navigation.install(navProduct()); f.Controller.tick(); assert.equal(f.storage.get('sro-lean-reload-nav'), undefined, 'collision data clears the count');
-  const g = townFixture(); let r2 = 0; g.Reconnect.doReload = () => { r2++; }; g.Navigation.scene = null;
-  g.Town.cancel(); g.Hunt.stop(); run(g, 400000); assert.equal(r2, 0, 'an idle bot never reloads');
-  const h = townFixture(); let r3 = 0; h.Reconnect.doReload = () => { r3++; }; h.Town.begin(); h.Town.enter('walk-storage'); h.Navigation.scene = null;
-  run(h, 120000); h.Navigation.install(navProduct()); run(h, 120000); assert.equal(r3, 0, 'collision data that arrives late is fine');
+  let removes = 0; const remove = f.win.localStorage.removeItem; f.win.localStorage.removeItem = k => { removes++; remove(k); };
+  run(f, 2000); assert.equal(removes, 0, 'the count is cleared once, not on every tick');
+  const g = setup(); g.f.Town.cancel(); g.f.Hunt.stop(); run(g.f, 400000); assert.equal(g.reloads(), 0, 'an idle bot never reloads');
+  const h = setup(); run(h.f, 120000); h.f.Navigation.install(navProduct()); run(h.f, 120000); assert.equal(h.reloads(), 0, 'collision data that arrives late is fine');
+  const e = setup(); e.f.Navigation.error = 'Unsupported collision data'; run(e.f, 400000); assert.equal(e.reloads(), 0, 'data the bot cannot use is not fixed by a reload');
 });
 test('a stalled walk to a town service says why, in plain words and without NPC names, on the panel and in reports', () => {
   const f = townFixture(); f.Town.begin(); f.Town.enter('walk-vendor'); f.Navigation.scene = null; f.Navigation.error = 'Unsupported collision data';
