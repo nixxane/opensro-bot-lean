@@ -342,6 +342,25 @@ const Town = {
     if (c.every?.on && this.cycleFrom && now() - this.cycleFrom >= c.every.minutes * 60000) return `every ${c.every.minutes} minutes`;
     return '';
   },
+  // Why a dead character should revive in town rather than be resurrected on the spot: the town cycle could not start
+  // from there (validate, e.g. no return scroll or no gold), or gear is broken or worn below the worn-gear level, or a
+  // chosen potion is gone. Only with "Revive in town" on (autoRevive): then the death handling revives in town and the
+  // town services follow (Controller.returnAfterRevive); otherwise nothing is refilled. Empty when none applies.
+  reviveNeeds() {
+    const c = this.cfg();
+    if (!this.autoRevive()) return [];
+    const why = [];
+    const invalid = this.validate(false);
+    if (invalid) why.push(invalid === 'Carry a return scroll before hunting.' ? 'no return scroll' : invalid.replace(/\.$/, '').replace(/^./, ch => ch.toLowerCase()));
+    const equipped = World.gp?.equipmentSlotCount || 13;
+    const broken = (World.gp?.inventory || []).filter(i => i.slot < equipped && ItemType.isEquipment(i.typeFlags) && i.durability === 0);
+    const worn = !broken.length && c.wear?.on ? this.wear() : null;
+    if (broken.length) why.push(broken.some(i => i.slot === 6) ? 'weapon broken' : 'armor broken');
+    else if (worn && worn.pct < c.wear.pct) why.push(`gear durability low (${worn.name} at ${Math.floor(worn.pct)}%)`);
+    const out = this.supplies().filter(s => Restock.count(s.refObjId) === 0).map(s => s.kind);
+    if (out.length) why.push('out of ' + out.join(', ') + ' potions');
+    return why;
+  },
   // The equipped weapon (slot 6) at zero durability.
   weaponBroken() {
     const w = (World.gp?.inventory || []).find(i => i.slot === 6);
