@@ -150,13 +150,19 @@ const Party = {
     if (this.helperNearby()) this.helperSeenAt = now();
     return now() - this.helperSeenAt < 15000;
   },
+  // With "Revive in town when town is needed" on, a party resurrection is declined while the town cycle could not
+  // start from the spot (Town.reviveNeeds), so the character revives in town instead of dying there again and again.
+  townNeeds() { return Settings.profile.party.acceptRes && Settings.profile.party.resTownCheck ? Town.reviveNeeds() : []; },
   reviveDelay() {
+    if (this.townNeeds().length) return 5000;
     const wait = Math.min(600, Math.max(5, Number(Settings.profile.party.reviveWaitS) || 20)) * 1000;
     return Settings.profile.party.acceptRes && this.helping() ? wait : 5000;
   },
   // One plain sentence for the log when the character dies.
   waitNote() {
     if (!Settings.profile.party.acceptRes) return 'reviving in 5 s (Accept resurrection from party members is off).';
+    const needs = this.townNeeds();
+    if (needs.length) return `town needed (${needs.join(', ')}), reviving in town in 5 s; party resurrections are declined.`;
     const wait = this.reviveDelay();
     return wait > 5000 ? `waiting ${Math.round(wait / 1000)} s for a party member to resurrect before reviving.` : 'no party member in view, reviving in 5 s.';
   },
@@ -180,17 +186,36 @@ const Party = {
   },
   // A dead character gets a Yes/No resurrection question from a caster's Rebirth skill. Only party members
   // are answered, and only while dead; other questions (including mutation proposals) are left to the player.
+  // When town is needed (townNeeds) the offer is answered No and the character revives in town: by the death handling
+  // while hunting, here (after the usual 5 s) while stopped, since otherwise nothing would revive it. Hunting that was
+  // stopped stays stopped.
+  townReviveAt: 0,
   acceptResurrection() {
     const c = Settings.profile.party, social = World.gp?.social, question = social?.resurrection;
-    if (!c.acceptRes || !question || question.mutation || !World.inWorld() || !World.isDead() || !Array.isArray(social.members)) return;
+    if (!c.acceptRes || !World.inWorld() || !World.isDead()) { this.townReviveAt = 0; return; }
+    const needs = this.townNeeds();
+    if (needs.length && !Hunt.running) this.reviveInTown();
+    if (!question || question.mutation || !Array.isArray(social.members)) return;
     const caster = World.ents.get(question.gid);
     if (!caster?.name || !social.members.some(m => m?.name === caster.name && m.name !== social.localName)) return;
     if (!Cmd.spaced('resurrection-consent')) return;
+    if (needs.length) {
+      if (Cmd.raw({ kind: 'resurrection-consent', accept: false }, 'Decline resurrection from ' + caster.name)) {
+        Log.info(`Resurrection from ${caster.name} declined: town needed (${needs.join(', ')}); reviving in town.`);
+        UI.toast('Resurrection declined: town needed; reviving in town', 'info', 4000);
+      }
+      return;
+    }
     if (Cmd.raw({ kind: 'resurrection-consent', accept: true }, 'Accept resurrection from ' + caster.name)) {
       this.consentAt = now();
       this.resumeHunt = this.huntAtDeath && !Hunt.running && now() - this.huntAtDeath.at < 15 * 60000 ? { at: now() } : null;
       UI.toast('Accepted resurrection from ' + caster.name, 'info', 3000);
     }
+  },
+  reviveInTown() {
+    if (!this.townReviveAt) this.townReviveAt = now();
+    if (now() - this.townReviveAt < 5000 || World.gp?.social?.resurrection || now() - (this.townRebirthAt ?? -Infinity) < 10000) return;
+    if (Cmd.rebirth(1)) this.townRebirthAt = now();
   },
   // Invite players in view: the listed names at any distance, and optionally anyone within the radius. Each player is
   // asked again only after a growing wait (30 s, 60 s ... 10 min), because an invite can go unanswered (invites off).

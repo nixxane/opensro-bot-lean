@@ -208,7 +208,7 @@ const DEFAULT_PROFILE = {
   pet: { attack: { on: false, recall: true, radius: 15, timeout: 3, resend: 5 } },
   scroll: { damageInc: false, damageAbs: false },
   mall: { on: false, budgetSilk: 0, hp: { on: false, low: 10, target: 1000 }, mp: { on: false, low: 10, target: 1000 }, damageInc: { on: false, low: 5, target: 20 }, damageAbs: { on: false, low: 5, target: 20 }, reverse: { on: false, low: 1, target: 5 } },
-  party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', leaveIfNotLeader: false, onlyWhileRunning: false, acceptNames: '', autoInvite: false, inviteNames: '', inviteAnyone: false, inviteRadius: 300, autoRes: false, acceptRes: false, reviveWaitS: 20, resRadius: 300, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
+  party: { autoAcceptMatching: false, autoRecruit: false, joinMain: false, mainName: '', leaveIfNotLeader: false, onlyWhileRunning: false, acceptNames: '', autoInvite: false, inviteNames: '', inviteAnyone: false, inviteRadius: 300, autoRes: false, acceptRes: false, resTownCheck: true, reviveWaitS: 20, resRadius: 300, title: 'Hunting party', min: 1, max: 90, purpose: 0, expShare: true, itemShare: true,
     support: { enabled: false, whileStopped: false, range: 30, heal: { id: 0, group: 0, pct: 60, self: false }, group: { id: 0, group: 0, pct: 60, count: 2 },
       mpHeal: { id: 0, group: 0, pct: 60, self: false }, mpGroup: { id: 0, group: 0, pct: 60, count: 2 }, buffs: [] } },
   wardrobe: { on: true, phantom: true, realAnim: true, hideAvatars: false,
@@ -6921,13 +6921,19 @@ const Party = {
     if (this.helperNearby()) this.helperSeenAt = now();
     return now() - this.helperSeenAt < 15000;
   },
+  // With "Revive in town when town is needed" on, a party resurrection is declined while the town cycle could not
+  // start from the spot (Town.reviveNeeds), so the character revives in town instead of dying there again and again.
+  townNeeds() { return Settings.profile.party.acceptRes && Settings.profile.party.resTownCheck ? Town.reviveNeeds() : []; },
   reviveDelay() {
+    if (this.townNeeds().length) return 5000;
     const wait = Math.min(600, Math.max(5, Number(Settings.profile.party.reviveWaitS) || 20)) * 1000;
     return Settings.profile.party.acceptRes && this.helping() ? wait : 5000;
   },
   // One plain sentence for the log when the character dies.
   waitNote() {
     if (!Settings.profile.party.acceptRes) return 'reviving in 5 s (Accept resurrection from party members is off).';
+    const needs = this.townNeeds();
+    if (needs.length) return `town needed (${needs.join(', ')}), reviving in town in 5 s; party resurrections are declined.`;
     const wait = this.reviveDelay();
     return wait > 5000 ? `waiting ${Math.round(wait / 1000)} s for a party member to resurrect before reviving.` : 'no party member in view, reviving in 5 s.';
   },
@@ -6951,17 +6957,36 @@ const Party = {
   },
   // A dead character gets a Yes/No resurrection question from a caster's Rebirth skill. Only party members
   // are answered, and only while dead; other questions (including mutation proposals) are left to the player.
+  // When town is needed (townNeeds) the offer is answered No and the character revives in town: by the death handling
+  // while hunting, here (after the usual 5 s) while stopped, since otherwise nothing would revive it. Hunting that was
+  // stopped stays stopped.
+  townReviveAt: 0,
   acceptResurrection() {
     const c = Settings.profile.party, social = World.gp?.social, question = social?.resurrection;
-    if (!c.acceptRes || !question || question.mutation || !World.inWorld() || !World.isDead() || !Array.isArray(social.members)) return;
+    if (!c.acceptRes || !World.inWorld() || !World.isDead()) { this.townReviveAt = 0; return; }
+    const needs = this.townNeeds();
+    if (needs.length && !Hunt.running) this.reviveInTown();
+    if (!question || question.mutation || !Array.isArray(social.members)) return;
     const caster = World.ents.get(question.gid);
     if (!caster?.name || !social.members.some(m => m?.name === caster.name && m.name !== social.localName)) return;
     if (!Cmd.spaced('resurrection-consent')) return;
+    if (needs.length) {
+      if (Cmd.raw({ kind: 'resurrection-consent', accept: false }, 'Decline resurrection from ' + caster.name)) {
+        Log.info(`Resurrection from ${caster.name} declined: town needed (${needs.join(', ')}); reviving in town.`);
+        UI.toast('Resurrection declined: town needed; reviving in town', 'info', 4000);
+      }
+      return;
+    }
     if (Cmd.raw({ kind: 'resurrection-consent', accept: true }, 'Accept resurrection from ' + caster.name)) {
       this.consentAt = now();
       this.resumeHunt = this.huntAtDeath && !Hunt.running && now() - this.huntAtDeath.at < 15 * 60000 ? { at: now() } : null;
       UI.toast('Accepted resurrection from ' + caster.name, 'info', 3000);
     }
+  },
+  reviveInTown() {
+    if (!this.townReviveAt) this.townReviveAt = now();
+    if (now() - this.townReviveAt < 5000 || World.gp?.social?.resurrection || now() - (this.townRebirthAt ?? -Infinity) < 10000) return;
+    if (Cmd.rebirth(1)) this.townRebirthAt = now();
   },
   // Invite players in view: the listed names at any distance, and optionally anyone within the radius. Each player is
   // asked again only after a growing wait (30 s, 60 s ... 10 min), because an invite can go unanswered (invites off).
@@ -7705,6 +7730,23 @@ const Town = {
     if (this.noXpDue()) return `no XP for ${c.noXp.minutes} minutes`;
     if (c.every?.on && this.cycleFrom && now() - this.cycleFrom >= c.every.minutes * 60000) return `every ${c.every.minutes} minutes`;
     return '';
+  },
+  // Why a dead character should revive in town rather than be resurrected on the spot: without a return scroll, with
+  // gear broken or worn below the worn-gear level, or with a chosen potion gone, the town cycle cannot start from the
+  // hunting spot. Only with the town cycle on, since otherwise nothing gets refilled in town. Empty when none applies.
+  reviveNeeds() {
+    const c = this.cfg();
+    if (!c.enabled) return [];
+    const why = [];
+    if (!this.scroll(0x09ec)) why.push('no return scroll');
+    const equipped = World.gp?.equipmentSlotCount || 13;
+    const broken = (World.gp?.inventory || []).filter(i => i.slot < equipped && ItemType.isEquipment(i.typeFlags) && i.durability === 0);
+    const worn = !broken.length && c.wear?.on ? this.wear() : null;
+    if (broken.length) why.push(broken.some(i => i.slot === 6) ? 'weapon broken' : 'armor broken');
+    else if (worn && worn.pct < c.wear.pct) why.push(`gear durability low (${worn.name} at ${Math.floor(worn.pct)}%)`);
+    const out = this.supplies().filter(s => Restock.count(s.refObjId) === 0).map(s => s.kind);
+    if (out.length) why.push('out of ' + out.join(', ') + ' potions');
+    return why;
   },
   // The equipped weapon (slot 6) at zero durability.
   weaponBroken() {
@@ -20053,8 +20095,9 @@ const UI = {
         this.check('Only join and accept parties while the bot is running', () => party().onlyWhileRunning, v => { party().onlyWhileRunning = v; Party.reset(); }),
         el('p', 'Off by default: Auto-recruit, Auto-accept, Auto-invite and joining the party leader also work while hunting is stopped. Turn this on to make all of them wait until you press Start. Resurrection is not affected.', 'muted'),
         this.check('Accept resurrection from party members', () => party().acceptRes, v => party().acceptRes = v),
+        this.check('Revive in town instead when town is needed', () => party().resTownCheck, v => party().resTownCheck = v),
         this.number('Wait for a party resurrection (s)', () => party().reviveWaitS, v => party().reviveWaitS = v, 5, 600),
-        el('p', 'When you are dead and a party member casts Rebirth on you, the bot answers Yes. Works during hunting and while stopped; resurrection offers from other players are left to you. With a living party member in view it waits this long after dying before reviving itself in town (20 s by default).', 'muted'),
+        el('p', 'When you are dead and a party member casts Rebirth on you, the bot answers Yes. Works during hunting and while stopped; resurrection offers from other players are left to you. With a living party member in view it waits this long after dying before reviving itself in town (20 s by default). With the town cycle on and no return scroll, broken or worn-out gear or a chosen potion used up, it answers No and revives in town at once instead (on by default), so the town services can refill everything.', 'muted'),
         this.check('Auto-resurrect party members', () => party().autoRes, v => { party().autoRes = v; Resurrect.reset(); }),
         this.number('Maximum res distance from hunt spot (m)', () => party().resRadius / 10, v => party().resRadius = v * 10, 1, 100),
         el('p', 'Works during hunting and while stopped. Walks into skill range for visible dead members within the maximum radius, casts Rebirth, then returns. During hunting the radius is measured from the saved hunt spot; while stopped it uses your starting position. Collision data is required for walking. Travel stops after 30 seconds or 12 seconds without progress per leg. The member must accept the revival. Travel, shopping and manual control take priority.', 'muted')));

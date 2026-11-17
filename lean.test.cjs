@@ -5139,6 +5139,53 @@ test('the wait for a party resurrection before reviving in town is configurable'
   assert.match(t.f.Party.waitNote(), /no party member in view/);
   t.f.advance(6000); t.f.Controller.tick(); assert.equal(rebirths(t.f), 1, 'nobody around: the short 5 s wait is untouched');
 });
+// Town needed while dead (no return scroll, broken gear, a chosen potion gone): a party resurrection would put the
+// character back at the spot where the town cycle cannot start, and it would die there again and again.
+function townDeathFixture(onDeath, { scroll = false, broken = false, potion = true } = {}) {
+  const t = deathFixture(onDeath), f = t.f;
+  f.Settings.profile.potion.restock.town.enabled = true;
+  f.Town.supplies = () => [{ kind: 'vigor', refObjId: 990, low: 5, target: 50 }];
+  f.World.gp.inventory = [{ slot: 1, refObjId: 300, typeFlags: (1 << 7) | 44, durability: broken ? 0 : 40 },
+    ...(scroll ? [{ slot: 13, refObjId: 200, typeFlags: 0x09ec, quantity: 3 }] : []), ...(potion ? [{ slot: 14, refObjId: 990, quantity: 20 }] : [])];
+  return t;
+}
+const consentAnswers = f => JSON.parse(JSON.stringify(f.commands.filter(c => c.kind === 'resurrection-consent').map(c => c.accept)));
+test('town needed: reasons come from the return scroll, broken gear and potions, only with the town cycle on', () => {
+  let { f } = townDeathFixture('revive', { scroll: true });
+  assert.equal(f.Town.reviveNeeds().length, 0);
+  ({ f } = townDeathFixture('revive', { broken: true, potion: false }));
+  assert.deepEqual(JSON.parse(JSON.stringify(f.Town.reviveNeeds())), ['no return scroll', 'armor broken', 'out of vigor potions']);
+  f.Settings.profile.potion.restock.town.enabled = false; assert.equal(f.Town.reviveNeeds().length, 0, 'town cycle off: nothing to refill in town');
+});
+test('town needed: the party resurrection is declined and the character revives in town without the long wait', () => {
+  const rebirths = f => f.commands.filter(c => c.kind === 'rebirth');
+  let t = townDeathFixture('revive'); t.f.Settings.profile.party.reviveWaitS = 120; t.die();
+  assert.match(t.f.Party.waitNote(), /town needed \(no return scroll\), reviving in town in 5 s/);
+  assert.equal(t.f.Party.reviveDelay(), 5000, 'no wait for a helper');
+  t.offer(); t.f.advance(300); t.f.Controller.tick();
+  assert.deepEqual(consentAnswers(t.f), [false], 'answered No');
+  assert.ok(t.f.Log.lines.some(l => /Resurrection from Healer declined: town needed \(no return scroll\); reviving in town\./.test(l.text)));
+  t.f.World.gp.social = { ...t.f.World.gp.social, resurrection: undefined };
+  t.f.advance(6000); t.f.Controller.tick();
+  assert.deepEqual(JSON.parse(JSON.stringify(rebirths(t.f).map(c => c.choice))), [1], 'revived at the return point');
+  // Return scroll carried and gear fine: accepted as before.
+  t = townDeathFixture('revive', { scroll: true }); t.die(); t.offer(); t.f.advance(300); t.f.Controller.tick();
+  assert.deepEqual(consentAnswers(t.f), [true]);
+  // The switch off: accepted as before.
+  t = townDeathFixture('revive'); t.f.Settings.profile.party.resTownCheck = false; t.die(); t.offer(); t.f.advance(300); t.f.Controller.tick();
+  assert.deepEqual(consentAnswers(t.f), [true]);
+});
+test('town needed while stopped: declined, and the bot revives in town itself, retrying an unanswered revive', () => {
+  const rebirths = f => f.commands.filter(c => c.kind === 'rebirth').length;
+  const t = townDeathFixture('revive'); t.f.Hunt.stop(); t.die(); assert.equal(t.f.Hunt.running, false);
+  t.offer(); t.f.advance(300); t.f.Controller.tick(); assert.deepEqual(consentAnswers(t.f), [false]);
+  t.f.World.gp.social = { ...t.f.World.gp.social, resurrection: undefined };
+  t.f.advance(2000); t.f.Controller.tick(); assert.equal(rebirths(t.f), 0, 'the usual 5 s first');
+  t.f.advance(4000); t.f.Controller.tick(); assert.equal(rebirths(t.f), 1);
+  t.f.advance(3000); t.f.Controller.tick(); assert.equal(rebirths(t.f), 1, 'not repeated at once');
+  t.f.advance(8000); t.f.Controller.tick(); assert.equal(rebirths(t.f), 2, 'asked again after 10 s');
+  t.live(); t.f.advance(300); t.f.Controller.tick(); assert.equal(t.f.Hunt.running, false, 'stopped hunting stays stopped');
+});
 test('an unanswered rebirth is asked again instead of latching the dead state forever', () => {
   const rebirths = f => f.commands.filter(c => c.kind === 'rebirth').length;
   const t = deathFixture('revive'); t.f.World.ents.delete(77); t.die();

@@ -342,6 +342,23 @@ const Town = {
     if (c.every?.on && this.cycleFrom && now() - this.cycleFrom >= c.every.minutes * 60000) return `every ${c.every.minutes} minutes`;
     return '';
   },
+  // Why a dead character should revive in town rather than be resurrected on the spot: without a return scroll, with
+  // gear broken or worn below the worn-gear level, or with a chosen potion gone, the town cycle cannot start from the
+  // hunting spot. Only with the town cycle on, since otherwise nothing gets refilled in town. Empty when none applies.
+  reviveNeeds() {
+    const c = this.cfg();
+    if (!c.enabled) return [];
+    const why = [];
+    if (!this.scroll(0x09ec)) why.push('no return scroll');
+    const equipped = World.gp?.equipmentSlotCount || 13;
+    const broken = (World.gp?.inventory || []).filter(i => i.slot < equipped && ItemType.isEquipment(i.typeFlags) && i.durability === 0);
+    const worn = !broken.length && c.wear?.on ? this.wear() : null;
+    if (broken.length) why.push(broken.some(i => i.slot === 6) ? 'weapon broken' : 'armor broken');
+    else if (worn && worn.pct < c.wear.pct) why.push(`gear durability low (${worn.name} at ${Math.floor(worn.pct)}%)`);
+    const out = this.supplies().filter(s => Restock.count(s.refObjId) === 0).map(s => s.kind);
+    if (out.length) why.push('out of ' + out.join(', ') + ' potions');
+    return why;
+  },
   // The equipped weapon (slot 6) at zero durability.
   weaponBroken() {
     const w = (World.gp?.inventory || []).find(i => i.slot === 6);
