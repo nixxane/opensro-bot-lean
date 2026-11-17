@@ -10,7 +10,7 @@ const AVOID_RADIUS = 28;    // and is kept out of the next route by this much
 const AVOID_MS = 45000;
 const FLAT_NODES_WITH_CLIPPER = 2500;  // flat A* budget when the clipper can take over
 const Navigation = {
-  scene: null, revision: 0, error: '', avoidNow: null,
+  scene: null, revision: 0, error: '', avoidNow: null, missingSince: 0, missingAt: 0,
   bytes(value, size) {
     const raw = atob(value), out = Uint8Array.from(raw, c => c.charCodeAt(0));
     if (out.length !== size) throw Error('Invalid navigation grid');
@@ -71,7 +71,7 @@ const Navigation = {
         add(wall);
       }
     }
-    this.scene = scene; this.error = ''; this.revision++;
+    this.scene = scene; this.error = ''; this.revision++; this.missingSince = 0;
     ClipRoute.install(product);
   },
   local(p) {
@@ -300,6 +300,8 @@ const Navigation = {
   next(owner, destination, recorded = false, arrivalRadius = 0, near = false) {
     const pose = World.pose(), previous = owner.travel;
     if (!this.scene || (pose.regionId & DUNGEON)) {
+      // A walker needs outdoor collision that is not there: Reconnect.watchCollision() reloads if it never comes.
+      if (!this.scene && pose && !(pose.regionId & DUNGEON) && !recorded) { this.missingSince = this.missingSince || now(); this.missingAt = now(); }
       return recorded ? { point: destination } : { waiting: true, error: this.error || 'Waiting for game collision data. Reload the game if attached late, or record a walking route.' };
     }
     if (!previous || previous.revision !== this.revision || dist2D(previous.destination, destination) > 1 || previous.index >= previous.route.length) {

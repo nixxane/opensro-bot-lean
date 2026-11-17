@@ -6303,6 +6303,23 @@ test('town movement waits for collision coverage without timing out or blindly c
   f.Navigation.install(navProduct()); f.advance(6000); f.Town.tick();
   assert.ok(f.commands.filter(c => c.kind === 'move').length > moves);
 });
+test('a town walk that never gets collision data reloads the page, keeping hunting, and waits longer each time', () => {
+  const run = (f, ms) => { for (let i = 0; i < ms / 1000; i++) { f.advance(1000); f.Town.tick(); f.Controller.tick(); } };
+  const f = townFixture(); let reloads = 0; f.Reconnect.doReload = () => { reloads++; }; f.Reconnect.jitter = () => 0;
+  f.World.charName = f.Town.trip?.character || 'Tester'; f.Town.begin(); f.Town.enter('walk-storage'); f.Navigation.scene = null;
+  run(f, 170000); assert.equal(reloads, 0, 'waits three minutes first');
+  run(f, 15000); assert.equal(reloads, 1);
+  const saved = JSON.parse(f.storage.get('sro-lean-reload'));
+  assert.equal(saved.pending.character, f.World.charName); assert.equal(saved.pending.hunting, true);
+  f.Reconnect.snapshot(); f.Town.enter('walk-storage');
+  run(f, 300000); assert.equal(reloads, 1, 'the second reload in a row waits six minutes');
+  run(f, 70000); assert.equal(reloads, 2);
+  f.Navigation.install(navProduct()); f.Controller.tick(); assert.equal(f.storage.get('sro-lean-reload-nav'), undefined, 'collision data clears the count');
+  const g = townFixture(); let r2 = 0; g.Reconnect.doReload = () => { r2++; }; g.Navigation.scene = null;
+  g.Town.cancel(); g.Hunt.stop(); run(g, 400000); assert.equal(r2, 0, 'an idle bot never reloads');
+  const h = townFixture(); let r3 = 0; h.Reconnect.doReload = () => { r3++; }; h.Town.begin(); h.Town.enter('walk-storage'); h.Navigation.scene = null;
+  run(h, 120000); h.Navigation.install(navProduct()); run(h, 120000); assert.equal(r3, 0, 'collision data that arrives late is fine');
+});
 test('a stalled walk to a town service says why, in plain words and without NPC names, on the panel and in reports', () => {
   const f = townFixture(); f.Town.begin(); f.Town.enter('walk-vendor'); f.Navigation.scene = null; f.Navigation.error = 'Unsupported collision data';
   f.World.gp.pose.x = 5000; f.Town.tick();
