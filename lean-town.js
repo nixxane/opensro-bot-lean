@@ -342,14 +342,16 @@ const Town = {
     if (c.every?.on && this.cycleFrom && now() - this.cycleFrom >= c.every.minutes * 60000) return `every ${c.every.minutes} minutes`;
     return '';
   },
-  // Why a dead character should revive in town rather than be resurrected on the spot: without a return scroll, with
-  // gear broken or worn below the worn-gear level, or with a chosen potion gone, the town cycle cannot start from the
-  // hunting spot. Only with the town cycle on, since otherwise nothing gets refilled in town. Empty when none applies.
+  // Why a dead character should revive in town rather than be resurrected on the spot: the town cycle could not start
+  // from there (validate, e.g. no return scroll or no gold), or gear is broken or worn below the worn-gear level, or a
+  // chosen potion is gone. Only with "Revive in town" on (autoRevive): then the death handling revives in town and the
+  // town services follow (Controller.returnAfterRevive); otherwise nothing is refilled. Empty when none applies.
   reviveNeeds() {
     const c = this.cfg();
-    if (!c.enabled) return [];
+    if (!this.autoRevive()) return [];
     const why = [];
-    if (!this.scroll(0x09ec)) why.push('no return scroll');
+    const invalid = this.validate(false);
+    if (invalid) why.push(invalid === 'Carry a return scroll before hunting.' ? 'no return scroll' : invalid.replace(/\.$/, '').replace(/^./, ch => ch.toLowerCase()));
     const equipped = World.gp?.equipmentSlotCount || 13;
     const broken = (World.gp?.inventory || []).filter(i => i.slot < equipped && ItemType.isEquipment(i.typeFlags) && i.durability === 0);
     const worn = !broken.length && c.wear?.on ? this.wear() : null;

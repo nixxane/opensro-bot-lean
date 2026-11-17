@@ -5143,7 +5143,8 @@ test('the wait for a party resurrection before reviving in town is configurable'
 // character back at the spot where the town cycle cannot start, and it would die there again and again.
 function townDeathFixture(onDeath, { scroll = false, broken = false, potion = true } = {}) {
   const t = deathFixture(onDeath), f = t.f;
-  f.Settings.profile.potion.restock.town.enabled = true;
+  const spot = { regionId: 1, x: 0, y: 0, z: 0 };
+  Object.assign(f.Settings.profile.potion.restock.town, { enabled: true, revive: true, arrival: spot, vendor: spot, smith: spot, gate: spot, storage: spot });
   f.Town.supplies = () => [{ kind: 'vigor', refObjId: 990, low: 5, target: 50 }];
   f.World.gp.inventory = [{ slot: 1, refObjId: 300, typeFlags: (1 << 7) | 44, durability: broken ? 0 : 40 },
     ...(scroll ? [{ slot: 13, refObjId: 200, typeFlags: 0x09ec, quantity: 3 }] : []), ...(potion ? [{ slot: 14, refObjId: 990, quantity: 20 }] : [])];
@@ -5156,10 +5157,30 @@ test('town needed: reasons come from the return scroll, broken gear and potions,
   ({ f } = townDeathFixture('revive', { broken: true, potion: false }));
   assert.deepEqual(JSON.parse(JSON.stringify(f.Town.reviveNeeds())), ['no return scroll', 'armor broken', 'out of vigor potions']);
   f.Settings.profile.potion.restock.town.enabled = false; assert.equal(f.Town.reviveNeeds().length, 0, 'town cycle off: nothing to refill in town');
+  ({ f } = townDeathFixture('revive', { scroll: true })); f.World.gp.progression.gold = '0';
+  assert.deepEqual(JSON.parse(JSON.stringify(f.Town.reviveNeeds())), ['carry gold for potions, storage and repairs'], 'every reason the town cycle refuses');
+  ({ f } = townDeathFixture('revive')); f.Settings.profile.potion.restock.town.revive = false;
+  assert.equal(f.Town.reviveNeeds().length, 0, 'Revive in town off: nothing would bring the character to the town services');
+});
+test('town needed but Revive in town off: the resurrection is accepted as before, whatever On death says', () => {
+  for (const mode of ['wait', 'stop', 'revive']) {
+    const t = townDeathFixture(mode); t.f.Settings.profile.potion.restock.town.revive = false; t.die();
+    t.offer(); t.f.advance(300); t.f.Controller.tick();
+    assert.deepEqual(consentAnswers(t.f), [true], mode);
+    assert.equal(t.f.commands.filter(c => c.kind === 'rebirth').length, 0, mode + ': no revive in town');
+  }
+});
+test('a No the game does not take is given up after 8 s: the offer is accepted, nothing deadlocks', () => {
+  const t = townDeathFixture('wait'); t.die(); t.offer(); t.f.advance(300); t.f.Controller.tick();
+  assert.deepEqual(consentAnswers(t.f), [false]);
+  t.f.advance(3000); t.f.Controller.tick(); assert.deepEqual(consentAnswers(t.f), [false], 'the No is sent once');
+  t.f.advance(6000); t.f.Controller.tick();
+  assert.deepEqual(consentAnswers(t.f), [false, true], 'question still open: accepted');
+  assert.ok(t.f.Log.lines.some(l => /stayed open after answering No/.test(l.text)));
 });
 test('town needed: the party resurrection is declined and the character revives in town without the long wait', () => {
   const rebirths = f => f.commands.filter(c => c.kind === 'rebirth');
-  let t = townDeathFixture('revive'); t.f.Settings.profile.party.reviveWaitS = 120; t.die();
+  let t = townDeathFixture('wait'); t.f.Settings.profile.party.reviveWaitS = 120; t.die();
   assert.match(t.f.Party.waitNote(), /town needed \(no return scroll\), reviving in town in 5 s/);
   assert.equal(t.f.Party.reviveDelay(), 5000, 'no wait for a helper');
   t.offer(); t.f.advance(300); t.f.Controller.tick();

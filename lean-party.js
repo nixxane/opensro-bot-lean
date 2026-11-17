@@ -152,7 +152,7 @@ const Party = {
   },
   // With "Revive in town when town is needed" on, a party resurrection is declined while the town cycle could not
   // start from the spot (Town.reviveNeeds), so the character revives in town instead of dying there again and again.
-  townNeeds() { return Settings.profile.party.acceptRes && Settings.profile.party.resTownCheck ? Town.reviveNeeds() : []; },
+  townNeeds() { return Settings.profile.party.acceptRes && Settings.profile.party.resTownCheck && !this.declineFailed ? Town.reviveNeeds() : []; },
   reviveDelay() {
     if (this.townNeeds().length) return 5000;
     const wait = Math.min(600, Math.max(5, Number(Settings.profile.party.reviveWaitS) || 20)) * 1000;
@@ -186,21 +186,30 @@ const Party = {
   },
   // A dead character gets a Yes/No resurrection question from a caster's Rebirth skill. Only party members
   // are answered, and only while dead; other questions (including mutation proposals) are left to the player.
-  // When town is needed (townNeeds) the offer is answered No and the character revives in town: by the death handling
-  // while hunting, here (after the usual 5 s) while stopped, since otherwise nothing would revive it. Hunting that was
-  // stopped stays stopped.
-  townReviveAt: 0,
+  // When town is needed (townNeeds, only with "Revive in town" on) the offer is answered No, as the game's own No
+  // button does (client ui.ts sends resurrection-consent with accept false; the worker then drops the question), and the
+  // character revives in town: by the death handling while hunting, here (after the usual 5 s) while stopped, since
+  // otherwise nothing would revive it. Hunting that was stopped stays stopped. Should the question still be open 8 s
+  // after the No, the decline is given up for this death and the offer is accepted as before, so it can never deadlock.
+  townReviveAt: 0, declinedAt: 0, declineFailed: false,
   acceptResurrection() {
     const c = Settings.profile.party, social = World.gp?.social, question = social?.resurrection;
-    if (!c.acceptRes || !World.inWorld() || !World.isDead()) { this.townReviveAt = 0; return; }
-    const needs = this.townNeeds();
+    if (!c.acceptRes || !World.inWorld() || !World.isDead()) { this.townReviveAt = this.declinedAt = 0; this.declineFailed = false; return; }
+    if (this.declinedAt && question && !this.declineFailed && now() - this.declinedAt > 8000) {
+      this.declineFailed = true;
+      Log.info('The resurrection question stayed open after answering No; accepting party resurrections again.');
+    }
+    if (this.declinedAt && !question) this.declinedAt = 0;
+    const needs = this.declineFailed ? [] : this.townNeeds();
     if (needs.length && !Hunt.running) this.reviveInTown();
     if (!question || question.mutation || !Array.isArray(social.members)) return;
     const caster = World.ents.get(question.gid);
     if (!caster?.name || !social.members.some(m => m?.name === caster.name && m.name !== social.localName)) return;
     if (!Cmd.spaced('resurrection-consent')) return;
     if (needs.length) {
+      if (this.declinedAt) return;
       if (Cmd.raw({ kind: 'resurrection-consent', accept: false }, 'Decline resurrection from ' + caster.name)) {
+        this.declinedAt = now();
         Log.info(`Resurrection from ${caster.name} declined: town needed (${needs.join(', ')}); reviving in town.`);
         UI.toast('Resurrection declined: town needed; reviving in town', 'info', 4000);
       }
