@@ -4908,7 +4908,7 @@ const AVOID_RADIUS = 28;    // and is kept out of the next route by this much
 const AVOID_MS = 45000;
 const FLAT_NODES_WITH_CLIPPER = 2500;  // flat A* budget when the clipper can take over
 const Navigation = {
-  scene: null, revision: 0, error: '', avoidNow: null,
+  scene: null, revision: 0, error: '', avoidNow: null, missingSince: 0, missingAt: 0,
   bytes(value, size) {
     const raw = atob(value), out = Uint8Array.from(raw, c => c.charCodeAt(0));
     if (out.length !== size) throw Error('Invalid navigation grid');
@@ -4969,7 +4969,7 @@ const Navigation = {
         add(wall);
       }
     }
-    this.scene = scene; this.error = ''; this.revision++;
+    this.scene = scene; this.error = ''; this.revision++; this.missingSince = 0;
     ClipRoute.install(product);
   },
   local(p) {
@@ -5198,6 +5198,8 @@ const Navigation = {
   next(owner, destination, recorded = false, arrivalRadius = 0, near = false) {
     const pose = World.pose(), previous = owner.travel;
     if (!this.scene || (pose.regionId & DUNGEON)) {
+      // A walker needs outdoor collision that is not there: Reconnect.watchCollision() reloads if it never comes.
+      if (!this.scene && pose && !(pose.regionId & DUNGEON) && !recorded) { this.missingSince = this.missingSince || now(); this.missingAt = now(); }
       return recorded ? { point: destination } : { waiting: true, error: this.error || 'Waiting for game collision data. Reload the game if attached late, or record a walking route.' };
     }
     if (!previous || previous.revision !== this.revision || dist2D(previous.destination, destination) > 1 || previous.index >= previous.route.length) {
@@ -13786,7 +13788,7 @@ const Reconnect = {
   intent: null, attempts: 0, nextAt: 0, waitUntil: 0, backAt: 0, message: '',
   DELAYS: [4000, 10000, 20000, 30000], GIVE_UP_MS: 12 * 3600 * 1000,
   STORE_KEY: 'sro-lean-reload', LOAD_WAIT_MS: 15000, RELOAD_MAX_MS: 30 * 60000, SNAP_MS: 30 * 60000, PENDING_MS: 10 * 60000, LOGIN_GRACE_MS: 60000,
-  restored: false, failedAt: 0, failedWait: 0, expiredAt: 0, expiredWait: 0, EXPIRED_WAIT_MS: 30000, pendingAt: 0, pendingWait: 0, PENDING_WAIT_MS: 180000, snapAt: 0, gaveUp: false,
+  restored: false, failedAt: 0, failedWait: 0, expiredAt: 0, expiredWait: 0, EXPIRED_WAIT_MS: 30000, pendingAt: 0, pendingWait: 0, PENDING_WAIT_MS: 180000, COLLISION_WAIT_MS: 180000, collisionWait: 0, collisionCount: 0, snapAt: 0, gaveUp: false,
   // What survives a page reload: the last in-world snapshot, the reloads in a row and the one reload waiting to be resumed.
   load() { try { return JSON.parse(window.localStorage.getItem(this.STORE_KEY)) || {}; } catch { return {}; } },
   save(data) { try { window.localStorage.setItem(this.STORE_KEY, JSON.stringify(data)); } catch {} },
@@ -13858,6 +13860,38 @@ const Reconnect = {
     this.reloadPage();
   },
 
+  // In the world, a walk (town trip, walk back) that has waited for collision data the whole time: the game sends the
+  // region collision once when the character enters the world, and when that send is lost (seen after a reconnect)
+  // nothing sends it again, so the walk waits for good. Leaving the world or a stop does not bring it back; a page
+  // reload does. Only while the bot is working. Being back in the world clears the normal reload streak, so these
+  // reloads keep their own count (NAV_KEY): each one in a row waits twice as long, up to 30 minutes, and the count
+  // clears once collision data arrives.
+  NAV_KEY: 'sro-lean-reload-nav', MISSING_STALE_MS: 30000, navStored: null,
+  watchCollision() {
+    const N = Navigation;
+    if (N.scene) {
+      N.missingSince = 0; this.collisionWait = 0;
+      // Clear the count once (navStored: null = not known yet), not on every tick.
+      if (this.navStored !== false) { try { window.localStorage.removeItem(this.NAV_KEY); } catch {} this.navStored = false; }
+      return;
+    }
+    // The game did send collision data but the bot could not use it (Navigation.error): a reload sends the same data
+    // again, so it would not help. The walker shows the error instead.
+    // Walkers ask at their own pace (a town walk retries every 5 s); missingAt older than MISSING_STALE_MS means no
+    // walker is waiting any more.
+    if (N.error || !N.missingSince || now() - N.missingAt > this.MISSING_STALE_MS || !World.inWorld() || !this.busy()) { N.missingSince = 0; this.collisionWait = 0; return; }
+    if (!this.collisionWait) {
+      let n = 0; try { n = Number(JSON.parse(window.localStorage.getItem(this.NAV_KEY))?.count) || 0; } catch {}
+      this.collisionWait = Math.round(Math.min(this.COLLISION_WAIT_MS * 2 ** n, this.RELOAD_MAX_MS) * (1 + this.jitter()));
+      this.collisionCount = n;
+    }
+    if (now() - N.missingSince < this.collisionWait) return;
+    Log.warn('No collision data from the game after ' + this.waitText(now() - N.missingSince) + '; the character cannot walk. Reloading the page.');
+    this.message = 'No collision data from the game; reloading the page.';
+    N.missingSince = 0; this.collisionWait = 0;
+    try { window.localStorage.setItem(this.NAV_KEY, JSON.stringify({ count: this.collisionCount + 1, at: Date.now() })); this.navStored = true; } catch {}
+    this.reloadPage();
+  },
   active() { return !!this.intent; },
   clear(message = '') { this.intent = null; this.attempts = 0; this.nextAt = this.waitUntil = this.backAt = this.expiredAt = this.pendingAt = 0; this.message = message; },
   // The player stopped the bot: a reconnect in progress, or a reload from the saved snapshot, must not bring hunting back.
@@ -13887,6 +13921,7 @@ const Reconnect = {
   tick() {
     if (!this.restored) this.restore();
     this.watchLoad();
+    this.watchCollision();
     this.snapshot();
     const i = this.intent;
     if (!i) return;
