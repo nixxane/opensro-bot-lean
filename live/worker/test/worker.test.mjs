@@ -122,7 +122,7 @@ try {
     assert.equal(stateResponse.headers.get('cache-control'), 'no-store');
   }
 
-  // Start / Stop: queued only for characters that allow it, handed out once with the next report, dropped after a minute.
+  // Start / Stop: queued only for characters that allow it, handed out once with the next report, dropped after 90 s.
   {
     const { env, calls } = setup();
     const command = (body, headers = authed()) => call(env, '/command', { method: 'POST', headers, body: JSON.stringify(body) });
@@ -152,8 +152,8 @@ try {
     assert.deepEqual(await answer.json(), { cmd: 'stop' });
     assert.equal((await post(env, snap({ control: true }))).status, 204, 'handed out once');
     assert.equal((await post(env, snap({ name: 'Watched' }))).status, 204);
-    clock += 61000;
-    assert.equal((await post(env, snap({ name: 'Gone', control: true }))).status, 204, 'a command older than a minute is dropped');
+    clock += 91000;
+    assert.equal((await post(env, snap({ name: 'Gone', control: true }))).status, 204, 'a command older than 90 s is dropped');
   }
 
   // Validation: size, shape, name.

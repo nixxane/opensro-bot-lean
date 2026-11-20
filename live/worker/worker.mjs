@@ -27,7 +27,7 @@ import { CODE_PATTERN, PAGE_CSP, alreadySetupPage, readyPage, setupPage, wrongLi
 
 const MAX_REPORT_BYTES = 16 * 1024;
 const MAX_COMMAND_BYTES = 1024;
-const ORDER_MS = 60 * 1000; // a command not picked up in a minute is dropped, so a bot that comes back later does not act on it
+const ORDER_MS = 90 * 1000; // a command not picked up in 90 s (reports come up to 60 s apart) is dropped, so a bot that comes back later does not act on it
 const ONLINE_MS = 90 * 1000; // "every character reporting now", the same 90 s after which the dashboard shows one offline
 const MAX_NAME_LENGTH = 40;
 const MAX_CHARACTERS = 50; // a code holder cannot grow the room without bound

@@ -82,9 +82,9 @@ Do not also turn on the bot's Live dashboard for the same hub; the two would rep
 Turn on **Allow Start and Stop from the dashboard** in the bot's Settings, Live dashboard, for each character you want to control (it is off by default, per character). The dashboard then shows a **Start** or **Stop** button on that character's card (in List view: in the opened row), and **Start all** and **Stop all** on top, which ask first.
 
 - **Stop** does what the panel's **Stop all** does, so it also cancels auto-start. **Start** does what **Start / stop** does, and only while the bot is stopped, so a late Start never stops a bot.
-- The command reaches the bot with its next report (every 10 seconds by default). The button shows **Sent…** until the dashboard sees the change. A command not picked up within a minute is dropped, so a bot that comes back later does not act on an old one.
+- The command reaches the bot with its next report (every 10 seconds by default). The button shows **Sent…** until the dashboard sees the change. A command not picked up within 90 seconds is dropped, so a bot that comes back later does not act on an old one.
 - Anyone who has your dashboard link can start and stop the characters that allow it, so keep the link private, as always.
-- It works with the Worker and with `hub.js`. Characters that do not allow it, and older bots, show no button.
+- It works with the Worker and with `hub.js` and the bot's built-in Live dashboard. Characters that do not allow it, older bots and the separate reporter script (Local only) show no button.
 
 ## If something is wrong
 
@@ -106,4 +106,4 @@ Turn on **Allow Start and Stop from the dashboard** in the bot's Settings, Live 
 - `worker/`: everything the Cloudflare button deploys, self-contained: the Worker and Durable Object (`worker.mjs`), its pages (`pages.mjs`), the QR code (`qr.mjs`, using the pinned `qrcode-generator` package), `dashboard/index.html` (the dashboard page, also served by `hub.js`), `wrangler.jsonc`, `setup.mjs`, and tests. `worker/test/` holds the tests and their own `package.json` (Miniflare, a QR decoder), so the button's build installs only what the Worker needs. To run them: `cd worker`, `npm install`, `cd test`, `npm install`, then `npm test` (in either folder). They are not part of the release checks.
 - `reporter.user.js`: the separate Tampermonkey script for the local-only option; install it from the hub's link, which fills in your code. `reporter.test.cjs`: its self-check.
 
-Both hubs speak the same small protocol: `POST /report` with an `X-Code` header, `GET /state`, `GET /pair/<code>`, and `OPTIONS` answered without a code. The Worker adds `POST /setup` (the Create button). The built-in client is `lean-live.js`; the reporter script reads the bot's diagnostics on `window.SROLean` (`stats`, `world`, `hunt`, `log`, `activity.userMessage`), so if those change, update `snapshot()` in `reporter.user.js` and its test.
+Both hubs speak the same small protocol: `POST /report` with an `X-Code` header (answered `200 { cmd }` when a Start or Stop is waiting), `GET /state`, `POST /command`, `GET /pair/<code>`, and `OPTIONS` answered without a code. The Worker adds `POST /setup` (the Create button). The built-in client is `lean-live.js`; the reporter script reads the bot's diagnostics on `window.SROLean` (`stats`, `world`, `hunt`, `log`, `activity.userMessage`), so if those change, update `snapshot()` in `reporter.user.js` and its test.

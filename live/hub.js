@@ -22,7 +22,7 @@ const FORGET_MS = 24 * 3600 * 1000; // a renamed or deleted character stops repo
 const MAX_REPORT_BYTES = 16 * 1024; // a real snapshot is about 3 KB; anything near this is not one
 // Start / Stop from the dashboard (the same contract as worker/): character name -> { cmd, at }, handed out with its next report.
 const orders = new Map();
-const ORDER_MS = 60 * 1000, ONLINE_MS = 90 * 1000;
+const ORDER_MS = 90 * 1000, ONLINE_MS = 90 * 1000;
 
 // The address the bot should pair with: PUBLIC_URL (a named tunnel), else the quick tunnel once it is known, else this machine.
 // The bot only accepts https://host[:port] with no path, so a trailing slash is dropped here.

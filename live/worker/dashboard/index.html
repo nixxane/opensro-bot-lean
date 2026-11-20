@@ -251,7 +251,7 @@
     <div class="nearline" data-k="nearline" hidden></div>
     <div class="ksline" data-k="ksline" hidden></div>
     <div class="seen" data-k="seen"></div>
-    <div><button type="button" class="act" hidden></button></div>
+    <div hidden><button type="button" class="act"></button></div>
     <div class="logbox" data-k="log"></div>
   </article>
 </template>
@@ -273,7 +273,7 @@
     </div>
     <div class="detail">
       <dl class="facts">
-        <div class="wide"><button type="button" class="act" hidden></button></div>
+        <div class="wide" hidden><button type="button" class="act"></button></div>
         <div class="wide"><dt>Doing</dt><dd data-k="doing"></dd></div>
         <div><dt>HP</dt><dd data-k="hpt"></dd></div><div><dt>MP</dt><dd data-k="mpt"></dd></div>
         <div><dt>XP</dt><dd data-k="xpt"></dd></div><div><dt>Gold / hour</dt><dd data-k="goldph2"></dd></div>
@@ -547,10 +547,10 @@ $('seg').addEventListener('click', e => {
 // Shown only for characters whose player switched on "Allow Start and Stop from the dashboard" in NIX. The hub hands the
 // command to the bot with its next report, so the button says "Sent…" until the bot's next report shows the change.
 const sent = new Map(); // name -> { at, active } while a command is on its way
-const SENT_MS = 45000; // a report every 10 s and a poll every 10 s; after this the button comes back
-const canCommand = b => b.control && b.kind !== 'offline' && b.kind !== 'away';
+const SENT_MS = 90000; // the hub's order lifetime (reports come up to 60 s apart); after this the button comes back
+const canCommand = b => conn.state === 'live' && b.control && b.kind !== 'offline' && b.kind !== 'away';
 function paintAct(btn, b) {
-  btn.hidden = !b.control;
+  btn.parentElement.hidden = !b.control; // the wrapper, so a card without the button keeps no empty grid row
   if (!b.control) return;
   const wait = sent.get(b.name);
   if (wait && (b.active !== wait.active || Date.now() - wait.at > SENT_MS)) sent.delete(b.name);
