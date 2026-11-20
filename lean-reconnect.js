@@ -1,17 +1,53 @@
 // Always-on reconnect. When the connection to the game is lost (a server restart, a network drop) the bot waits for the
 // game's own retries, then re-enters the world with the login the page already holds, as the Enter button would.
-// It never types or stores credentials: if the login itself is gone it says so and waits for you. Hunting that was
+// By default it never stores credentials: if the login itself is gone it says so and waits for you (AutoLogin below
+// is the opt-in exception, which logs in again with the login the player last typed on this page). Hunting that was
 // running resumes once the character is back at the hunting spot. Choosing logout, disconnect, exit or restart yourself
 // cancels everything, and so does logging in or entering a character by hand.
 // When the game itself fails to load ("Unable to finish loading") the page is reloaded after a short wait. The character
 // and whether hunting was running are kept in localStorage across the reload; the game restores the login from its own
 // session cookie, then the same reconnect steps below enter the world and resume hunting. Each reload in a row waits twice
 // as long as the one before (up to 30 minutes, plus a small random delay); after 12 hours of reloads it gives up.
+// Opt-in auto-login, off by default. While it is on, the next login the player sends from the game's own login screen
+// (ID, password, server) is remembered in this site's localStorage, unencrypted, and used only by Reconnect when a
+// lost connection ends on the signed-out screen (a server restart that dropped the login). The script runs with
+// @grant none, so there is no safer store; the setting says so. Turning it off forgets the login. Nothing here
+// reaches the log, diagnostics, reports or shared profiles.
+const AutoLogin = {
+  KEY: 'sroLean:login', FIRST_WAIT_MS: 10000, LOGIN_REFUSALS: 3, DELAYS: [30000, 60000, 120000, 300000],
+  load() { try { return JSON.parse(window.localStorage.getItem(this.KEY)) || {}; } catch { return {}; } },
+  enabled() { return this.load().enabled === true; },
+  setEnabled(on) {
+    try {
+      if (on) window.localStorage.setItem(this.KEY, JSON.stringify({ ...this.load(), enabled: true }));
+      else window.localStorage.removeItem(this.KEY);
+    } catch {}
+  },
+  saved() {
+    const d = this.load(), text = v => typeof v === 'string' && v.length > 0;
+    return d.enabled === true && text(d.id) && text(d.password) && text(d.serverId) && text(d.apiBase) ? d : null;
+  },
+  // A login the player sent: remember it while the setting is on. Our own logins go through Hook.post and never pass here.
+  capture(command) {
+    if (command?.kind !== 'login' || !this.enabled()) return;
+    const { apiBase, id, password, serverId, divisionId } = command;
+    if (![apiBase, id, password, serverId].every(v => typeof v === 'string' && v)) return;
+    try { window.localStorage.setItem(this.KEY, JSON.stringify({ enabled: true, apiBase, id, password, serverId, ...(typeof divisionId === 'string' && divisionId ? { divisionId } : {}) })); } catch {}
+  },
+  status() {
+    if (!this.enabled()) return 'Off.';
+    const s = this.saved();
+    return s ? 'Saved: account ' + s.id + ' on server ' + s.serverId + '.' : 'Nothing saved yet: log out and log in once on the game\'s login screen while this is on.';
+  },
+};
+Hook.observers.push(command => AutoLogin.capture(command));
+
 const Reconnect = {
   intent: null, attempts: 0, nextAt: 0, waitUntil: 0, backAt: 0, message: '',
   DELAYS: [4000, 10000, 20000, 30000], GIVE_UP_MS: 12 * 3600 * 1000,
   STORE_KEY: 'sro-lean-reload', LOAD_WAIT_MS: 15000, RELOAD_MAX_MS: 30 * 60000, SNAP_MS: 30 * 60000, PENDING_MS: 10 * 60000, LOGIN_GRACE_MS: 60000,
   restored: false, failedAt: 0, failedWait: 0, expiredAt: 0, expiredWait: 0, EXPIRED_WAIT_MS: 30000, pendingAt: 0, pendingWait: 0, PENDING_WAIT_MS: 180000, COLLISION_WAIT_MS: 180000, collisionWait: 0, collisionCount: 0, snapAt: 0, gaveUp: false,
+  loginTries: 0, loginRefused: 0, loginNext: 0, loginAnswered: true,
   // What survives a page reload: the last in-world snapshot, the reloads in a row and the one reload waiting to be resumed.
   load() { try { return JSON.parse(window.localStorage.getItem(this.STORE_KEY)) || {}; } catch { return {}; } },
   save(data) { try { window.localStorage.setItem(this.STORE_KEY, JSON.stringify(data)); } catch {} },
@@ -116,7 +152,33 @@ const Reconnect = {
     this.reloadPage();
   },
   active() { return !!this.intent; },
-  clear(message = '') { this.intent = null; this.attempts = 0; this.nextAt = this.waitUntil = this.backAt = this.expiredAt = this.pendingAt = 0; this.message = message; },
+  clear(message = '') { this.intent = null; this.attempts = 0; this.nextAt = this.waitUntil = this.backAt = this.expiredAt = this.pendingAt = 0; this.loginTries = this.loginRefused = this.loginNext = 0; this.loginAnswered = true; this.message = message; },
+  // Signed out with auto-login on: log in again with the remembered login. A login the server refused (an answer with a
+  // code: wrong password, banned) is tried at most LOGIN_REFUSALS times; a server that does not answer yet (still
+  // restarting) is tried again every few minutes until the 12-hour limit. Messages never carry the account.
+  autoLogin(phase, refused) {
+    const saved = AutoLogin.saved();
+    if (!saved) return false;
+    // Each login is answered once; the failed phase stays on screen for many ticks.
+    if (phase === 'failed' && !this.loginAnswered) { this.loginAnswered = true; if (refused) this.loginRefused++; }
+    if (this.loginRefused >= AutoLogin.LOGIN_REFUSALS) {
+      this.message = 'The server refused the automatic login ' + this.loginRefused + ' times; log in yourself. The bot resumes when you are back.';
+      return true;
+    }
+    if (phase === 'authenticating') { this.message = 'Logging in again…'; return true; }
+    if (!this.loginNext) this.loginNext = now() + AutoLogin.FIRST_WAIT_MS;
+    if (now() < this.loginNext) { this.message = 'Signed out; logging in again in ' + this.waitText(this.loginNext - now()) + '.'; return true; }
+    const n = this.loginTries++;
+    this.loginAnswered = false;
+    this.send({ kind: 'login', apiBase: saved.apiBase, id: saved.id, password: saved.password, serverId: saved.serverId, ...(saved.divisionId ? { divisionId: saved.divisionId } : {}) });
+    this.loginNext = now() + AutoLogin.DELAYS[Math.min(n, AutoLogin.DELAYS.length - 1)];
+    // Next comes the character list: enter the character, never the game's resume.
+    this.attempts = Math.max(this.attempts, 1); this.nextAt = now() + 2000; this.waitUntil = 0;
+    this.message = 'Logging in again (attempt ' + (n + 1) + ')…';
+    Log.warn('Signed out; logging in again automatically (attempt ' + (n + 1) + ').');
+    if (n === 0) UI.toast('Signed out by the server; logging in again automatically.', 'warn', 5000);
+    return true;
+  },
   // The player stopped the bot: a reconnect in progress, or a reload from the saved snapshot, must not bring hunting back.
   forgetHunting() {
     if (this.intent) this.intent.hunting = false;
@@ -168,8 +230,11 @@ const Reconnect = {
       return;
     }
     this.pendingAt = 0;
-    if (['signed-out', 'listing-servers', 'loading-roster', 'authenticating'].includes(phase) || /authentication required/i.test(error)) {
+    // A failed phase right after our own login is that login's answer.
+    const loginFailed = phase === 'failed' && this.loginTries > 0;
+    if (['signed-out', 'listing-servers', 'loading-roster', 'authenticating'].includes(phase) || /authentication required/i.test(error) || loginFailed) {
       if (i.reloaded && now() - i.since < this.LOGIN_GRACE_MS) { this.message = 'The page was reloaded; waiting for the game to restore your login.'; return; }
+      if (this.autoLogin(phase, loginFailed && !!World.session?.code)) return;
       this.message = 'The login is gone (server restart?). Log in and enter your character again; the bot resumes when you are back.';
       return;
     }

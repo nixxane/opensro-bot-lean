@@ -1258,6 +1258,9 @@ const UI = {
         this.check('Start again when the bot stops by itself', () => H().retry, v => { H().retry = v; this.retryNote.textContent = Retry.status(); }),
         el('p', 'If the bot stops on its own while your last choice was Start (a town trip or walk back that failed, a stop on a world change), it waits 2 minutes, and 2 minutes after your last manual move, then does what Return & hunt does. Stops you chose are final: out of HP potions, bag full, On death: Stop, the stuck and trapped limits, manual control, a stop right after your own action in the game. The same reason again within 30 minutes, or a fourth stop in an hour, leaves it stopped with a warning.', 'muted'),
         this.retryNote,
+        this.check('Log in again by itself after a server restart', () => AutoLogin.enabled(), v => { AutoLogin.setEnabled(v); this.autoLoginNote.textContent = AutoLogin.status(); }),
+        el('p', 'Off by default. While it is on, the bot remembers the ID, password and server of your next login on the game\'s login screen. When a disconnect ends with you signed out, it logs in with them, enters the same character and carries on. They are kept unencrypted in this browser\'s storage for the site, so anyone using this browser profile can read them. Turning this off forgets them. After three refused logins it stops and waits for you.', 'muted'),
+        this.autoLoginNote = el('p', AutoLogin.status(), 'muted'),
         ...(Town.autoRevive() ? [el('p', 'On death: the town cycle revives you in town and goes back (Town → Scroll town cycle).', 'muted')]
           : [this.select('On death', [['stop', 'Stop'], ['wait', 'Wait'], ['revive', 'Revive and walk back']], () => H().onDeath, v => H().onDeath = v)]),
         this.check('Rest when low', () => H().sit.enabled, v => { H().sit.enabled = v; this.draw(); }),

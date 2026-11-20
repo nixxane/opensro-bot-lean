@@ -3,7 +3,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(__dirname + '/bot.lean.user.js', 'utf8');
 const isolated = source.slice(0, source.lastIndexOf('installWorkerHook();')) +
-  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Reporter, Live, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, Reconnect, Lure, Search, Nearby, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, Leveling, ScrollBuff, boot, Ticker, Sound, LeanMap};\n})();';
+  'globalThis.bot = {AutoStart, RenderControl, Activity, World, Settings, Updates, Diagnostics, Reports, Reporter, Live, Alchemy, BuffGear, Icons, Assets, Hook, Cmd, Hunt, Loot, Restock, Trade, WalkBack, Navigation, ClipRoute, Route, RouteCheck, Learned, Display, Wardrobe, WdData, LeanWardrobe, Controller, UI, Stats, Combat, Potion, Party, Town, Travel, Quest, QuestData, bus, Manual, Resurrect, Support, ItemRules, SpeedScroll, RepairHammer, Stall, SellStar, Log, AntiStuck, Chase, Trap, botProfile, ItemRules, Items, AutoMastery, StatPoints, ProfileShare, Setup, Trace, DEFAULT_PROFILE, PetPotion, Reconnect, AutoLogin, Lure, Search, Nearby, Equip, stopAll, toggleBot, userStop, RunIntent, Retry, PetAttack, MallProbe, MallBuyer, LevelSpot, Leveling, ScrollBuff, boot, Ticker, Sound, LeanMap};\n})();';
 function fixture(document, sharedStorage) {
   let time = 100000;
   const storage = sharedStorage || new Map(), commands = [], notices = [], intervals = [], timers = [];
@@ -5083,6 +5083,56 @@ test('reconnect never fights the player: logout, disconnect, exit or a manual lo
   assert.equal(g.sent.length, 0); assert.match(g.f.Reconnect.message, /login is gone/);
   const h = reconnectFixture(); h.lose(); h.f.advance(13 * 3600 * 1000); h.f.Controller.tick(); assert.equal(h.f.Reconnect.active(), false); assert.match(h.f.Reconnect.message, /Gave up/);
   assert.equal(JSON.stringify(h.sent).includes('secret'), false);
+});
+const LOGIN = { kind: 'login', apiBase: 'https://opensro.online/api', id: 'acc1', password: 'secret', serverId: 's1' };
+test('auto-login is off by default: a login typed by the player is not remembered', () => {
+  const { f, sent, lose } = reconnectFixture();
+  f.Hook.observers.forEach(fn => fn({ ...LOGIN }));
+  assert.equal(f.AutoLogin.saved(), null); assert.equal([...f.storage.values()].join('').includes('secret'), false);
+  lose(); f.World.phase = 'signed-out'; f.advance(60000); f.Controller.tick();
+  assert.equal(sent.length, 0);
+});
+test('with auto-login on, a signed-out reconnect logs in with the remembered login, enters the character and hunts again', () => {
+  const { f, sent, lose, back } = reconnectFixture();
+  f.AutoLogin.setEnabled(true); f.Hook.observers.forEach(fn => fn({ ...LOGIN }));
+  assert.equal(f.AutoLogin.saved().id, 'acc1');
+  lose(); f.World.phase = 'signed-out'; f.World.session = { phase: 'signed-out' };
+  f.advance(2000); f.Controller.tick(); assert.equal(sent.length, 0, 'a short wait before the first login');
+  f.advance(10000); f.Controller.tick();
+  assert.deepEqual(sent, [{ kind: 'login', apiBase: LOGIN.apiBase, id: 'acc1', password: 'secret', serverId: 's1' }]);
+  f.World.phase = 'authenticating'; f.World.session = { phase: 'authenticating' }; f.advance(60000); f.Controller.tick();
+  assert.equal(sent.length, 1, 'no second login while one is in flight');
+  f.World.phase = 'character-select'; f.World.session = { phase: 'character-select' }; f.advance(5000); f.Controller.tick();
+  assert.deepEqual(sent.at(-1), { kind: 'enter-world', character: 'Tester' });
+  back(); f.advance(4000); f.Controller.tick(); f.advance(4000); f.Controller.tick();
+  assert.equal(f.Hunt.running, true); assert.equal(f.Reconnect.active(), false);
+  assert.equal(JSON.stringify(f.Activity.visible()).includes('secret') || JSON.stringify(f.Activity.visible()).includes('acc1'), false, 'the log never carries the login');
+  assert.equal(/secret|acc1/.test(f.Reconnect.message + f.Diagnostics.main()), false);
+});
+test('auto-login stops after the server refuses the login three times, but keeps waiting for an unreachable server', () => {
+  const { f, sent, lose } = reconnectFixture();
+  f.AutoLogin.setEnabled(true); f.Hook.observers.forEach(fn => fn({ ...LOGIN }));
+  lose(); f.World.phase = 'signed-out'; f.World.session = { phase: 'signed-out' }; f.Controller.tick();
+  for (let i = 0; i < 8; i++) {
+    f.advance(10 * 60000); f.Controller.tick();
+    f.World.phase = 'failed'; f.World.session = { phase: 'failed', code: 'invalid-credentials', error: 'Wrong password' };
+  }
+  assert.equal(sent.filter(c => c.kind === 'login').length, 3); assert.match(f.Reconnect.message, /refused/);
+  const g = reconnectFixture();
+  g.f.AutoLogin.setEnabled(true); g.f.Hook.observers.forEach(fn => fn({ ...LOGIN }));
+  g.lose(); g.f.World.phase = 'signed-out'; g.f.World.session = { phase: 'signed-out' }; g.f.Controller.tick();
+  for (let i = 0; i < 8; i++) {
+    g.f.advance(10 * 60000); g.f.Controller.tick();
+    g.f.World.phase = 'failed'; g.f.World.session = { phase: 'failed', error: 'Authentication request failed' };
+  }
+  assert.equal(g.sent.filter(c => c.kind === 'login').length, 8, 'a server that is still down is tried again');
+});
+test('turning auto-login off forgets the saved login', () => {
+  const { f } = reconnectFixture();
+  f.AutoLogin.setEnabled(true); f.Hook.observers.forEach(fn => fn({ ...LOGIN }));
+  assert.equal([...f.storage.values()].join('').includes('secret'), true);
+  f.AutoLogin.setEnabled(false);
+  assert.equal(f.AutoLogin.saved(), null); assert.equal([...f.storage.values()].join('').includes('secret'), false);
 });
 function deathFixture(onDeath = 'stop') {
   const f = fixture(); f.Settings.profile.party.acceptRes = true; f.Settings.profile.hunt.onDeath = onDeath;

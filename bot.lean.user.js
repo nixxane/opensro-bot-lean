@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         nixxane bot
 // @namespace    https://opensro.online/
-// @version      1.2.275
+// @version      1.2.276
 // @updateURL    https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.meta.js
 // @downloadURL  https://raw.githubusercontent.com/nixxane/opensro-bot-lean/main/bot.lean.user.js
 // @description  Combat, reliable looting, potions, restocking and walk-back in one compact panel.
@@ -22,7 +22,7 @@ if (W.__SRO_ASISTAN__ || W.__SRO_LEAN__) {
   console.warn('[NIX] Another SRO assistant is active. Disable it and reload to use NIX.');
   return;
 }
-const VERSION = '1.2.275';
+const VERSION = '1.2.276';
 const APP = { version: VERSION };
 Object.defineProperty(W, '__SRO_LEAN__', { value: APP });
 Object.defineProperty(W, '__SRO_ASISTAN__', { value: APP });
@@ -13777,18 +13777,54 @@ Hook.observers.push( command => {
 
 // Always-on reconnect. When the connection to the game is lost (a server restart, a network drop) the bot waits for the
 // game's own retries, then re-enters the world with the login the page already holds, as the Enter button would.
-// It never types or stores credentials: if the login itself is gone it says so and waits for you. Hunting that was
+// By default it never stores credentials: if the login itself is gone it says so and waits for you (AutoLogin below
+// is the opt-in exception, which logs in again with the login the player last typed on this page). Hunting that was
 // running resumes once the character is back at the hunting spot. Choosing logout, disconnect, exit or restart yourself
 // cancels everything, and so does logging in or entering a character by hand.
 // When the game itself fails to load ("Unable to finish loading") the page is reloaded after a short wait. The character
 // and whether hunting was running are kept in localStorage across the reload; the game restores the login from its own
 // session cookie, then the same reconnect steps below enter the world and resume hunting. Each reload in a row waits twice
 // as long as the one before (up to 30 minutes, plus a small random delay); after 12 hours of reloads it gives up.
+// Opt-in auto-login, off by default. While it is on, the next login the player sends from the game's own login screen
+// (ID, password, server) is remembered in this site's localStorage, unencrypted, and used only by Reconnect when a
+// lost connection ends on the signed-out screen (a server restart that dropped the login). The script runs with
+// @grant none, so there is no safer store; the setting says so. Turning it off forgets the login. Nothing here
+// reaches the log, diagnostics, reports or shared profiles.
+const AutoLogin = {
+  KEY: 'sroLean:login', FIRST_WAIT_MS: 10000, LOGIN_REFUSALS: 3, DELAYS: [30000, 60000, 120000, 300000],
+  load() { try { return JSON.parse(window.localStorage.getItem(this.KEY)) || {}; } catch { return {}; } },
+  enabled() { return this.load().enabled === true; },
+  setEnabled(on) {
+    try {
+      if (on) window.localStorage.setItem(this.KEY, JSON.stringify({ ...this.load(), enabled: true }));
+      else window.localStorage.removeItem(this.KEY);
+    } catch {}
+  },
+  saved() {
+    const d = this.load(), text = v => typeof v === 'string' && v.length > 0;
+    return d.enabled === true && text(d.id) && text(d.password) && text(d.serverId) && text(d.apiBase) ? d : null;
+  },
+  // A login the player sent: remember it while the setting is on. Our own logins go through Hook.post and never pass here.
+  capture(command) {
+    if (command?.kind !== 'login' || !this.enabled()) return;
+    const { apiBase, id, password, serverId, divisionId } = command;
+    if (![apiBase, id, password, serverId].every(v => typeof v === 'string' && v)) return;
+    try { window.localStorage.setItem(this.KEY, JSON.stringify({ enabled: true, apiBase, id, password, serverId, ...(typeof divisionId === 'string' && divisionId ? { divisionId } : {}) })); } catch {}
+  },
+  status() {
+    if (!this.enabled()) return 'Off.';
+    const s = this.saved();
+    return s ? 'Saved: account ' + s.id + ' on server ' + s.serverId + '.' : 'Nothing saved yet: log out and log in once on the game\'s login screen while this is on.';
+  },
+};
+Hook.observers.push(command => AutoLogin.capture(command));
+
 const Reconnect = {
   intent: null, attempts: 0, nextAt: 0, waitUntil: 0, backAt: 0, message: '',
   DELAYS: [4000, 10000, 20000, 30000], GIVE_UP_MS: 12 * 3600 * 1000,
   STORE_KEY: 'sro-lean-reload', LOAD_WAIT_MS: 15000, RELOAD_MAX_MS: 30 * 60000, SNAP_MS: 30 * 60000, PENDING_MS: 10 * 60000, LOGIN_GRACE_MS: 60000,
   restored: false, failedAt: 0, failedWait: 0, expiredAt: 0, expiredWait: 0, EXPIRED_WAIT_MS: 30000, pendingAt: 0, pendingWait: 0, PENDING_WAIT_MS: 180000, COLLISION_WAIT_MS: 180000, collisionWait: 0, collisionCount: 0, snapAt: 0, gaveUp: false,
+  loginTries: 0, loginRefused: 0, loginNext: 0, loginAnswered: true,
   // What survives a page reload: the last in-world snapshot, the reloads in a row and the one reload waiting to be resumed.
   load() { try { return JSON.parse(window.localStorage.getItem(this.STORE_KEY)) || {}; } catch { return {}; } },
   save(data) { try { window.localStorage.setItem(this.STORE_KEY, JSON.stringify(data)); } catch {} },
@@ -13893,7 +13929,33 @@ const Reconnect = {
     this.reloadPage();
   },
   active() { return !!this.intent; },
-  clear(message = '') { this.intent = null; this.attempts = 0; this.nextAt = this.waitUntil = this.backAt = this.expiredAt = this.pendingAt = 0; this.message = message; },
+  clear(message = '') { this.intent = null; this.attempts = 0; this.nextAt = this.waitUntil = this.backAt = this.expiredAt = this.pendingAt = 0; this.loginTries = this.loginRefused = this.loginNext = 0; this.loginAnswered = true; this.message = message; },
+  // Signed out with auto-login on: log in again with the remembered login. A login the server refused (an answer with a
+  // code: wrong password, banned) is tried at most LOGIN_REFUSALS times; a server that does not answer yet (still
+  // restarting) is tried again every few minutes until the 12-hour limit. Messages never carry the account.
+  autoLogin(phase, refused) {
+    const saved = AutoLogin.saved();
+    if (!saved) return false;
+    // Each login is answered once; the failed phase stays on screen for many ticks.
+    if (phase === 'failed' && !this.loginAnswered) { this.loginAnswered = true; if (refused) this.loginRefused++; }
+    if (this.loginRefused >= AutoLogin.LOGIN_REFUSALS) {
+      this.message = 'The server refused the automatic login ' + this.loginRefused + ' times; log in yourself. The bot resumes when you are back.';
+      return true;
+    }
+    if (phase === 'authenticating') { this.message = 'Logging in again…'; return true; }
+    if (!this.loginNext) this.loginNext = now() + AutoLogin.FIRST_WAIT_MS;
+    if (now() < this.loginNext) { this.message = 'Signed out; logging in again in ' + this.waitText(this.loginNext - now()) + '.'; return true; }
+    const n = this.loginTries++;
+    this.loginAnswered = false;
+    this.send({ kind: 'login', apiBase: saved.apiBase, id: saved.id, password: saved.password, serverId: saved.serverId, ...(saved.divisionId ? { divisionId: saved.divisionId } : {}) });
+    this.loginNext = now() + AutoLogin.DELAYS[Math.min(n, AutoLogin.DELAYS.length - 1)];
+    // Next comes the character list: enter the character, never the game's resume.
+    this.attempts = Math.max(this.attempts, 1); this.nextAt = now() + 2000; this.waitUntil = 0;
+    this.message = 'Logging in again (attempt ' + (n + 1) + ')…';
+    Log.warn('Signed out; logging in again automatically (attempt ' + (n + 1) + ').');
+    if (n === 0) UI.toast('Signed out by the server; logging in again automatically.', 'warn', 5000);
+    return true;
+  },
   // The player stopped the bot: a reconnect in progress, or a reload from the saved snapshot, must not bring hunting back.
   forgetHunting() {
     if (this.intent) this.intent.hunting = false;
@@ -13945,8 +14007,11 @@ const Reconnect = {
       return;
     }
     this.pendingAt = 0;
-    if (['signed-out', 'listing-servers', 'loading-roster', 'authenticating'].includes(phase) || /authentication required/i.test(error)) {
+    // A failed phase right after our own login is that login's answer.
+    const loginFailed = phase === 'failed' && this.loginTries > 0;
+    if (['signed-out', 'listing-servers', 'loading-roster', 'authenticating'].includes(phase) || /authentication required/i.test(error) || loginFailed) {
       if (i.reloaded && now() - i.since < this.LOGIN_GRACE_MS) { this.message = 'The page was reloaded; waiting for the game to restore your login.'; return; }
+      if (this.autoLogin(phase, loginFailed && !!World.session?.code)) return;
       this.message = 'The login is gone (server restart?). Log in and enter your character again; the bot resumes when you are back.';
       return;
     }
@@ -17212,7 +17277,7 @@ const Alchemy = {
 };
 
 
-const RELEASE_NOTES = [{"version": "1.2.275", "title": "Bot reloads when a walk never gets collision data", "items": ["If a town trip or walk back has been waiting on \"Waiting for game collision data\" for 3 minutes, the bot now reloads the game page by itself instead of waiting forever.", "Your character and hunting are kept, and hunting resumes once the world loads again.", "This only happens while the bot is working (hunting, a town trip or a walk back); a stopped bot never reloads.", "Reloads in a row wait longer each time (3, 6, 12 minutes and so on, up to 30), and the count clears once collision data arrives.", "If the game sends collision data the bot cannot use, it does not reload and shows the reason instead."], "note": "Contributed by NiftyOps (#109). Tested in simulation only, not in a live game; the lost collision data case was not reproduced on a live server."}, {"version": "1.2.274", "title": "Declines party resurrection when town is needed", "items": ["On the Party page, \"Accept resurrection from party members\" now checks whether a town trip is needed before saying Yes.", "If the Town page's \"Revive in town and go back to the hunting spot\" is on and you are out of return scrolls or gold, your gear is broken or worn out, or a chosen potion has run out, the bot says No to the party resurrection and revives in town instead, so the town services can refill you.", "A new Party option, \"Revive in town instead when town is needed\", is on by default; turn it off to keep accepting party resurrections as before.", "It works while hunting and while stopped, and stopped hunting stays stopped.", "This is on by default for anyone using Accept resurrection with the town cycle; while stopped it revives you in town even when On death is set to Wait or Stop."], "note": "Contributed by NiftyOps (#110). Tested in simulation only, not in a live game; the No answer to the resurrection question has not been checked on a live server."}, {"version": "1.2.273", "title": "Bot reloads the page when a reconnect hangs", "items": ["If the \"Reconnecting…\" message in the bot panel has not changed for 3 minutes, the bot now reloads the game page by itself, instead of waiting forever for a server that never answers.", "Your character and hunting state are kept, and hunting resumes after the world loads again.", "A slow reconnect that is still moving through login and world entry starts the wait over, so it is not cut short.", "Reloads in a row wait longer each time, and the 12-hour limit still stops the bot and asks you to reload by hand."], "note": "Contributed by NiftyOps (#108). Tested in simulation only, not in a live game."}, {"version": "1.2.272", "title": "Party support can restore party MP", "items": ["Party → \"Heal and buff the party\" adds an MP heal: a single-target MP heal skill and a group MP heal skill, each with its own \"below %\" threshold, so a Bard can refill party members' MP when it runs low.", "A \"Heal my MP too\" switch restores your own MP. Other members' MP reads from the party window in steps of 10%; your own is exact.", "MP heals run with the HP heals and buffs, one cast at a time, and never walk to members."], "note": "Tested with the integration suite only; not exercised in a live game."}, {"version": "1.2.271", "title": "Live dashboard shows SoX names and nearby players", "items": ["The live phone dashboard now lists the last 10 SoX (Star / Moon / Sun) items picked up this session, by name and seal.", "It also shows other players near your character and warns when another player is fighting your target."], "note": "Tested with the integration suite and a simulated hub; not exercised in a live game."}, {"version": "1.2.270", "title": "Bug reports go to GitHub", "items": ["The bug-report button now files reports as public GitHub issues, where an automatic workflow tries to fix them, instead of posting to Discord.", "The button now says \"Send to GitHub\" and the preview warns that a report becomes a public issue, so check your explanation and screenshot for private details first. Diagnostics still omit names, chat and locations.", "Sending works the same way; only where the report lands has changed."], "note": "Tested with the integration suite and mocked GitHub/Cloudflare requests; the live service has not been exercised."}, {"version": "1.2.269", "title": "Optional hunt-area search sweep", "items": ["New \"Search the hunting area\" switch under Combat > Hunting area. With no monster in view, the bot walks the area in a north–centre–east–centre–west–centre–south sweep so spawns beyond the view distance are found instead of waiting at the centre.", "Off by default; the existing \"Return when idle\" behaviour stays. Only active while hunting a saved spot with no target, and combat, loot and party support always take over first.", "Works in dungeons like Jangan Cave, where the hunt area can be larger than the view distance."], "note": "Tested in simulation only, not in a live browser or game."}, {"version": "1.2.268", "title": "Alchemy sound only at the target +", "items": ["The alchemy sound now plays once, when a confirmed success reaches the target + you set. Successes below the target, failures and stone fusions stay silent.", "The option is renamed to \"Play a sound when the target + is reached\"; your saved switch and custom MP3 are kept."], "note": "Tested in simulation only, not in a live browser or game."}];
+const RELEASE_NOTES = [{"version": "1.2.276", "title": "Optional auto-login after a server restart", "items": ["New setting under Behaviour: \"Log in again by itself after a server restart\". Off by default.", "While it is on, the bot remembers the ID, password and server of your next login on the game's login screen. When a disconnect ends with you signed out, it logs in again, enters the same character and carries on hunting.", "Turned on while already in game? Log out and log in once so it can remember the login.", "The login is kept unencrypted in this browser's storage for the site; anyone using the same browser profile can read it. Turning the setting off forgets it. It never goes into logs, diagnostics, reports or shared profiles.", "If the server refuses the login three times (wrong password, for example) it stops and waits for you; a server that is still restarting is tried again every few minutes."], "note": "Tested with the integration suite against simulated game states; a real server restart has not been exercised yet."}, {"version": "1.2.275", "title": "Bot reloads when a walk never gets collision data", "items": ["If a town trip or walk back has been waiting on \"Waiting for game collision data\" for 3 minutes, the bot now reloads the game page by itself instead of waiting forever.", "Your character and hunting are kept, and hunting resumes once the world loads again.", "This only happens while the bot is working (hunting, a town trip or a walk back); a stopped bot never reloads.", "Reloads in a row wait longer each time (3, 6, 12 minutes and so on, up to 30), and the count clears once collision data arrives.", "If the game sends collision data the bot cannot use, it does not reload and shows the reason instead."], "note": "Contributed by NiftyOps (#109). Tested in simulation only, not in a live game; the lost collision data case was not reproduced on a live server."}, {"version": "1.2.274", "title": "Declines party resurrection when town is needed", "items": ["On the Party page, \"Accept resurrection from party members\" now checks whether a town trip is needed before saying Yes.", "If the Town page's \"Revive in town and go back to the hunting spot\" is on and you are out of return scrolls or gold, your gear is broken or worn out, or a chosen potion has run out, the bot says No to the party resurrection and revives in town instead, so the town services can refill you.", "A new Party option, \"Revive in town instead when town is needed\", is on by default; turn it off to keep accepting party resurrections as before.", "It works while hunting and while stopped, and stopped hunting stays stopped.", "This is on by default for anyone using Accept resurrection with the town cycle; while stopped it revives you in town even when On death is set to Wait or Stop."], "note": "Contributed by NiftyOps (#110). Tested in simulation only, not in a live game; the No answer to the resurrection question has not been checked on a live server."}, {"version": "1.2.273", "title": "Bot reloads the page when a reconnect hangs", "items": ["If the \"Reconnecting…\" message in the bot panel has not changed for 3 minutes, the bot now reloads the game page by itself, instead of waiting forever for a server that never answers.", "Your character and hunting state are kept, and hunting resumes after the world loads again.", "A slow reconnect that is still moving through login and world entry starts the wait over, so it is not cut short.", "Reloads in a row wait longer each time, and the 12-hour limit still stops the bot and asks you to reload by hand."], "note": "Contributed by NiftyOps (#108). Tested in simulation only, not in a live game."}, {"version": "1.2.272", "title": "Party support can restore party MP", "items": ["Party → \"Heal and buff the party\" adds an MP heal: a single-target MP heal skill and a group MP heal skill, each with its own \"below %\" threshold, so a Bard can refill party members' MP when it runs low.", "A \"Heal my MP too\" switch restores your own MP. Other members' MP reads from the party window in steps of 10%; your own is exact.", "MP heals run with the HP heals and buffs, one cast at a time, and never walk to members."], "note": "Tested with the integration suite only; not exercised in a live game."}, {"version": "1.2.271", "title": "Live dashboard shows SoX names and nearby players", "items": ["The live phone dashboard now lists the last 10 SoX (Star / Moon / Sun) items picked up this session, by name and seal.", "It also shows other players near your character and warns when another player is fighting your target."], "note": "Tested with the integration suite and a simulated hub; not exercised in a live game."}, {"version": "1.2.270", "title": "Bug reports go to GitHub", "items": ["The bug-report button now files reports as public GitHub issues, where an automatic workflow tries to fix them, instead of posting to Discord.", "The button now says \"Send to GitHub\" and the preview warns that a report becomes a public issue, so check your explanation and screenshot for private details first. Diagnostics still omit names, chat and locations.", "Sending works the same way; only where the report lands has changed."], "note": "Tested with the integration suite and mocked GitHub/Cloudflare requests; the live service has not been exercised."}, {"version": "1.2.269", "title": "Optional hunt-area search sweep", "items": ["New \"Search the hunting area\" switch under Combat > Hunting area. With no monster in view, the bot walks the area in a north–centre–east–centre–west–centre–south sweep so spawns beyond the view distance are found instead of waiting at the centre.", "Off by default; the existing \"Return when idle\" behaviour stays. Only active while hunting a saved spot with no target, and combat, loot and party support always take over first.", "Works in dungeons like Jangan Cave, where the hunt area can be larger than the view distance."], "note": "Tested in simulation only, not in a live browser or game."}];
 
 // Check trusted repository metadata; never execute downloaded update code.
 const Updates = {
@@ -20193,6 +20258,9 @@ const UI = {
         this.check('Start again when the bot stops by itself', () => H().retry, v => { H().retry = v; this.retryNote.textContent = Retry.status(); }),
         el('p', 'If the bot stops on its own while your last choice was Start (a town trip or walk back that failed, a stop on a world change), it waits 2 minutes, and 2 minutes after your last manual move, then does what Return & hunt does. Stops you chose are final: out of HP potions, bag full, On death: Stop, the stuck and trapped limits, manual control, a stop right after your own action in the game. The same reason again within 30 minutes, or a fourth stop in an hour, leaves it stopped with a warning.', 'muted'),
         this.retryNote,
+        this.check('Log in again by itself after a server restart', () => AutoLogin.enabled(), v => { AutoLogin.setEnabled(v); this.autoLoginNote.textContent = AutoLogin.status(); }),
+        el('p', 'Off by default. While it is on, the bot remembers the ID, password and server of your next login on the game\'s login screen. When a disconnect ends with you signed out, it logs in with them, enters the same character and carries on. They are kept unencrypted in this browser\'s storage for the site, so anyone using this browser profile can read them. Turning this off forgets them. After three refused logins it stops and waits for you.', 'muted'),
+        this.autoLoginNote = el('p', AutoLogin.status(), 'muted'),
         ...(Town.autoRevive() ? [el('p', 'On death: the town cycle revives you in town and goes back (Town → Scroll town cycle).', 'muted')]
           : [this.select('On death', [['stop', 'Stop'], ['wait', 'Wait'], ['revive', 'Revive and walk back']], () => H().onDeath, v => H().onDeath = v)]),
         this.check('Rest when low', () => H().sit.enabled, v => { H().sit.enabled = v; this.draw(); }),

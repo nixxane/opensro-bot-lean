@@ -27,7 +27,7 @@ The **Setup** page checks all this for you and fixes the next missing thing.
 - Zero-setup leveling: picks hunting spots for your level and buys the next tier of NPC gear on town trips. Pick a character build (Glaive nuker, Blade tank, Bow nuker, Wizard and more) or leave it on Auto; skills that root the character, like Crystal Wall and Fire Wall, are never used
 - Item alchemy, auto mastery and skills, stat points
 - Auto trade: buy specialty goods in one town, walk to another and sell them (needs a trader suit and a transport)
-- Automatic reconnect, optional start on entering the game, walk-back after death, anti-stuck, obstacle detours
+- Automatic reconnect (optional auto-login after a server restart), optional start on entering the game, walk-back after death, anti-stuck, obstacle detours
 - Minimap, session stats, wardrobe, share and import settings
 - Discord session reports: post the current session totals to your own webhook every few minutes
 
