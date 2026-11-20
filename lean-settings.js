@@ -72,7 +72,8 @@ const DEFAULT_PROFILE = {
   // Discord session reports (lean-reporter.js). The webhook URL is a secret and lives in Store, never here.
   sessionReport: { on: false, minutes: 3 },
   // Live dashboard (lean-live.js). The hub address and code are a secret and live in Store, never here.
-  live: { on: false, seconds: 10 },
+  // control: the dashboard may start and stop this character (off unless the player turns it on).
+  live: { on: false, seconds: 10, control: false },
 };
 // Preserve only bot settings. The original assistant's settings are never changed.
 function botProfile(input) {
@@ -100,6 +101,7 @@ function botProfile(input) {
   const liveSeconds = result.live.seconds;
   result.live.seconds = Number.isInteger(liveSeconds) ? Math.min(60, Math.max(3, liveSeconds)) : DEFAULT_PROFILE.live.seconds;
   result.live.on = result.live.on === true;
+  result.live.control = result.live.control === true;
   if (!['death', 'recall'].includes(result.potion.restock.town.deathReturn)) result.potion.restock.town.deathReturn = 'recall';
   if (!['reverse', 'walk'].includes(result.potion.restock.town.returnBy)) result.potion.restock.town.returnBy = 'reverse';
   // Reverse Return Scrolls used to have two switches: a gold-merchant one (no merchant sells them) and the Item mall
