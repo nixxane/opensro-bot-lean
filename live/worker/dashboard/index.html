@@ -52,6 +52,13 @@
   .sum div { padding:8px 12px; border-radius:10px; background:var(--bg); border:1px solid var(--line); min-width:0; }
   .sum dt { font-size:12px; color:var(--dim); margin:0; }
   .sum dd { margin:0; font-size:21px; font-weight:700; font-variant-numeric:tabular-nums; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  /* Start / Stop: only for characters whose player allowed it in NIX */
+  .ctl { display:flex; flex-wrap:wrap; gap:8px; padding:0 0 12px; }
+  .act { font:inherit; font-size:14px; font-weight:700; min-height:44px; min-width:88px; padding:0 16px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--text); cursor:pointer; }
+  .act.go { background:var(--ok-bg); color:var(--ok-fg); border-color:var(--ok); }
+  .act.halt { background:var(--bad-bg); color:var(--bad-fg); border-color:var(--bad); }
+  .act:disabled { opacity:.5; cursor:default; }
+  #note { margin:0 0 12px; font-size:14px; color:var(--dim); }
   #banner { margin:12px 0 0; padding:10px 14px; border-radius:10px; background:var(--bad-bg); color:var(--bad-fg); font-weight:600; border:1px solid var(--bad); }
 
   /* shared pieces */
@@ -192,6 +199,8 @@
     <div><dt>Total XP / hour</dt><dd data-k="xpph"></dd></div>
     <div><dt>Total gold / hour</dt><dd data-k="goldph"></dd></div>
   </dl>
+  <div class="ctl" id="ctl" hidden><button type="button" class="act go" id="startAll">Start all</button><button type="button" class="act halt" id="stopAll">Stop all</button></div>
+  <p id="note" role="status" hidden></p>
 </div></header>
 <div class="wrap"><div id="banner" role="alert" hidden></div></div>
 
@@ -242,6 +251,7 @@
     <div class="nearline" data-k="nearline" hidden></div>
     <div class="ksline" data-k="ksline" hidden></div>
     <div class="seen" data-k="seen"></div>
+    <div hidden><button type="button" class="act"></button></div>
     <div class="logbox" data-k="log"></div>
   </article>
 </template>
@@ -263,6 +273,7 @@
     </div>
     <div class="detail">
       <dl class="facts">
+        <div class="wide" hidden><button type="button" class="act"></button></div>
         <div class="wide"><dt>Doing</dt><dd data-k="doing"></dd></div>
         <div><dt>HP</dt><dd data-k="hpt"></dd></div><div><dt>MP</dt><dd data-k="mpt"></dd></div>
         <div><dt>XP</dt><dd data-k="xpt"></dd></div><div><dt>Gold / hour</dt><dd data-k="goldph2"></dd></div>
@@ -371,6 +382,7 @@ function derive(s) {
   const ksText = nearby && nearby.attacker ? nearby.attacker + ' is fighting your target' : '';
   return {
     name: s.name, bot: s.bot || '', level: s.level, kind, label, state, note, dead: !!s.dead,
+    control: s.control === true, active: typeof s.active === 'boolean' ? s.active : !!s.running, // older bots send no `active`
     age, late, stale, seenAt: s.at,
     hp: pctOf(hpNow, hpMax, s.hp), mp: pctOf(mpNow, mpMax, s.mp), xpPct: s.xpPct == null ? null : clampPct(s.xpPct),
     pos: s.pos ? 'Region ' + s.pos.region + ' (' + s.pos.x + ', ' + s.pos.z + ')' : '',
@@ -516,6 +528,10 @@ function renderChrome({ bots: list, conn: state, summary }) {
   $('sum').hidden = list.length === 0;
   for (const b of $('seg').querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.view === view.mode));
   // A link problem is shown even when old cards are still on screen.
+  const ctl = list.filter(canCommand);
+  $('ctl').hidden = !list.some(b => b.control) || state !== 'live';
+  $('startAll').disabled = !ctl.some(b => !b.active && !sent.has(b.name));
+  $('stopAll').disabled = !ctl.some(b => b.active && !sent.has(b.name));
   const e = $('empty'), problem = state === 'wrong' || state === 'noset' || state === 'nolink';
   e.hidden = list.length > 0 && !problem;
   if (!e.hidden) fill(e, { t: emptyCopy().title, h: emptyCopy().hint });
@@ -526,6 +542,52 @@ $('seg').addEventListener('click', e => {
   if (!b || b.dataset.view === view.mode) return;
   view.mode = b.dataset.view; store.set('nixView', view.mode); emit();
 });
+
+// ===== Start / Stop =====
+// Shown only for characters whose player switched on "Allow Start and Stop from the dashboard" in NIX. The hub hands the
+// command to the bot with its next report, so the button says "Sent…" until the bot's next report shows the change.
+const sent = new Map(); // name -> { at, active } while a command is on its way
+const SENT_MS = 90000; // the hub's order lifetime (reports come up to 60 s apart); after this the button comes back
+const canCommand = b => conn.state === 'live' && b.control && b.kind !== 'offline' && b.kind !== 'away';
+function paintAct(btn, b) {
+  btn.parentElement.hidden = !b.control; // the wrapper, so a card without the button keeps no empty grid row
+  if (!b.control) return;
+  const wait = sent.get(b.name);
+  if (wait && (b.active !== wait.active || Date.now() - wait.at > SENT_MS)) sent.delete(b.name);
+  const pending = sent.has(b.name), stop = b.active, text = pending ? 'Sent…' : stop ? 'Stop' : 'Start';
+  if (btn.textContent !== text) btn.textContent = text;
+  btn.className = 'act ' + (stop ? 'halt' : 'go');
+  btn.disabled = pending || !canCommand(b);
+  btn.setAttribute('aria-label', (pending ? 'Sent to ' : stop ? 'Stop ' : 'Start ') + b.name);
+  btn.onclick = () => command(stop ? 'stop' : 'start', [b]);
+}
+let noteTimer = 0;
+function say(text) {
+  const n = $('note'); n.textContent = text; n.hidden = false;
+  clearTimeout(noteTimer); noteTimer = setTimeout(() => { n.hidden = true; }, 8000);
+}
+async function command(cmd, list, all = false) {
+  for (const b of list) sent.set(b.name, { at: Date.now(), active: b.active });
+  emit();
+  let count = null;
+  try {
+    const r = await fetch('/command', { method: 'POST', cache: 'no-store', headers: { 'X-Code': code, 'Content-Type': 'application/json' },
+      body: JSON.stringify(all ? { cmd } : { cmd, name: list[0].name }) });
+    if (r.ok) count = Number((await r.json()).sent) || 0;
+  } catch {}
+  if (!count) for (const b of list) sent.delete(b.name);
+  const word = cmd === 'stop' ? 'Stop' : 'Start';
+  say(count === null ? word + ' could not be sent. Check the connection and try again.'
+    : !count ? 'No character took the ' + word + ': switch on "Allow Start and Stop from the dashboard" in NIX.'
+    : word + ' sent' + (all ? ' to ' + count + ' character' + (count > 1 ? 's' : '') : '') + '. It reaches the bot with its next report.');
+  emit();
+}
+for (const [id, cmd] of [['startAll', 'start'], ['stopAll', 'stop']]) {
+  $(id).addEventListener('click', () => {
+    const list = [...bots.values()].map(x => derive(x.snap)).filter(b => canCommand(b) && b.active === (cmd === 'stop'));
+    if (list.length && confirm((cmd === 'stop' ? 'Stop ' : 'Start ') + list.length + ' character' + (list.length > 1 ? 's' : '') + '?')) command(cmd, list, true);
+  });
+}
 
 // ===== view 1: cards =====
 const LOG_SHOWN_CARD = 5;
@@ -549,6 +611,7 @@ function renderCard(el, b) {
   el.querySelector('[data-k=ksline]').hidden = !b.ksText;
   el.querySelector('[data-k=seen]').className = 'seen' + (off || b.late ? ' old' : '');
   setBar(el, 'hpBar', off ? 0 : b.hp); setBar(el, 'mpBar', off ? 0 : b.mp); setBar(el, 'xpBar', b.xpPct);
+  paintAct(el.querySelector('.act'), b);
   renderLog(el.querySelector('[data-k=log]'), b, LOG_SHOWN_CARD);
 }
 function renderCards(list) {
@@ -607,6 +670,7 @@ function updateRow(el, b) {
   el.querySelector('[data-k=ks]').classList.toggle('bad', !!b.ksText);
   el.querySelector('.c-seen').classList.toggle('old', off || b.late);
   setBar(el, 'hpBar', off ? 0 : b.hp); setBar(el, 'mpBar', off ? 0 : b.mp); setBar(el, 'xpBar', b.xpPct);
+  paintAct(el.querySelector('.act'), b);
   if (open) renderLog(el.querySelector('[data-k=log]'), b, LOG_SHOWN_ROW);
 }
 function renderFilters(list) {

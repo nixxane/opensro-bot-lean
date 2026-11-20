@@ -112,6 +112,8 @@ const Live = {
       hp: Math.round(vitals.hpPct), mp: Math.round(vitals.mpPct),
       hpNow: Math.round(vitals.hp), hpMax: Math.round(vitals.maxHp), mpNow: Math.round(vitals.mp), mpMax: Math.round(vitals.maxMp),
       inWorld: World.inWorld(), dead: World.isDead(), running: !!Hunt.running, state: String(Hunt.state || ''),
+      // active: Start / stop would stop something (a town trip or walk back counts); control: the dashboard may start and stop it.
+      active: botActive(), control: Settings.profile.live.control === true,
       note: String(Reconnect.message || '').slice(0, 120),
       pos: pose ? { region: pose.regionId, x: Math.round(pose.x), z: Math.round(pose.z) } : null,
       stats, session,
@@ -187,6 +189,8 @@ const Live = {
       if (response.ok) {
         this.lastAt = now(); this.lastError = ''; this.holdUntil = 0; this.nextAt = now() + this.intervalMs();
         if (manual) UI.toast('Test report sent to your hub.');
+        // 200 instead of 204: the dashboard sent a Start or Stop for this character.
+        if (response.status === 200) { let answer = null; try { answer = await response.json(); } catch {} this.command(answer?.cmd); }
         return true;
       }
       if (response.status === 429) {
@@ -219,6 +223,16 @@ const Live = {
       clearTimeout(timer);
       this.sending = false;
     }
+  },
+  // A Start or Stop from the dashboard, only when the player allowed it for this character. It does what the panel's buttons
+  // do: Stop is Stop all (it also cancels auto-start), Start is Start / stop, pressed only while nothing runs, because it toggles.
+  command(cmd) {
+    if (Settings.profile.live.control !== true || (cmd !== 'start' && cmd !== 'stop')) return false;
+    if (cmd === 'stop') userStop();
+    else if (botActive()) return false;
+    else { toggleBot(); if (!Hunt.running) return false; }
+    Activity.emit({ category: 'session', code: 'dashboard-' + cmd, level: 'info', text: (cmd === 'stop' ? 'Stopped' : 'Started') + ' from the live dashboard.' });
+    return true;
   },
   // Short reasons only: never the address, the code or a response body.
   failed(reason, manual) {

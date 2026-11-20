@@ -9670,9 +9670,41 @@ async function updateTests() {
 
   test('the live dashboard is off by default, every 10 seconds, and its settings survive a profile reload', () => {
     const f = fixture();
-    assert.deepEqual(plain(f.Settings.profile.live), { on: false, seconds: 10 });
-    const saved = plain(f.Settings.profile); saved.live = { on: true, seconds: 7 };
-    assert.deepEqual(plain(f.botProfile(JSON.parse(JSON.stringify(saved))).live), { on: true, seconds: 7 });
+    assert.deepEqual(plain(f.Settings.profile.live), { on: false, seconds: 10, control: false });
+    const saved = plain(f.Settings.profile); saved.live = { on: true, seconds: 7, control: true };
+    assert.deepEqual(plain(f.botProfile(JSON.parse(JSON.stringify(saved))).live), { on: true, seconds: 7, control: true });
+    assert.equal(f.botProfile({ live: { control: 'yes' } }).live.control, false, 'only true allows Start and Stop');
+  });
+
+  test('a Start or Stop from the dashboard acts only when allowed, and Start only while the bot is stopped', () => {
+    const f = liveFixture();
+    assert.equal(f.Live.command('stop'), false, 'not allowed: ignored');
+    f.Hunt.running = true; f.Live.command('stop'); assert.equal(f.Hunt.running, true);
+    f.Settings.profile.live.control = true;
+    for (const junk of [undefined, '', 'reload', 'STOP', { cmd: 'stop' }]) assert.equal(f.Live.command(junk), false, String(junk));
+    assert.equal(f.Hunt.running, true);
+    assert.equal(f.Live.command('start'), false, 'already running: a late Start never stops it');
+    assert.equal(f.Hunt.running, true);
+    assert.equal(f.Live.command('stop'), true);
+    assert.equal(f.Hunt.running, false);
+    assert.equal(f.RunIntent.stopped(), true, 'the same as Stop all: auto-start stays off');
+    assert.equal(f.Live.command('start'), true);
+    assert.equal(f.Hunt.running, true);
+    assert.equal(f.Log.lines.filter(e => /from the live dashboard/.test(e.text)).length, 2, 'both land in the log');
+    assert.ok(f.Live.snapshot().log.some(e => /Started from the live dashboard/.test(e.text)), 'and on the dashboard feed');
+  });
+
+  test('a report answered with a command runs it; a 204 or a broken answer runs nothing', async () => {
+    const f = liveFixture(); f.Settings.profile.live.control = true; f.Hunt.running = true;
+    const replies = [liveReply(204), liveReply(200, { json: async () => { throw Error('not json'); } }), liveReply(200, { json: async () => ({ cmd: 'stop' }) })];
+    const bodies = [];
+    f.win.fetch = async (url, options) => { bodies.push(JSON.parse(options.body)); return replies.shift(); };
+    assert.equal(await f.Live.send(false), true); assert.equal(f.Hunt.running, true);
+    assert.equal(await f.Live.send(false), true); assert.equal(f.Hunt.running, true);
+    assert.equal(await f.Live.send(false), true); assert.equal(f.Hunt.running, false, 'the third answer carried a Stop');
+    assert.deepEqual(bodies.map(b => [b.active, b.control]), [[true, true], [true, true], [true, true]], 'the report says what the dashboard may do');
+    f.Settings.profile.live.control = false;
+    assert.deepEqual([f.Live.snapshot().active, f.Live.snapshot().control], [false, false]);
   });
 
   test('live seconds are pulled into 3 to 60 and anything that is not a whole number is the default', () => {
@@ -10132,6 +10164,16 @@ async function updateTests() {
       assert.equal(state.reports.length, 1);
       assert.equal(state.reports[0].name, 'Hubbed'); assert.equal(state.reports[0].level, 40); assert.equal(state.reports[0].xpPct, 25);
       assert.ok(Number.isFinite(state.reports[0].at) && Math.abs(state.now - state.reports[0].at) < 5000, 'the shape the dashboard reads');
+      // Start / Stop round trip: the dashboard's Stop all reaches the bot with its next report.
+      const command = body => fetch('http://127.0.0.1:' + PORT + '/command', { method: 'POST', headers: { 'X-Code': code }, body: JSON.stringify(body) }).then(r => r.json());
+      assert.deepEqual(await command({ cmd: 'stop' }), { sent: 0 }, 'not allowed in this bot yet');
+      f.Settings.profile.live.control = true; f.Hunt.running = true;
+      assert.equal(await f.Live.send(false), true);
+      assert.deepEqual(await command({ cmd: 'stop' }), { sent: 1 });
+      assert.equal(await f.Live.send(false), true);
+      assert.equal(f.Hunt.running, false, 'the hub answered the report with the Stop');
+      assert.equal(await f.Live.send(false), true);
+      assert.equal(f.Hunt.running, false, 'a command is handed out once');
       f.Live.setChannel('https://hub.example.test', 'WrongCode0123456789abcd');
       assert.equal(await f.Live.send(false), false);
       assert.equal(f.Settings.profile.live.on, false, 'the real hub answered 401, which switches the dashboard off');

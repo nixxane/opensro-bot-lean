@@ -122,6 +122,40 @@ try {
     assert.equal(stateResponse.headers.get('cache-control'), 'no-store');
   }
 
+  // Start / Stop: queued only for characters that allow it, handed out once with the next report, dropped after 90 s.
+  {
+    const { env, calls } = setup();
+    const command = (body, headers = authed()) => call(env, '/command', { method: 'POST', headers, body: JSON.stringify(body) });
+    assert.equal((await command({ cmd: 'stop' }, {})).status, 401);
+    assert.equal((await command({ cmd: 'stop' }, { 'X-Code': 'wrong' })).status, 401);
+    assert.equal(calls(), 0);
+    for (const bad of [{}, { cmd: 'reload' }, { cmd: 'stop', name: 7 }, { cmd: 'stop', name: '' }, { cmd: 'stop', name: 'x'.repeat(41) }]) assert.equal((await command(bad)).status, 400, JSON.stringify(bad));
+    assert.equal((await call(env, '/command', { method: 'POST', headers: authed(), body: JSON.stringify({ cmd: 'stop', pad: 'x'.repeat(2000) }) })).status, 413);
+    assert.equal((await call(env, '/command', { headers: authed() })).status, 404); // GET is not a command
+
+    assert.equal((await post(env, snap({ control: true }))).status, 204);
+    assert.equal((await post(env, snap({ name: 'Watched' }))).status, 204); // control not allowed
+    assert.equal((await post(env, snap({ name: 'Gone', control: true }))).status, 204);
+    clock += 100000; // Gone stops reporting
+    assert.equal((await post(env, snap({ control: true }))).status, 204);
+    assert.equal((await post(env, snap({ name: 'Watched' }))).status, 204);
+    const sent = await command({ cmd: 'stop' });
+    assert.equal(sent.status, 200);
+    assert.deepEqual(await sent.json(), { sent: 1 }, 'all = only characters reporting now that allow it');
+    assert.deepEqual(await (await command({ cmd: 'stop', name: 'Watched' })).json(), { sent: 0 });
+    assert.deepEqual(await (await command({ cmd: 'start', name: 'Gone' })).json(), { sent: 1 }, 'a named character may be late');
+    assert.deepEqual(await (await command({ cmd: 'start', name: 'Nobody' })).json(), { sent: 0 });
+
+    const answer = await post(env, snap({ control: true }));
+    assert.equal(answer.status, 200);
+    assert.equal(answer.headers.get('access-control-allow-origin'), '*', 'the game page must be able to read it');
+    assert.deepEqual(await answer.json(), { cmd: 'stop' });
+    assert.equal((await post(env, snap({ control: true }))).status, 204, 'handed out once');
+    assert.equal((await post(env, snap({ name: 'Watched' }))).status, 204);
+    clock += 91000;
+    assert.equal((await post(env, snap({ name: 'Gone', control: true }))).status, 204, 'a command older than 90 s is dropped');
+  }
+
   // Validation: size, shape, name.
   {
     const { env } = setup();
@@ -505,10 +539,11 @@ try {
   {
     const page = fs.readFileSync(new URL('../dashboard/index.html', import.meta.url), 'utf8');
     assert.doesNotThrow(() => new vm.Script(page.match(/<script>([\s\S]*)<\/script>/)[1]));
-    // One self-contained file: it makes no request but the same-origin /state poll, and uses no external script, style or font.
+    // One self-contained file: it makes no request but the same-origin /state poll and /command, and uses no external script, style or font.
     assert.doesNotMatch(page, /<(?:script|link|img|iframe)[^>]*\s(?:src|href)=|@import|url\(\s*['"]?https?:|https?:\/\//i);
-    assert.equal((page.match(/fetch\(/g) || []).length, 1);
+    assert.equal((page.match(/fetch\(/g) || []).length, 2);
     assert.match(page, /fetch\('\/state', \{ headers: \{ 'X-Code': code \}/);
+    assert.match(page, /fetch\('\/command', \{ method: 'POST', cache: 'no-store', headers: \{ 'X-Code': code,/);
   }
 
   // setup.mjs helpers.

@@ -1371,11 +1371,12 @@ const UI = {
       this.liveSetupHelp(),
       this.check('Send live stats to my hub', () => Settings.profile.live.on, v => { Settings.profile.live.on = v; Live.tick(); }),
       this.number('Send every (seconds)', () => Settings.profile.live.seconds, v => Settings.profile.live.seconds = v, 3, 60),
+      this.check('Allow Start and Stop from the dashboard', () => Settings.profile.live.control, v => { Settings.profile.live.control = v; }),
       this.field('Pair link or hub address', address),
       this.field('Hub code', code),
       this.button('Send a test report', () => { void Live.send(true).catch(() => {}); }),
       this.liveNote,
-      el('p', 'Shows this character on a phone dashboard served by your own hub (a Cloudflare Worker on your account, or live/hub.js behind an HTTPS tunnel). The data goes only to that hub. The address and code stay in this browser and are never part of share codes, backups or bug reports. The hub must be reachable over HTTPS.', 'muted')));
+      el('p', 'Shows this character on a phone dashboard served by your own hub (a Cloudflare Worker on your account, or live/hub.js behind an HTTPS tunnel). The data goes only to that hub. The address and code stay in this browser and are never part of share codes, backups or bug reports. The hub must be reachable over HTTPS. With Start and Stop allowed, anyone who has your dashboard link can start and stop this character.', 'muted')));
   },
   // The pairing request from a #nixlive link. Nothing is saved until Pair is pressed.
   showPairing() {

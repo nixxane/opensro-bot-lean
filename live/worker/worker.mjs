@@ -10,8 +10,11 @@ optional Worker secret LIVE_CODE, when set, wins over the stored code; that is a
 
 Routes (same contract as live/hub.js, plus /setup):
   OPTIONS *            204 with CORS, answered before any code check (the browser sends no X-Code with a preflight)
-  POST /report         X-Code. Body = one snapshot, at most 16 KB. 204.
+  POST /report         X-Code. Body = one snapshot, at most 16 KB. 204, or 200 { cmd } when the dashboard sent that
+                       character a Start or Stop.
   GET  /state          X-Code. { now, reports: [latest report per character] }
+  POST /command        X-Code. Body = { cmd: 'start' | 'stop', name? }. Queues the command for that character, or with no
+                       name for every character reporting now, if its report says control: true. 200 { sent }.
   GET  /pair/<code>    The code is in the path. The "ready" page: pair button, QR code for the phone. 404 on a wrong code.
   GET  /               The dashboard, or the setup page while no code exists.
   POST /setup          Creates the code once (303 to /pair/<code>). 409 when a code exists.
@@ -23,6 +26,9 @@ Free plan budget (100k requests/day): one bot reporting every 10 s is 8.6k, one 
 import { CODE_PATTERN, PAGE_CSP, alreadySetupPage, readyPage, setupPage, wrongLinkPage } from './pages.mjs';
 
 const MAX_REPORT_BYTES = 16 * 1024;
+const MAX_COMMAND_BYTES = 1024;
+const ORDER_MS = 90 * 1000; // a command not picked up in 90 s (reports come up to 60 s apart) is dropped, so a bot that comes back later does not act on it
+const ONLINE_MS = 90 * 1000; // "every character reporting now", the same 90 s after which the dashboard shows one offline
 const MAX_NAME_LENGTH = 40;
 const MAX_CHARACTERS = 50; // a code holder cannot grow the room without bound
 const FORGET_MS = 24 * 3600 * 1000; // a renamed or deleted character stops reporting; its card goes after a day
@@ -111,9 +117,9 @@ async function dashboard(request, env) {
   return new Response(answer.body, { status: answer.status, statusText: answer.statusText, headers });
 }
 
-// Reads at most MAX_REPORT_BYTES. A lying Content-Length is caught by the first check, a missing one by the count.
-async function readReport(request) {
-  if (Number(request.headers.get('Content-Length')) > MAX_REPORT_BYTES) return { status: 413 };
+// Reads one JSON object of at most `max` bytes. A lying Content-Length is caught by the first check, a missing one by the count.
+async function readJson(request, max) {
+  if (Number(request.headers.get('Content-Length')) > max) return { status: 413 };
   if (!request.body) return { status: 400 };
   const reader = request.body.getReader(), chunks = [];
   let size = 0;
@@ -122,18 +128,32 @@ async function readReport(request) {
       const { done, value } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > MAX_REPORT_BYTES) { await reader.cancel(); return { status: 413 }; }
+      if (size > max) { await reader.cancel(); return { status: 413 }; }
       chunks.push(value);
     }
   } finally { reader.releaseLock(); }
   const bytes = new Uint8Array(size);
   let offset = 0;
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
-  let report;
-  try { report = JSON.parse(new TextDecoder().decode(bytes)); } catch { return { status: 400 }; }
-  if (!report || typeof report !== 'object' || Array.isArray(report)) return { status: 400 };
+  let value;
+  try { value = JSON.parse(new TextDecoder().decode(bytes)); } catch { return { status: 400 }; }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { status: 400 };
+  return { value };
+}
+
+async function readReport(request) {
+  const read = await readJson(request, MAX_REPORT_BYTES), report = read.value;
+  if (read.status) return read;
   if (typeof report.name !== 'string' || !report.name || report.name.length > MAX_NAME_LENGTH) return { status: 400 };
   return { report };
+}
+
+async function readCommand(request) {
+  const read = await readJson(request, MAX_COMMAND_BYTES), order = read.value;
+  if (read.status) return read;
+  if (order.cmd !== 'start' && order.cmd !== 'stop') return { status: 400 };
+  if (order.name !== undefined && (typeof order.name !== 'string' || !order.name || order.name.length > MAX_NAME_LENGTH)) return { status: 400 };
+  return { order: { cmd: order.cmd, name: order.name } };
 }
 
 /*
@@ -189,7 +209,8 @@ async function handle(request, env) {
     const pair = request.method === 'GET' ? url.pathname.match(/^\/pair\/([^/]+)$/) : null;
     const isReport = request.method === 'POST' && url.pathname === '/report';
     const isState = request.method === 'GET' && url.pathname === '/state';
-    if (!isHome && !isSetup && !isReport && !isState && !pair) return reply(404, null);
+    const isCommand = request.method === 'POST' && url.pathname === '/command';
+    if (!isHome && !isSetup && !isReport && !isState && !isCommand && !pair) return reply(404, null);
 
     const secret = secretCode(env);
     if (secret.bad) return badSecret();
@@ -219,9 +240,16 @@ async function handle(request, env) {
       const answer = await room(env).fetch('https://room/state', { headers });
       return answer.status === 200 ? reply(200, await answer.json()) : roomRefusal(answer.status);
     }
+    if (isCommand) {
+      const read = await readCommand(request);
+      if (read.status) return reply(read.status, null);
+      const answer = await room(env).fetch('https://room/command', { method: 'POST', body: JSON.stringify(read.order), headers });
+      return answer.status === 200 ? reply(200, await answer.json()) : roomRefusal(answer.status);
+    }
     const read = await readReport(request);
     if (read.status) return reply(read.status, null);
     const answer = await room(env).fetch('https://room/report', { method: 'POST', body: JSON.stringify(read.report), headers });
+    if (answer.status === 200) return reply(200, await answer.json());
     return answer.status === 204 ? reply(204, null) : roomRefusal(answer.status);
 }
 
@@ -245,6 +273,9 @@ export class LiveRoom {
     this.ctx = ctx;
     this.bots = new Map(); // name -> latest report
     this.persisted = new Map(); // name -> { at, key } of the last storage write
+    // name -> { cmd, at }, handed out with that character's next report. Memory only: an eviction loses a command, which
+    // is the same as it expiring, and saves a billed storage write per button press.
+    this.orders = new Map();
     this.alarmArmed = false;
     this.code = null; // the stored code; null until the setup page has made one
     ctx.blockConcurrencyWhile(async () => {
@@ -295,7 +326,17 @@ export class LiveRoom {
         await this.ctx.storage.put('bot:' + report.name, report);
       }
       if (!this.alarmArmed) { this.alarmArmed = true; await this.ctx.storage.setAlarm(Date.now() + GC_MS); }
+      const order = this.orders.get(report.name);
+      this.orders.delete(report.name);
+      if (order && report.at - order.at <= ORDER_MS) return Response.json({ cmd: order.cmd });
       return new Response(null, { status: 204 });
+    }
+    if (path === '/command' && request.method === 'POST') {
+      const { cmd, name } = await request.json(), at = Date.now();
+      // Only characters whose player allowed it (control: true in their last report); no name = all of them reporting now.
+      const names = [...this.bots.values()].filter(r => r.control === true && (name === undefined ? at - r.at < ONLINE_MS : r.name === name)).map(r => r.name);
+      for (const n of names) this.orders.set(n, { cmd, at });
+      return Response.json({ sent: names.length });
     }
     return new Response(null, { status: 404 });
   }

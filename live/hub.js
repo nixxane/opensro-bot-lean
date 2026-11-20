@@ -20,6 +20,9 @@ const allowed = given => {
 const last = new Map(); // character name -> latest report
 const FORGET_MS = 24 * 3600 * 1000; // a renamed or deleted character stops reporting; its card goes after a day
 const MAX_REPORT_BYTES = 16 * 1024; // a real snapshot is about 3 KB; anything near this is not one
+// Start / Stop from the dashboard (the same contract as worker/): character name -> { cmd, at }, handed out with its next report.
+const orders = new Map();
+const ORDER_MS = 90 * 1000, ONLINE_MS = 90 * 1000;
 
 // The address the bot should pair with: PUBLIC_URL (a named tunnel), else the quick tunnel once it is known, else this machine.
 // The bot only accepts https://host[:port] with no path, so a trailing slash is dropped here.
@@ -87,7 +90,29 @@ function handle(req, res) {
       if (!report || typeof report.name !== 'string' || !report.name || report.name.length > 40) return res.writeHead(400, CORS).end();
       report.at = Date.now();
       last.set(report.name, report);
-      res.writeHead(204, CORS).end();
+      const order = orders.get(report.name);
+      orders.delete(report.name);
+      if (!order || report.at - order.at > ORDER_MS) return res.writeHead(204, CORS).end();
+      res.writeHead(200, { ...page, ...CORS, 'Content-Type': 'application/json' }).end(JSON.stringify({ cmd: order.cmd }));
+    });
+  }
+  if (req.method === 'POST' && url.pathname === '/command') {
+    let body = '', tooBig = false;
+    req.on('data', chunk => {
+      if (tooBig) return;
+      body += chunk;
+      if (body.length > 1024) { tooBig = true; res.writeHead(413, { ...CORS, Connection: 'close' }).end(); }
+    });
+    return req.on('end', () => {
+      if (tooBig) return;
+      let order;
+      try { order = JSON.parse(body); } catch {}
+      const name = order?.name;
+      if (!order || !['start', 'stop'].includes(order.cmd) || name !== undefined && (typeof name !== 'string' || !name || name.length > 40)) return res.writeHead(400, CORS).end();
+      // Only characters whose player allowed it (control: true in their last report); no name = all of them reporting now.
+      const at = Date.now(), names = [...last.values()].filter(r => r.control === true && (name === undefined ? at - r.at < ONLINE_MS : r.name === name)).map(r => r.name);
+      for (const n of names) orders.set(n, { cmd: order.cmd, at });
+      res.writeHead(200, { ...page, ...CORS, 'Content-Type': 'application/json' }).end(JSON.stringify({ sent: names.length }));
     });
   }
   res.writeHead(404, CORS).end();

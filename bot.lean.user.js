@@ -256,7 +256,8 @@ const DEFAULT_PROFILE = {
   // Discord session reports (lean-reporter.js). The webhook URL is a secret and lives in Store, never here.
   sessionReport: { on: false, minutes: 3 },
   // Live dashboard (lean-live.js). The hub address and code are a secret and live in Store, never here.
-  live: { on: false, seconds: 10 },
+  // control: the dashboard may start and stop this character (off unless the player turns it on).
+  live: { on: false, seconds: 10, control: false },
 };
 // Preserve only bot settings. The original assistant's settings are never changed.
 function botProfile(input) {
@@ -284,6 +285,7 @@ function botProfile(input) {
   const liveSeconds = result.live.seconds;
   result.live.seconds = Number.isInteger(liveSeconds) ? Math.min(60, Math.max(3, liveSeconds)) : DEFAULT_PROFILE.live.seconds;
   result.live.on = result.live.on === true;
+  result.live.control = result.live.control === true;
   if (!['death', 'recall'].includes(result.potion.restock.town.deathReturn)) result.potion.restock.town.deathReturn = 'recall';
   if (!['reverse', 'walk'].includes(result.potion.restock.town.returnBy)) result.potion.restock.town.returnBy = 'reverse';
   // Reverse Return Scrolls used to have two switches: a gold-merchant one (no merchant sells them) and the Item mall
@@ -18067,6 +18069,8 @@ const Live = {
       hp: Math.round(vitals.hpPct), mp: Math.round(vitals.mpPct),
       hpNow: Math.round(vitals.hp), hpMax: Math.round(vitals.maxHp), mpNow: Math.round(vitals.mp), mpMax: Math.round(vitals.maxMp),
       inWorld: World.inWorld(), dead: World.isDead(), running: !!Hunt.running, state: String(Hunt.state || ''),
+      // active: Start / stop would stop something (a town trip or walk back counts); control: the dashboard may start and stop it.
+      active: botActive(), control: Settings.profile.live.control === true,
       note: String(Reconnect.message || '').slice(0, 120),
       pos: pose ? { region: pose.regionId, x: Math.round(pose.x), z: Math.round(pose.z) } : null,
       stats, session,
@@ -18142,6 +18146,8 @@ const Live = {
       if (response.ok) {
         this.lastAt = now(); this.lastError = ''; this.holdUntil = 0; this.nextAt = now() + this.intervalMs();
         if (manual) UI.toast('Test report sent to your hub.');
+        // 200 instead of 204: the dashboard sent a Start or Stop for this character.
+        if (response.status === 200) { let answer = null; try { answer = await response.json(); } catch {} this.command(answer?.cmd); }
         return true;
       }
       if (response.status === 429) {
@@ -18174,6 +18180,16 @@ const Live = {
       clearTimeout(timer);
       this.sending = false;
     }
+  },
+  // A Start or Stop from the dashboard, only when the player allowed it for this character. It does what the panel's buttons
+  // do: Stop is Stop all (it also cancels auto-start), Start is Start / stop, pressed only while nothing runs, because it toggles.
+  command(cmd) {
+    if (Settings.profile.live.control !== true || (cmd !== 'start' && cmd !== 'stop')) return false;
+    if (cmd === 'stop') userStop();
+    else if (botActive()) return false;
+    else { toggleBot(); if (!Hunt.running) return false; }
+    Activity.emit({ category: 'session', code: 'dashboard-' + cmd, level: 'info', text: (cmd === 'stop' ? 'Stopped' : 'Started') + ' from the live dashboard.' });
+    return true;
   },
   // Short reasons only: never the address, the code or a response body.
   failed(reason, manual) {
@@ -20371,11 +20387,12 @@ const UI = {
       this.liveSetupHelp(),
       this.check('Send live stats to my hub', () => Settings.profile.live.on, v => { Settings.profile.live.on = v; Live.tick(); }),
       this.number('Send every (seconds)', () => Settings.profile.live.seconds, v => Settings.profile.live.seconds = v, 3, 60),
+      this.check('Allow Start and Stop from the dashboard', () => Settings.profile.live.control, v => { Settings.profile.live.control = v; }),
       this.field('Pair link or hub address', address),
       this.field('Hub code', code),
       this.button('Send a test report', () => { void Live.send(true).catch(() => {}); }),
       this.liveNote,
-      el('p', 'Shows this character on a phone dashboard served by your own hub (a Cloudflare Worker on your account, or live/hub.js behind an HTTPS tunnel). The data goes only to that hub. The address and code stay in this browser and are never part of share codes, backups or bug reports. The hub must be reachable over HTTPS.', 'muted')));
+      el('p', 'Shows this character on a phone dashboard served by your own hub (a Cloudflare Worker on your account, or live/hub.js behind an HTTPS tunnel). The data goes only to that hub. The address and code stay in this browser and are never part of share codes, backups or bug reports. The hub must be reachable over HTTPS. With Start and Stop allowed, anyone who has your dashboard link can start and stop this character.', 'muted')));
   },
   // The pairing request from a #nixlive link. Nothing is saved until Pair is pressed.
   showPairing() {
@@ -21432,8 +21449,12 @@ UI.showActivityExport = function() {
 
 
 // The player's Start / stop (F8 and the buttons). What they choose is remembered for auto-start.
+// True while anything that Start / stop would stop is running.
+function botActive() {
+  return !!(Alchemy.run || Alchemy.pending || Stall.run || SellStar.run || Hunt.running || Town.trip || Quest.trip || WalkBack.active || Travel.active || Restock.trip || Resurrect.trip || Controller.resumeAfterRevive);
+}
 function toggleBot() {
-  if (Alchemy.run || Alchemy.pending || Stall.run || SellStar.run || Hunt.running || Town.trip || Quest.trip || WalkBack.active || Travel.active || Restock.trip || Resurrect.trip || Controller.resumeAfterRevive) userStop();
+  if (botActive()) userStop();
   else if (Restock.recording) UI.toast('Finish or cancel route recording before starting the bot.', 'warn');
   else { Hunt.start(); if (Hunt.running) RunIntent.set(true); }
 }
